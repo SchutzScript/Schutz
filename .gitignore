@@ -27,6 +27,9 @@ pnpm-debug.log*
 Thumbs.db
 .vscode-test/
 
+# Astro (webview-ui) 생성 캐시
+webview-ui/.astro/
+
 # Misc
 coverage/
 .cache/
