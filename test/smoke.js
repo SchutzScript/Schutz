@@ -8,6 +8,7 @@
  */
 const assert = require("assert");
 const Module = require("module");
+const path = require("path");
 
 let failures = 0;
 function check(name, fn) {
@@ -58,7 +59,12 @@ const vscodeStub = {
     },
     executeCommand: async () => {},
   },
-  Uri: { joinPath: (base) => base },
+  Uri: {
+    joinPath: (base, ...parts) => {
+      const fsPath = path.join(base.fsPath || "", ...parts);
+      return { fsPath, toString: () => "file://" + fsPath };
+    },
+  },
   EventEmitter: class {
     constructor() {
       this.event = () => ({ dispose() {} });
@@ -155,6 +161,19 @@ async function run() {
       assert.ok(registered.commands.includes(c), "커맨드 미등록: " + c);
     }
     assert.ok(ctx.subscriptions.length > 0, "subscriptions 비어있음");
+  });
+
+  await check("loadAstroView가 /_astro 에셋을 webview URI로 재작성 + CSP 주입", async () => {
+    const { loadAstroView } = require("../out/webview/astroView.js");
+    const extensionUri = { fsPath: path.resolve(__dirname, "..") };
+    const webview = {
+      cspSource: "vscode-resource:",
+      asWebviewUri: (uri) => "https://webview/" + uri.fsPath.replace(/\\/g, "/"),
+    };
+    const html = loadAstroView(webview, extensionUri, "chat");
+    assert.ok(html.includes("Content-Security-Policy"), "CSP 미주입");
+    assert.ok(!/(?:href|src)="\/_astro/.test(html), "절대 /_astro 경로가 남아있음");
+    assert.ok(html.includes("https://webview/"), "webview URI 재작성 안 됨");
   });
 
   console.log("");

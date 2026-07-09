@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { renderHtml } from "./html";
+import { loadAstroView, webviewDistRoot } from "./astroView";
 
 /**
  * Agent 활동 뷰 (schutz.activity) — 기둥3.
@@ -15,26 +15,9 @@ export class ActivityViewProvider implements vscode.WebviewViewProvider {
     this.view = view;
     view.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
+      localResourceRoots: [webviewDistRoot(this.extensionUri)],
     };
-    view.webview.html = renderHtml(view.webview, this.extensionUri, {
-      title: "Agent Activity",
-      scriptFile: "activity.js",
-      styleFile: "activity.css",
-      bodyHtml: `
-        <section class="panel">
-          <h3>계획</h3>
-          <ul id="plan" class="plan"><li class="empty">아직 진행 중인 작업이 없어요.</li></ul>
-        </section>
-        <section class="panel">
-          <h3>도구 타임라인</h3>
-          <ul id="timeline" class="timeline"></ul>
-        </section>
-        <section class="panel meter">
-          <h3>사용량</h3>
-          <div id="usage" class="usage">— 토큰</div>
-        </section>`,
-    });
+    view.webview.html = loadAstroView(view.webview, this.extensionUri, "activity");
   }
 
   post(message: unknown): void {

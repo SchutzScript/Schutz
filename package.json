@@ -134,9 +134,11 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:webview && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "build:webview": "npm --prefix webview-ui install && npm --prefix webview-ui run build",
+    "build": "npm run build:webview && npm run compile",
     "pretest": "npm run compile",
     "test": "node test/smoke.js",
     "lint": "eslint src --ext ts",

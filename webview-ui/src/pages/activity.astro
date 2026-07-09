@@ -1,4 +1,71 @@
-(function () {
+---
+import View from "../layouts/View.astro";
+---
+
+<View title="Agent Activity">
+  <section class="panel">
+    <h3>계획</h3>
+    <ul id="plan" class="plan"><li class="empty">아직 진행 중인 작업이 없어요.</li></ul>
+  </section>
+  <section class="panel">
+    <h3>도구 타임라인</h3>
+    <ul id="timeline" class="timeline"></ul>
+  </section>
+  <section class="panel meter">
+    <h3>사용량</h3>
+    <div id="usage" class="usage">— 토큰</div>
+  </section>
+</View>
+
+<style>
+  body { padding: 10px; }
+  .panel { margin-bottom: 16px; }
+
+  .plan, .timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .plan li, .timeline li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.08));
+    font-size: 12px;
+  }
+  .plan li.empty, .timeline li.empty { background: transparent; opacity: 0.5; }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: rgba(128, 128, 128, 0.5);
+  }
+  .dot.active { background: var(--schutz-accent); animation: pulse 1s infinite; }
+  .dot.done { background: var(--schutz-add); }
+  .dot.failed { background: var(--vscode-errorForeground, #f85149); }
+  @keyframes pulse { 50% { transform: scale(1.5); opacity: 0.6; } }
+
+  .plan li.done .title { opacity: 0.6; text-decoration: line-through; }
+  .timeline .name { font-weight: 600; }
+  .timeline .meta { opacity: 0.6; font-size: 11px; }
+
+  .usage {
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.08));
+  }
+</style>
+
+<script>
   const planEl = document.getElementById("plan");
   const timelineEl = document.getElementById("timeline");
   const usageEl = document.getElementById("usage");
@@ -65,4 +132,4 @@
         break;
     }
   });
-})();
+</script>

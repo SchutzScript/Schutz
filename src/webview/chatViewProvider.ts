@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { renderHtml } from "./html";
+import { loadAstroView, webviewDistRoot } from "./astroView";
 
 export type ChatInboundHandler = (text: string) => void;
 
@@ -24,24 +24,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view = view;
     view.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
+      localResourceRoots: [webviewDistRoot(this.extensionUri)],
     };
-    view.webview.html = renderHtml(view.webview, this.extensionUri, {
-      title: "Schutz Chat",
-      scriptFile: "chat.js",
-      styleFile: "chat.css",
-      bodyHtml: `
-        <div id="messages"></div>
-        <div id="composer">
-          <textarea id="input" rows="2" placeholder="Schutz에게 요청… (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
-          <div class="composer-row">
-            <span id="status" class="status">대기 중</span>
-            <div class="spacer"></div>
-            <button id="cancel" class="btn ghost" hidden>중지</button>
-            <button id="send" class="btn primary">전송</button>
-          </div>
-        </div>`,
-    });
+    view.webview.html = loadAstroView(view.webview, this.extensionUri, "chat");
 
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "submit" && typeof msg.text === "string") {

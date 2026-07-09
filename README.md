@@ -26,9 +26,12 @@
 
 ```bash
 npm install
-npm run compile      # 또는 npm run watch
-npm test             # 스모크 테스트 (vscode 없이)
+npm run build:webview   # Astro로 웹뷰 UI 빌드 (webview-ui → dist)
+npm run compile         # 확장 TypeScript 컴파일 (또는 npm run watch)
+npm test                # 스모크 테스트 (vscode 없이)
 ```
+
+> 웹뷰 UI는 `webview-ui/` 의 **Astro** 프로젝트로 만들어집니다. `astro build` 산출물(`webview-ui/dist`)을 확장이 읽어 에셋 경로를 webview URI로 재작성하고 CSP를 주입해 로드합니다. 웹뷰를 수정하려면 `webview-ui/src/pages/*.astro` 를 고치고 `npm run build:webview` 를 다시 실행하세요.
 
 1. VSCode에서 이 폴더를 열고 **F5** (Run Schutz Extension) → 확장 개발 호스트가 뜹니다.
 2. 개발 호스트에서 `examples/demo.ts` 를 엽니다.

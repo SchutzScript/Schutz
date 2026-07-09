@@ -1,0 +1,13 @@
+{
+  "name": "schutz-webview-ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "dev": "astro dev"
+  },
+  "devDependencies": {
+    "astro": "^5.0.0"
+  }
+}

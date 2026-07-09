@@ -2,8 +2,20 @@
 .vscode-test/**
 src/**
 .gitignore
+.gitattributes
 tsconfig.json
 **/*.map
 **/*.ts
 node_modules/**
 docs/**
+test/**
+examples/**
+
+# webview-ui: 소스/의존성은 제외, 빌드 산출물(dist)만 패키지에 포함
+webview-ui/src/**
+webview-ui/node_modules/**
+webview-ui/astro.config.mjs
+webview-ui/package.json
+webview-ui/package-lock.json
+webview-ui/.astro/**
+webview-ui/tsconfig.json

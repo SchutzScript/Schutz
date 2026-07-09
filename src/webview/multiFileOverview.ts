@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { renderHtml } from "./html";
+import { loadAstroView, webviewDistRoot } from "./astroView";
 import { TransactionManager, EditTransaction } from "../core/transaction";
 
 interface FileCard {
@@ -39,24 +39,11 @@ export class MultiFileOverview {
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
-        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
+        localResourceRoots: [webviewDistRoot(this.extensionUri)],
         retainContextWhenHidden: true,
       },
     );
-    this.panel.webview.html = renderHtml(this.panel.webview, this.extensionUri, {
-      title: "멀티파일 오버뷰",
-      scriptFile: "overview.js",
-      styleFile: "overview.css",
-      bodyHtml: `
-        <header class="ov-head">
-          <h2>변경 조망</h2>
-          <div class="ov-actions">
-            <button id="acceptAll" class="btn primary">전체 수락</button>
-            <button id="rejectAll" class="btn ghost">전체 거절</button>
-          </div>
-        </header>
-        <div id="grid" class="grid"></div>`,
-    });
+    this.panel.webview.html = loadAstroView(this.panel.webview, this.extensionUri, "overview");
 
     this.panel.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "open" && typeof msg.file === "string") {
