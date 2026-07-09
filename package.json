@@ -1,0 +1,143 @@
+{
+  "name": "schutz",
+  "displayName": "Schutz",
+  "description": "AI 편집을 실시간으로 멋지게 보여주는 AI 네이티브 IDE 경험 (Phase 1: VSCode 확장 프로토타입)",
+  "version": "0.0.1",
+  "publisher": "schutzscript",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "copilot",
+    "code editor",
+    "real-time"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "schutz",
+          "title": "Schutz",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "schutz": [
+        {
+          "type": "webview",
+          "id": "schutz.chat",
+          "name": "Chat",
+          "icon": "media/icon.svg"
+        },
+        {
+          "type": "webview",
+          "id": "schutz.activity",
+          "name": "Agent Activity"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "schutz.openChat",
+        "title": "Schutz: Open Chat",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.runDemo",
+        "title": "Schutz: Run Demo Edit (Mock)",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.acceptAll",
+        "title": "Schutz: Accept All Pending Edits",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.rejectAll",
+        "title": "Schutz: Reject All Pending Edits",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.acceptTransaction",
+        "title": "Schutz: Accept Edit",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.rejectTransaction",
+        "title": "Schutz: Reject Edit",
+        "category": "Schutz"
+      },
+      {
+        "command": "schutz.openMultiFileOverview",
+        "title": "Schutz: Open Multi-file Overview",
+        "category": "Schutz"
+      }
+    ],
+    "configuration": {
+      "title": "Schutz",
+      "properties": {
+        "schutz.provider": {
+          "type": "string",
+          "enum": ["mock", "claude", "openai", "gemini", "local"],
+          "default": "mock",
+          "description": "사용할 AI 프로바이더. 백엔드 미정 단계에서는 'mock'으로 API 키 없이 동작합니다."
+        },
+        "schutz.model": {
+          "type": "string",
+          "default": "",
+          "description": "프로바이더별 모델 ID (비워두면 기본 모델)"
+        },
+        "schutz.claude.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Claude(Anthropic) API 키. 실험적 Claude 어댑터에서만 사용. ⚠️ settings에 평문 저장되므로 프로토타입 용도로만 사용하세요 (추후 SecretStorage로 이전 예정)."
+        },
+        "schutz.animation.typingSpeed": {
+          "type": "number",
+          "default": 12,
+          "description": "편집 스트리밍 애니메이션 속도 (틱당 문자 수). 낮을수록 느리고 극적."
+        },
+        "schutz.animation.glowDurationMs": {
+          "type": "number",
+          "default": 1200,
+          "description": "바뀐 라인 글로우가 유지되는 시간(ms)."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "schutz.acceptTransaction",
+          "when": "false"
+        },
+        {
+          "command": "schutz.rejectTransaction",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
