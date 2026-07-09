@@ -1,0 +1,138 @@
+---
+// 브라우저에서 세 웹뷰를 실제 모습으로 확인하기 위한 개발용 하네스.
+// 각 iframe에 확장이 보낼 법한 샘플 이벤트를 postMessage로 주입한다.
+// (VSCode 확장과는 무관 — 순수 미리보기용)
+---
+
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Schutz Webview Preview</title>
+    <style>
+      body {
+        margin: 0;
+        background: #1e1e1e;
+        color: #ccc;
+        font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      }
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid #333;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      header span { opacity: 0.55; font-weight: 400; }
+      .grid {
+        display: grid;
+        grid-template-columns: 360px 320px 1fr;
+        gap: 14px;
+        padding: 16px;
+        align-items: start;
+      }
+      .cell {
+        border: 1px solid #333;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #1e1e1e;
+      }
+      .cell h2 {
+        margin: 0;
+        padding: 8px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        opacity: 0.6;
+        border-bottom: 1px solid #2b2b2b;
+      }
+      iframe { width: 100%; border: 0; display: block; background: #1e1e1e; }
+      .chat iframe { height: 460px; }
+      .activity iframe { height: 460px; }
+      .overview iframe { height: 460px; }
+      @media (max-width: 1100px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>Schutz 웹뷰 미리보기 <span>— 확장 없이 브라우저에서 보는 개발용 하네스</span></header>
+    <div class="grid">
+      <div class="cell chat">
+        <h2>① 채팅</h2>
+        <iframe id="chat" src="/chat"></iframe>
+      </div>
+      <div class="cell activity">
+        <h2>③ Agent 활동</h2>
+        <iframe id="activity" src="/activity"></iframe>
+      </div>
+      <div class="cell overview">
+        <h2>④ 멀티파일 오버뷰</h2>
+        <iframe id="overview" src="/overview"></iframe>
+      </div>
+    </div>
+
+    <script>
+      function send(id, msg) {
+        const f = document.getElementById(id);
+        if (f && f.contentWindow) f.contentWindow.postMessage(msg, "*");
+      }
+
+      function feedChat() {
+        send("chat", { type: "status", text: "Mock 생각 중…" });
+        send("chat", { type: "turn_start" });
+        const full =
+          "examples/demo.ts (14줄)를 살펴봤어요. 파일 상단 문서 배너를 추가하고, " +
+          "첫 번째 함수 위에 설명 주석을 붙이겠습니다. 모든 변경은 수락/거절하실 수 있어요.";
+        let i = 0;
+        const timer = setInterval(() => {
+          i += 4;
+          send("chat", { type: "assistant_text", full: full.slice(0, i) });
+          if (i >= full.length) {
+            clearInterval(timer);
+            send("chat", { type: "turn_end" });
+            send("chat", { type: "status", text: "대기 중" });
+          }
+        }, 40);
+      }
+
+      function feedActivity() {
+        send("activity", { type: "turn_start" });
+        send("activity", {
+          type: "plan",
+          steps: [
+            { id: "s1", title: "활성 파일 읽기", status: "done" },
+            { id: "s2", title: "개선점 분석", status: "done" },
+            { id: "s3", title: "편집 적용", status: "active" },
+          ],
+        });
+        send("activity", { type: "tool", phase: "call", id: "t1", name: "read_file" });
+        setTimeout(
+          () => send("activity", { type: "tool", phase: "result", id: "t1", name: "read_file" }),
+          600,
+        );
+        send("activity", { type: "usage", inputTokens: 1240, outputTokens: 180 });
+      }
+
+      function feedOverview() {
+        send("overview", {
+          type: "render",
+          cards: [
+            { file: "examples/demo.ts", added: 4, removed: 0, status: "pending", txId: "tx-1" },
+            { file: "examples/user.ts", added: 1, removed: 0, status: "pending", txId: "tx-2" },
+            { file: "examples/greet.ts", added: 1, removed: 0, status: "pending", txId: "tx-3" },
+          ],
+        });
+      }
+
+      // iframe 로드 후 약간의 딜레이를 두고 주입
+      window.addEventListener("load", () => {
+        setTimeout(() => {
+          feedChat();
+          feedActivity();
+          feedOverview();
+        }, 500);
+      });
+    </script>
+  </body>
+</html>

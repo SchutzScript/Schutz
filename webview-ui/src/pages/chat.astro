@@ -74,7 +74,10 @@ import View from "../layouts/View.astro";
 </style>
 
 <script>
-  const vscode = acquireVsCodeApi();
+  const vscode =
+    typeof acquireVsCodeApi !== "undefined"
+      ? acquireVsCodeApi()
+      : { postMessage: () => {} };
   const messages = document.getElementById("messages");
   const input = document.getElementById("input");
   const send = document.getElementById("send");

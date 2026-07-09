@@ -62,7 +62,10 @@ import View from "../layouts/View.astro";
 </style>
 
 <script>
-  const vscode = acquireVsCodeApi();
+  const vscode =
+    typeof acquireVsCodeApi !== "undefined"
+      ? acquireVsCodeApi()
+      : { postMessage: () => {} };
   const grid = document.getElementById("grid");
 
   document.getElementById("acceptAll").addEventListener("click", () =>

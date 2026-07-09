@@ -2,6 +2,23 @@
   --schutz-accent: #58a6ff;
   --schutz-add: #3fb950;
   --schutz-radius: 8px;
+
+  /* --vscode-* 폴백: 실제 VSCode 웹뷰에서는 VSCode가 값을 주입해 이 값들을 덮어씀.
+     브라우저 프리뷰에서도 UI가 보이도록 다크 테마 기준 기본값 제공. */
+  --vscode-font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-foreground: #cccccc;
+  --vscode-button-background: #0e639c;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #1177bb;
+  --vscode-input-background: #3c3c3c;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-editorWidget-background: #252526;
+  --vscode-editorWidget-border: #454545;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+  --vscode-errorForeground: #f85149;
 }
 
 * { box-sizing: border-box; }
