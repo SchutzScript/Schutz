@@ -117,7 +117,21 @@ async function run() {
     assert.ok(patch.edits.some((e) => e.endLine < e.startLine), "삽입 편집 없음");
   });
 
-  await check("activate()가 뷰 2개·CodeLens·커맨드 7개를 등록한다", async () => {
+  await check("멀티파일 데모가 파일마다 edit 이벤트를 낸다", async () => {
+    const { MockProvider } = require("../out/ai/providers/mockProvider.js");
+    const p = new MockProvider();
+    const files = ["examples/demo.ts", "examples/user.ts", "examples/greet.ts"];
+    const editFiles = [];
+    for await (const ev of p.streamChat({
+      messages: [{ role: "user", content: "hi" }],
+      context: { demoFiles: files },
+    })) {
+      if (ev.type === "edit") editFiles.push(ev.patch.file);
+    }
+    assert.deepStrictEqual(editFiles, files, "파일별 edit 불일치: " + editFiles);
+  });
+
+  await check("activate()가 뷰 2개·CodeLens·커맨드 8개를 등록한다", async () => {
     const { activate } = require("../out/extension.js");
     const ctx = { subscriptions: [], extensionUri: {} };
     activate(ctx);
@@ -130,6 +144,7 @@ async function run() {
     const expected = [
       "schutz.openChat",
       "schutz.runDemo",
+      "schutz.runMultiFileDemo",
       "schutz.acceptAll",
       "schutz.rejectAll",
       "schutz.acceptTransaction",

@@ -59,6 +59,11 @@
         "category": "Schutz"
       },
       {
+        "command": "schutz.runMultiFileDemo",
+        "title": "Schutz: Run Multi-file Demo (Mock)",
+        "category": "Schutz"
+      },
+      {
         "command": "schutz.acceptAll",
         "title": "Schutz: Accept All Pending Edits",
         "category": "Schutz"

@@ -26,6 +26,12 @@ export class MockProvider implements AIProvider {
     const signal = req.signal;
     const aborted = () => signal?.aborted ?? false;
 
+    const demoFiles = req.context?.demoFiles;
+    if (demoFiles && demoFiles.length > 0) {
+      yield* this.streamMultiFile(demoFiles, aborted);
+      return;
+    }
+
     const activeFile = req.context?.activeFile ?? "example.ts";
     const text = req.context?.activeFileText ?? "";
     const lines = text.length ? text.split(/\r?\n/) : [];
@@ -86,6 +92,48 @@ export class MockProvider implements AIProvider {
       inputTokens: Math.max(50, lines.length * 4),
       outputTokens: 180,
     };
+    yield { type: "done" };
+  }
+
+  /** 여러 파일에 각각 안전한 배너 삽입을 제안하는 멀티파일 데모 (기둥4). */
+  private async *streamMultiFile(
+    files: string[],
+    aborted: () => boolean,
+  ): AsyncIterable<StreamEvent> {
+    const plan: PlanStep[] = files.map((f, i) => ({
+      id: `f${i}`,
+      title: `${f} 문서화`,
+      status: i === 0 ? "active" : "pending",
+    }));
+    yield { type: "plan", steps: structuredClone(plan) };
+    await sleep(250);
+
+    const intro = `${files.length}개 파일에 문서 배너를 추가하겠습니다. 멀티파일 오버뷰에서 한눈에 확인하고 일괄 수락/거절하세요.\n`;
+    for (const chunk of chunkText(intro, 8)) {
+      if (aborted()) return;
+      yield { type: "text", delta: chunk };
+      await sleep(40);
+    }
+
+    for (let i = 0; i < files.length; i++) {
+      if (aborted()) return;
+      const file = files[i];
+      // 파일 최상단 배너 삽입은 내용과 무관하게 안전(순수 삽입).
+      const patch: Patch = {
+        file,
+        rationale: "문서화: 파일 상단 배너 추가",
+        edits: [{ startLine: 0, endLine: -1, newText: `// Reviewed by Schutz — ${file}\n` }],
+      };
+      yield { type: "edit", patch };
+      plan[i].status = "done";
+      if (i + 1 < plan.length) {
+        plan[i + 1].status = "active";
+      }
+      yield { type: "plan", steps: structuredClone(plan) };
+      await sleep(200);
+    }
+
+    yield { type: "usage", inputTokens: 120, outputTokens: files.length * 30 };
     yield { type: "done" };
   }
 }

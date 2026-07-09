@@ -43,7 +43,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const history: Message[] = [];
   let busy = false;
 
-  async function runUserTurn(text: string): Promise<void> {
+  async function runUserTurn(text: string, demoFiles?: string[]): Promise<void> {
     if (busy) {
       return;
     }
@@ -73,8 +73,11 @@ export function activate(context: vscode.ExtensionContext): void {
           activeFile: toRelative(editor.document.uri),
           activeFileText: editor.document.getText(),
           selection: editor.document.getText(editor.selection),
+          demoFiles,
         }
-      : undefined;
+      : demoFiles
+        ? { demoFiles }
+        : undefined;
 
     const model = cfg.get<string>("model", "");
     const messages: Message[] = [
@@ -108,6 +111,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("schutz.runDemo", () =>
       runUserTurn("이 파일 문서화를 개선해줘"),
     ),
+    vscode.commands.registerCommand("schutz.runMultiFileDemo", () => {
+      overview.open();
+      return runUserTurn("여러 파일 문서화를 개선해줘", [
+        "examples/demo.ts",
+        "examples/user.ts",
+        "examples/greet.ts",
+      ]);
+    }),
     vscode.commands.registerCommand("schutz.acceptAll", () => diff.acceptAll()),
     vscode.commands.registerCommand("schutz.rejectAll", () => diff.rejectAll()),
     vscode.commands.registerCommand("schutz.acceptTransaction", (id: string) =>

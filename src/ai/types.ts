@@ -67,6 +67,8 @@ export interface ChatRequest {
     /** 활성 파일의 현재 전체 텍스트 (프로바이더가 패치 좌표를 계산하는 데 사용) */
     activeFileText?: string;
     selection?: string;
+    /** 멀티파일 데모용: 편집 대상 파일들의 상대 경로 목록 */
+    demoFiles?: string[];
   };
   signal?: AbortSignal;
 }
