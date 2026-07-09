@@ -132,6 +132,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node test/smoke.js",
     "lint": "eslint src --ext ts",
     "package": "vsce package"
   },
