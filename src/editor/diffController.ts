@@ -55,6 +55,16 @@ export class DiffController implements EditSink, vscode.CodeLensProvider {
     this.applied.set(tx.id, { uri, ranges, rationale: tx.patch.rationale });
     this.refreshPending(editor);
     this.deco.glow(editor, ranges, glowMs);
+    // 편집된 코드 옆에 자연스러운 인라인 "수정됨" 라벨 (강→약 페이드)
+    const topmost = ranges[ranges.length - 1] ?? ranges[0];
+    if (topmost) {
+      this.deco.showEditedLabel(
+        editor,
+        topmost.start.line,
+        tx.patch.rationale ?? "수정됨",
+        glowMs * 3,
+      );
+    }
     this._onDidChangeCodeLenses.fire();
   }
 

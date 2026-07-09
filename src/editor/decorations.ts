@@ -16,6 +16,11 @@ export class DecorationController {
   private readonly pendingAdd: vscode.TextEditorDecorationType;
   /** 활성 타이핑 커서 위치 표시 */
   private readonly typingCursor: vscode.TextEditorDecorationType;
+  /** 편집된 라인 끝의 인라인 라벨 ("✦ 수정됨 · 사유") — 강/약 2단계 페이드 */
+  private readonly labelStrong: vscode.TextEditorDecorationType;
+  private readonly labelFaint: vscode.TextEditorDecorationType;
+  private readonly strongLabels = new Map<string, vscode.DecorationOptions[]>();
+  private readonly faintLabels = new Map<string, vscode.DecorationOptions[]>();
 
   constructor() {
     this.glowStrong = vscode.window.createTextEditorDecorationType({
@@ -45,6 +50,80 @@ export class DecorationController {
         fontWeight: "bold",
       },
     });
+    // 라벨 텍스트/색은 per-range renderOptions 로 지정
+    this.labelStrong = vscode.window.createTextEditorDecorationType({});
+    this.labelFaint = vscode.window.createTextEditorDecorationType({});
+  }
+
+  /**
+   * 편집된 라인 끝에 "✦ <text>" 인라인 라벨을 띄우고,
+   * durationMs 동안 강→약 2단계로 사그라들게 한다. (기둥1: 자연스러운 수정 표시)
+   */
+  showEditedLabel(
+    editor: vscode.TextEditor,
+    line: number,
+    text: string,
+    durationMs: number,
+  ): void {
+    const key = editor.document.uri.toString();
+    const eol = new vscode.Range(line, Number.MAX_SAFE_INTEGER, line, Number.MAX_SAFE_INTEGER);
+    const make = (color: string): vscode.DecorationOptions => ({
+      range: eol,
+      renderOptions: {
+        after: {
+          contentText: `  ✦ ${text}`,
+          color,
+          fontStyle: "italic",
+          margin: "0 0 0 1.5rem",
+        },
+      },
+    });
+
+    const strongOpt = make("rgba(88, 166, 255, 0.9)");
+    const faintOpt = make("rgba(88, 166, 255, 0.35)");
+
+    const strong = this.strongLabels.get(key) ?? [];
+    strong.push(strongOpt);
+    this.strongLabels.set(key, strong);
+    this.applyLabels(key);
+
+    // 1단계: 강 → 약
+    setTimeout(() => {
+      this.removeLabel(this.strongLabels, key, strongOpt);
+      const faint = this.faintLabels.get(key) ?? [];
+      faint.push(faintOpt);
+      this.faintLabels.set(key, faint);
+      this.applyLabels(key);
+      // 2단계: 약 → 제거
+      setTimeout(() => {
+        this.removeLabel(this.faintLabels, key, faintOpt);
+        this.applyLabels(key);
+      }, Math.max(400, durationMs * 0.45));
+    }, Math.max(600, durationMs * 0.55));
+  }
+
+  private removeLabel(
+    map: Map<string, vscode.DecorationOptions[]>,
+    key: string,
+    opt: vscode.DecorationOptions,
+  ): void {
+    const list = map.get(key);
+    if (!list) {
+      return;
+    }
+    const idx = list.indexOf(opt);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+    }
+  }
+
+  private applyLabels(key: string): void {
+    for (const ed of vscode.window.visibleTextEditors) {
+      if (ed.document.uri.toString() === key) {
+        ed.setDecorations(this.labelStrong, this.strongLabels.get(key) ?? []);
+        ed.setDecorations(this.labelFaint, this.faintLabels.get(key) ?? []);
+      }
+    }
   }
 
   /** 타이핑 중인 커서 위치를 표시(또는 위치 배열이 비면 제거). */
@@ -82,5 +161,7 @@ export class DecorationController {
     this.glowFaint.dispose();
     this.pendingAdd.dispose();
     this.typingCursor.dispose();
+    this.labelStrong.dispose();
+    this.labelFaint.dispose();
   }
 }

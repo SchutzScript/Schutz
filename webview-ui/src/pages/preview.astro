@@ -1,7 +1,8 @@
 ---
-// 브라우저에서 세 웹뷰를 실제 모습으로 확인하기 위한 개발용 하네스.
-// 각 iframe에 확장이 보낼 법한 샘플 이벤트를 postMessage로 주입한다.
-// (VSCode 확장과는 무관 — 순수 미리보기용)
+// 브라우저에서 웹뷰 + 에디터 효과를 실제 모습으로 확인하기 위한 개발용 하네스.
+// 각 iframe에 확장이 보낼 법한 샘플 이벤트를 postMessage로 주입하고,
+// "② 에디터" 패널은 실제 VSCode 데코레이션 효과(타이핑·글로우·인라인 수정됨 라벨)를
+// 웹으로 재현한 데모다. (VSCode 확장과는 무관 — 순수 미리보기용)
 ---
 
 <!doctype html>
@@ -10,7 +11,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Schutz Webview Preview</title>
-    <style>
+    <style is:global>
       body {
         margin: 0;
         background: #1e1e1e;
@@ -26,7 +27,7 @@
       header span { opacity: 0.55; font-weight: 400; }
       .grid {
         display: grid;
-        grid-template-columns: 360px 320px 1fr;
+        grid-template-columns: 1.2fr 1fr;
         gap: 14px;
         padding: 16px;
         align-items: start;
@@ -47,17 +48,81 @@
         border-bottom: 1px solid #2b2b2b;
       }
       iframe { width: 100%; border: 0; display: block; background: #1e1e1e; }
-      .chat iframe { height: 460px; }
-      .activity iframe { height: 460px; }
-      .overview iframe { height: 460px; }
+      .chat iframe { height: 440px; }
+      .activity iframe { height: 400px; }
+      .overview iframe { height: 400px; }
       @media (max-width: 1100px) {
         .grid { grid-template-columns: 1fr; }
       }
+
+      /* ── 미니 에디터 데모 ─────────────────────────── */
+      .ed {
+        font-family: Consolas, "Cascadia Code", "D2Coding", monospace;
+        font-size: 13px;
+        line-height: 1.65;
+        padding: 10px 0;
+        height: 440px;
+        overflow: auto;
+      }
+      .ln { display: flex; white-space: pre; align-items: baseline; }
+      .ln .no {
+        width: 42px;
+        text-align: right;
+        padding-right: 16px;
+        opacity: 0.32;
+        user-select: none;
+        flex: 0 0 auto;
+        font-size: 12px;
+      }
+      .ln .tx { color: #d4d4d4; }
+      .kw { color: #569cd6; }
+      .str { color: #ce9178; }
+
+      /* AI가 삽입한 라인 (pending) */
+      .ln.ins {
+        background: rgba(63, 185, 80, 0.12);
+        box-shadow: inset 2.5px 0 0 rgba(63, 185, 80, 0.85);
+      }
+      .ln.ins .tx { color: #6a9955; }
+
+      /* 방금 편집됨 — 파란 글로우가 초록 pending으로 사그라듦 */
+      .ln.flash { animation: lineflash 1.3s ease; }
+      @keyframes lineflash {
+        0% { background: rgba(88, 166, 255, 0.38); }
+        100% { background: rgba(63, 185, 80, 0.12); }
+      }
+
+      /* 타이핑 커서 */
+      .typing::after {
+        content: "▏";
+        color: #58a6ff;
+        font-weight: bold;
+        animation: blink 0.9s steps(2) infinite;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* 코드 옆 인라인 "수정됨" 라벨 — 떠올랐다가 자연스럽게 사그라듦 */
+      .edit-tag {
+        margin-left: 22px;
+        font-style: italic;
+        font-size: 11.5px;
+        color: rgba(88, 166, 255, 0.95);
+        opacity: 0;
+        transform: translateX(-6px);
+        transition: opacity 0.45s ease, transform 0.45s ease;
+        text-shadow: 0 0 10px rgba(88, 166, 255, 0.4);
+      }
+      .edit-tag.show { opacity: 1; transform: none; }
+      .edit-tag.fade { opacity: 0; transition: opacity 1.6s ease; }
     </style>
   </head>
   <body>
     <header>Schutz 웹뷰 미리보기 <span>— 확장 없이 브라우저에서 보는 개발용 하네스</span></header>
     <div class="grid">
+      <div class="cell editor">
+        <h2>② 에디터 — 코드 안 인라인 수정 표시</h2>
+        <div id="editor" class="ed"></div>
+      </div>
       <div class="cell chat">
         <h2>① 채팅</h2>
         <iframe id="chat" src="/chat"></iframe>
@@ -73,6 +138,98 @@
     </div>
 
     <script>
+      // ══════════ 에디터 데모: 타이핑 → 글로우 → 인라인 "수정됨" 라벨 ══════════
+      const ed = document.getElementById("editor");
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      const baseLines = [
+        "interface User {",
+        "  id: string;",
+        "  name: string;",
+        "}",
+        "",
+        "function greet(user: User): string {",
+        "  return `안녕하세요, ${user.name}님!`;",
+        "}",
+        "",
+        "const alice: User = { id: \"u1\", name: \"Alice\" };",
+        "console.log(greet(alice));",
+      ];
+      const banner = [
+        "// ─────────────────────────────────────",
+        "// Reviewed by Schutz — 자동 문서 배너",
+        "// ─────────────────────────────────────",
+      ];
+
+      function makeLine(text, cls) {
+        const ln = document.createElement("div");
+        ln.className = "ln" + (cls ? " " + cls : "");
+        const no = document.createElement("span");
+        no.className = "no";
+        const tx = document.createElement("span");
+        tx.className = "tx";
+        tx.textContent = text;
+        ln.appendChild(no);
+        ln.appendChild(tx);
+        return ln;
+      }
+
+      function renumber() {
+        let i = 1;
+        for (const ln of ed.querySelectorAll(".ln")) {
+          ln.querySelector(".no").textContent = i++;
+        }
+      }
+
+      function renderBase() {
+        ed.innerHTML = "";
+        for (const t of baseLines) ed.appendChild(makeLine(t));
+        renumber();
+      }
+
+      async function editorDemo() {
+        renderBase();
+        await wait(1400);
+
+        // 1) AI가 상단에 배너를 "타이핑"으로 삽입
+        const inserted = [];
+        for (let li = 0; li < banner.length; li++) {
+          const ln = makeLine("", "ins");
+          const tx = ln.querySelector(".tx");
+          tx.classList.add("typing");
+          ed.insertBefore(ln, ed.children[li]);
+          renumber();
+          for (const ch of banner[li]) {
+            tx.textContent += ch;
+            await wait(11);
+          }
+          tx.classList.remove("typing");
+          inserted.push(ln);
+        }
+
+        // 2) 파란 글로우 → pending 초록으로 사그라듦
+        for (const ln of inserted) ln.classList.add("flash");
+
+        // 3) 코드 옆 인라인 라벨: "✦ 수정됨 · 문서화 개선" 떠오름
+        const tag = document.createElement("span");
+        tag.className = "edit-tag";
+        tag.textContent = "✦ 수정됨 · 문서화 개선";
+        inserted[1].appendChild(tag);
+        requestAnimationFrame(() => tag.classList.add("show"));
+
+        // 4) 잠시 보여준 뒤 자연스럽게 페이드아웃 (pending 초록 표시는 유지)
+        await wait(2800);
+        tag.classList.remove("show");
+        tag.classList.add("fade");
+        await wait(1700);
+        tag.remove();
+
+        // 5) 잠시 뒤 데모 반복
+        await wait(2600);
+        editorDemo();
+      }
+
+      // ══════════ 웹뷰 iframe 샘플 데이터 주입 ══════════
       function send(id, msg) {
         const f = document.getElementById(id);
         if (f && f.contentWindow) f.contentWindow.postMessage(msg, "*");
@@ -92,33 +249,8 @@
             clearInterval(timer);
             send("chat", { type: "turn_end" });
             send("chat", { type: "status", text: "대기 중" });
-            feedEditToasts();
           }
         }, 40);
-      }
-
-      // "~~가 수정됨" 토스트 데모: 파일별로 시차를 두고 transaction 이벤트 주입
-      function feedEditToasts() {
-        const files = [
-          { file: "examples/demo.ts", lines: 4 },
-          { file: "examples/user.ts", lines: 1 },
-          { file: "examples/greet.ts", lines: 1 },
-        ];
-        files.forEach((f, idx) => {
-          setTimeout(() => {
-            send("chat", {
-              type: "transaction",
-              tx: {
-                patch: {
-                  file: f.file,
-                  edits: [{ startLine: 0, endLine: -1, newText: "// x\n".repeat(f.lines) }],
-                },
-              },
-            });
-          }, 600 + idx * 1200);
-        });
-        // 8초마다 반복해서 계속 볼 수 있게
-        setTimeout(feedEditToasts, 8000);
       }
 
       function feedActivity() {
@@ -150,8 +282,8 @@
         });
       }
 
-      // iframe 로드 후 약간의 딜레이를 두고 주입
       window.addEventListener("load", () => {
+        editorDemo();
         setTimeout(() => {
           feedChat();
           feedActivity();
