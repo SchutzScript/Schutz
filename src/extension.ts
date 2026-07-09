@@ -3,6 +3,7 @@ import { ProviderRegistry } from "./ai/provider";
 import { MockProvider } from "./ai/providers/mockProvider";
 import { ClaudeProvider } from "./ai/providers/claudeProvider";
 import { Message } from "./ai/types";
+import { SCHUTZ_SYSTEM_PROMPT } from "./ai/prompts";
 import { TransactionManager } from "./core/transaction";
 import { Orchestrator } from "./core/orchestrator";
 import { DecorationController } from "./editor/decorations";
@@ -75,8 +76,14 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       : undefined;
 
+    const model = cfg.get<string>("model", "");
+    const messages: Message[] = [
+      { role: "system", content: SCHUTZ_SYSTEM_PROMPT },
+      ...history,
+    ];
+
     try {
-      const reply = await orchestrator.runTurn(provider, history, context2);
+      const reply = await orchestrator.runTurn(provider, messages, context2, model);
       if (reply) {
         history.push({ role: "assistant", content: reply });
       }

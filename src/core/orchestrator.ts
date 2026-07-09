@@ -62,6 +62,7 @@ export class Orchestrator {
     provider: AIProvider,
     messages: Message[],
     context: ChatRequest["context"],
+    model?: string,
   ): Promise<string> {
     this.abort = new AbortController();
     this.assistantBuffer = "";
@@ -74,6 +75,7 @@ export class Orchestrator {
       const stream = provider.streamChat({
         messages,
         context,
+        model: model || undefined,
         signal: this.abort.signal,
       });
 
