@@ -3,49 +3,64 @@ import View from "../layouts/View.astro";
 ---
 
 <View title="Schutz Chat">
+  <div id="toasts"></div>
   <div id="messages"></div>
   <div id="composer">
-    <textarea id="input" rows="2" placeholder="Schutz에게 요청… (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
-    <div class="composer-row">
-      <span id="status" class="status">대기 중</span>
-      <div class="spacer"></div>
-      <button id="cancel" class="btn ghost" hidden>중지</button>
-      <button id="send" class="btn primary">전송</button>
+    <div class="box">
+      <textarea id="input" rows="1" placeholder="무엇이든 요청하세요…"></textarea>
+      <div class="row">
+        <span id="status" class="status">대기 중</span>
+        <div class="spacer"></div>
+        <button id="cancel" class="btn ghost" hidden>중지</button>
+        <button id="send" class="send" title="전송 (Enter)" disabled>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
+    <div class="hint">Enter 전송 · Shift+Enter 줄바꿈</div>
   </div>
 </View>
 
-<style>
+<style is:global>
   html, body { height: 100%; }
   body { display: flex; flex-direction: column; }
 
+  /* ── 메시지 ─────────────────────────────────────── */
   #messages {
     flex: 1;
     overflow-y: auto;
-    padding: 10px;
+    padding: 12px 10px;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
-
   .msg {
-    padding: 8px 10px;
-    border-radius: var(--schutz-radius);
+    padding: 8px 11px;
+    border-radius: 10px;
     white-space: pre-wrap;
     word-break: break-word;
-    line-height: 1.5;
+    line-height: 1.55;
+    animation: msg-in 0.22s ease;
+  }
+  @keyframes msg-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
   }
   .msg.user {
     align-self: flex-end;
     max-width: 85%;
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
+    border-bottom-right-radius: 4px;
   }
   .msg.assistant {
     align-self: flex-start;
     max-width: 92%;
     background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.12));
     border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.2));
+    border-bottom-left-radius: 4px;
   }
   .msg.assistant.streaming::after {
     content: "▏";
@@ -54,23 +69,106 @@ import View from "../layouts/View.astro";
   }
   @keyframes blink { 50% { opacity: 0; } }
 
-  #composer {
-    border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
-    padding: 8px;
+  /* ── 수정됨 토스트 ───────────────────────────────── */
+  #toasts {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    z-index: 100;
+    pointer-events: none;
+    width: max-content;
+    max-width: calc(100% - 20px);
+  }
+  .toast {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid rgba(88, 166, 255, 0.55);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+    transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+    box-shadow:
+      0 4px 18px rgba(0, 0, 0, 0.35),
+      0 0 14px rgba(88, 166, 255, 0.22);
+  }
+  .toast.show { opacity: 1; transform: translateY(0) scale(1); }
+  .toast.hide { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  .toast .ico {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--schutz-accent);
+    animation: toast-pulse 1.1s ease infinite;
+    flex: 0 0 auto;
+  }
+  @keyframes toast-pulse {
+    50% { box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.18); }
+  }
+  .toast .file { font-weight: 600; color: var(--schutz-accent); }
+  .toast .plus { color: var(--schutz-add); font-variant-numeric: tabular-nums; }
+
+  /* ── 컴포저 ─────────────────────────────────────── */
+  #composer { padding: 8px 10px 6px; }
+  #composer .box {
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+    border-radius: 12px;
+    padding: 8px 10px 6px;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  #composer .box:focus-within {
+    border-color: var(--schutz-accent);
+    box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.35), 0 0 14px rgba(88, 166, 255, 0.12);
   }
   #input {
     width: 100%;
-    resize: vertical;
-    background: var(--vscode-input-background);
+    max-height: 120px;
+    resize: none;
+    background: transparent;
     color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.4));
-    border-radius: 6px;
-    padding: 6px 8px;
+    border: none;
+    outline: none;
+    padding: 2px 2px 6px;
     font-family: inherit;
     font-size: 13px;
+    line-height: 1.5;
   }
-  .composer-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-  .status { font-size: 11px; opacity: 0.65; }
+  #composer .row { display: flex; align-items: center; gap: 6px; }
+  .status { font-size: 11px; opacity: 0.6; transition: opacity 0.2s; }
+  .status.busy { opacity: 0.95; color: var(--schutz-accent); }
+
+  .send {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    transition: transform 0.12s ease, opacity 0.15s ease, background 0.15s ease;
+  }
+  .send:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); transform: scale(1.08); }
+  .send:active:not(:disabled) { transform: scale(0.95); }
+  .send:disabled { opacity: 0.35; cursor: default; }
+
+  .hint {
+    font-size: 10px;
+    opacity: 0.4;
+    text-align: right;
+    padding: 4px 4px 0;
+  }
 </style>
 
 <script>
@@ -83,9 +181,40 @@ import View from "../layouts/View.astro";
   const send = document.getElementById("send");
   const cancel = document.getElementById("cancel");
   const status = document.getElementById("status");
+  const toasts = document.getElementById("toasts");
 
   let streamingEl = null;
 
+  // ── "수정됨" 토스트 ──────────────────────────────
+  function showEditToast(file, added) {
+    const el = document.createElement("div");
+    el.className = "toast";
+    const ico = document.createElement("span");
+    ico.className = "ico";
+    const label = document.createElement("span");
+    const fileEl = document.createElement("span");
+    fileEl.className = "file";
+    fileEl.textContent = file;
+    label.appendChild(fileEl);
+    label.appendChild(document.createTextNode(" 수정됨"));
+    el.appendChild(ico);
+    el.appendChild(label);
+    if (added > 0) {
+      const plus = document.createElement("span");
+      plus.className = "plus";
+      plus.textContent = "+" + added;
+      el.appendChild(plus);
+    }
+    toasts.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    setTimeout(() => {
+      el.classList.remove("show");
+      el.classList.add("hide");
+      setTimeout(() => el.remove(), 350);
+    }, 2600);
+  }
+
+  // ── 메시지 ───────────────────────────────────────
   function addMessage(role, text) {
     const el = document.createElement("div");
     el.className = "msg " + role;
@@ -95,11 +224,18 @@ import View from "../layouts/View.astro";
     return el;
   }
 
+  function autoResize() {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+    send.disabled = input.value.trim().length === 0;
+  }
+
   function submit() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || send.disabled === "busy") return;
     addMessage("user", text);
     input.value = "";
+    autoResize();
     streamingEl = addMessage("assistant", "");
     streamingEl.classList.add("streaming");
     vscode.postMessage({ type: "submit", text });
@@ -107,12 +243,14 @@ import View from "../layouts/View.astro";
 
   send.addEventListener("click", submit);
   cancel.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
+  input.addEventListener("input", autoResize);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
   });
+  autoResize();
 
   window.addEventListener("message", (event) => {
     const m = event.data;
@@ -125,16 +263,25 @@ import View from "../layouts/View.astro";
         streamingEl.textContent = m.full;
         messages.scrollTop = messages.scrollHeight;
         break;
+      case "transaction": {
+        const patch = (m.tx && m.tx.patch) || {};
+        const added = (patch.edits || []).reduce(
+          (n, e) => n + (e.newText ? e.newText.split("\n").filter(Boolean).length : 0),
+          0,
+        );
+        showEditToast(patch.file || "파일", added);
+        break;
+      }
       case "status":
         status.textContent = m.text;
         break;
       case "turn_start":
         cancel.hidden = false;
-        send.disabled = true;
+        status.classList.add("busy");
         break;
       case "turn_end":
         cancel.hidden = true;
-        send.disabled = false;
+        status.classList.remove("busy");
         if (streamingEl) streamingEl.classList.remove("streaming");
         streamingEl = null;
         break;

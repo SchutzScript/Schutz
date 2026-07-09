@@ -92,8 +92,33 @@
             clearInterval(timer);
             send("chat", { type: "turn_end" });
             send("chat", { type: "status", text: "대기 중" });
+            feedEditToasts();
           }
         }, 40);
+      }
+
+      // "~~가 수정됨" 토스트 데모: 파일별로 시차를 두고 transaction 이벤트 주입
+      function feedEditToasts() {
+        const files = [
+          { file: "examples/demo.ts", lines: 4 },
+          { file: "examples/user.ts", lines: 1 },
+          { file: "examples/greet.ts", lines: 1 },
+        ];
+        files.forEach((f, idx) => {
+          setTimeout(() => {
+            send("chat", {
+              type: "transaction",
+              tx: {
+                patch: {
+                  file: f.file,
+                  edits: [{ startLine: 0, endLine: -1, newText: "// x\n".repeat(f.lines) }],
+                },
+              },
+            });
+          }, 600 + idx * 1200);
+        });
+        // 8초마다 반복해서 계속 볼 수 있게
+        setTimeout(feedEditToasts, 8000);
       }
 
       function feedActivity() {
