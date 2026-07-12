@@ -1,0 +1,33 @@
+html, body { margin: 0; height: 100%; background: #0C0E0D; }
+* { box-sizing: border-box; }
+#root { height: 100%; }
+a { color: #93A896; text-decoration: none; }
+a:hover { color: #B2C4B4; }
+::selection { background: rgba(125, 145, 131, .28); }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .08); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .15); }
+::-webkit-scrollbar-corner { background: transparent; }
+@keyframes szSpin { to { transform: rotate(360deg); } }
+@keyframes szBlink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+@keyframes szPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+input::placeholder { color: #4B534D; }
+button { white-space: nowrap; flex: none; }
+
+/* hover utilities (프로토타입 style-hover 치환) */
+.hv06:hover { background: rgba(255, 255, 255, .06); }
+.hv07:hover { background: rgba(255, 255, 255, .07); }
+.hv05:hover { background: rgba(255, 255, 255, .05); }
+.hv04:hover { background: rgba(255, 255, 255, .04); }
+.hv02:hover { background: rgba(255, 255, 255, .02); }
+.hv08:hover { background: rgba(255, 255, 255, .08); }
+.hvMenuItem:hover { background: rgba(143, 168, 147, .14); }
+.hvAccent:hover { background: #A9BCA9 !important; }
+.hvGreen:hover { background: rgba(139, 178, 146, .12); }
+.hvGreen2:hover { background: rgba(139, 178, 146, .2); }
+.hvRed:hover { background: rgba(201, 123, 123, .12); }
+.hvRed2:hover { background: rgba(201, 123, 123, .16); }
+.hvMenuBtn:hover { background: rgba(255, 255, 255, .06); color: #D5DAD5 !important; }
+.hvDim:hover { background: rgba(255, 255, 255, .07); color: #9AA59C !important; }
+.hvHead:hover { color: #8B948C !important; }
+.hvTermTab:hover { color: #D5DAD5 !important; }
