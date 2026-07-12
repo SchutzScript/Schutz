@@ -9,6 +9,7 @@ a:hover { color: #B2C4B4; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .15); }
 ::-webkit-scrollbar-corner { background: transparent; }
 @keyframes szSpin { to { transform: rotate(360deg); } }
+@keyframes szFadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes szBlink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
 @keyframes szPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 input::placeholder { color: #4B534D; }
@@ -31,3 +32,10 @@ button { white-space: nowrap; flex: none; }
 .hvDim:hover { background: rgba(255, 255, 255, .07); color: #9AA59C !important; }
 .hvHead:hover { color: #8B948C !important; }
 .hvTermTab:hover { color: #D5DAD5 !important; }
+
+/* 온보딩 hover */
+.obCard:hover { border-color: rgba(143, 168, 147, .6) !important; }
+.obGhostTxt:hover { color: #9AA59C !important; }
+.obBright:hover { filter: brightness(1.12); }
+.obDanger:hover { color: #CE9A9A !important; }
+.obMgrBtn:hover { border-color: #8FA893 !important; }
