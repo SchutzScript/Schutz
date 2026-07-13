@@ -36,3 +36,6 @@ coverage/
 
 # electron-builder 산출물
 ide/release/
+
+# 디자인 핸드오프 (로컬 참고용 — 저장소 제외)
+design_handoff_schutz_ide/
