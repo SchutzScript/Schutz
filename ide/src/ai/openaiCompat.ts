@@ -1,6 +1,6 @@
 import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
-  ProviderId, getStoredKey, getOAuth,
+  ProviderId, getStoredKey, getOAuth, freshOAuth,
 } from "./provider";
 
 export interface CompatConfig {
@@ -58,14 +58,88 @@ export class OpenAICompatProvider implements AgentProvider {
     }));
   }
 
+  /** ChatGPT 구독(codex 백엔드) 스트리밍 — 텍스트 전용 (도구는 API 키 경로에서 지원) */
+  private async *streamCodexBackend(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
+    const tok = await freshOAuth("codex");
+    if (!tok || !window.schutz?.oaiRun) {
+      yield { type: "error", message: "ChatGPT 계정 토큰이 만료되었습니다. 설정에서 다시 로그인해주세요." };
+      yield { type: "done" };
+      return;
+    }
+    const input: any[] = [];
+    for (const m of req.transcript) {
+      if (m.role === "assistant") {
+        if (m.text) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: m.text }] });
+      } else if (m.results && m.results.length) {
+        input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "[도구 결과]\n" + m.results.map(r => r.content).join("\n---\n") }] });
+      } else {
+        input.push({ type: "message", role: "user", content: [{ type: "input_text", text: m.text ?? "" }] });
+      }
+    }
+    const id = "oai" + Date.now() + Math.floor(Math.random() * 1e6);
+    const queue: any[] = [];
+    let notify: (() => void) | null = null;
+    const off = window.schutz.onOaiEvent(line => {
+      try {
+        const ev = JSON.parse(line);
+        if (ev.id !== id) return;
+        queue.push(ev);
+        notify?.();
+      } catch { /* ignore */ }
+    });
+    const onAbort = () => window.schutz?.oaiStop(id);
+    req.signal?.addEventListener("abort", onAbort);
+    window.schutz.oaiRun({
+      id, access: tok.access, accountId: tok.accountId ?? null,
+      body: {
+        model: "gpt-5.2-codex",
+        instructions: req.system ?? "",
+        input,
+        stream: true,
+        store: false,
+      },
+    });
+    try {
+      let doneFlag = false;
+      while (!doneFlag) {
+        while (queue.length === 0) {
+          await new Promise<void>(res => { notify = res; });
+          notify = null;
+        }
+        const ev = queue.shift();
+        if (ev.error) {
+          yield { type: "error", message: String(ev.error) };
+        } else if (ev.done) {
+          doneFlag = true;
+        } else if (ev.data) {
+          let d: any;
+          try { d = JSON.parse(ev.data); } catch { continue; }
+          if (d.type === "response.output_text.delta" && d.delta) {
+            yield { type: "text", delta: d.delta };
+          } else if (d.type === "response.completed" && d.response?.usage) {
+            yield { type: "usage", inputTokens: d.response.usage.input_tokens ?? 0, outputTokens: d.response.usage.output_tokens ?? 0 };
+          } else if (d.type === "response.failed") {
+            yield { type: "error", message: "응답 실패: " + (d.response?.error?.message ?? "알 수 없음") };
+          }
+        }
+      }
+    } finally {
+      off();
+      req.signal?.removeEventListener("abort", onAbort);
+    }
+    yield { type: "stop", reason: "end" };
+    yield { type: "done" };
+  }
+
   async *streamAgentTurn(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
     const apiKey = getStoredKey(this.cfg.id).trim();
+    // GPT: API 키가 없고 ChatGPT 계정이 연결돼 있으면 구독(codex 백엔드) 경로
+    if (this.cfg.id === "gpt" && !apiKey && getOAuth("codex")) {
+      yield* this.streamCodexBackend(req);
+      return;
+    }
     if (!apiKey) {
-      if (this.cfg.id === "gpt" && getOAuth("codex")) {
-        yield { type: "error", message: "ChatGPT 계정은 연결되었지만, 구독 토큰을 통한 GPT 추론 연동은 다음 업데이트에서 활성화됩니다. 당분간 GPT는 API 키로 사용해주세요." };
-      } else {
-        yield { type: "error", message: `${this.label} API 키가 설정되지 않았습니다.` };
-      }
+      yield { type: "error", message: `${this.label} API 키가 설정되지 않았습니다.` };
       yield { type: "done" };
       return;
     }

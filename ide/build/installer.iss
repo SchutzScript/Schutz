@@ -78,6 +78,41 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} 실행"; Flags: no
 Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"
 
 [Code]
+const
+  UNINST_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9B2E7A41-6C0D-4E8F-9A3B-5D1C2F8E4A70}_is1';
+
+function GetUninstallString(): string;
+begin
+  Result := '';
+  if not RegQueryStringValue(HKEY_CURRENT_USER, UNINST_KEY, 'UninstallString', Result) then
+    RegQueryStringValue(HKEY_LOCAL_MACHINE, UNINST_KEY, 'UninstallString', Result);
+end;
+
+// 이미 설치되어 있으면: 재설치 / 제거 / 취소 선택
+function InitializeSetup(): Boolean;
+var
+  U: string;
+  Btn, ResultCode: Integer;
+begin
+  Result := True;
+  U := GetUninstallString();
+  if U <> '' then
+  begin
+    Btn := TaskDialogMsgBox('Schutz이(가) 이미 설치되어 있습니다.',
+      '어떻게 할까요?' + #13#10 + #13#10 +
+      '· 재설치 — 최신 파일로 덮어씁니다 (설정 유지)' + #13#10 +
+      '· 제거 — 앱과 사용자 데이터를 삭제합니다',
+      mbInformation, MB_YESNOCANCEL, ['재설치(&R)', '제거(&U)'], 0);
+    if Btn = IDNO then
+    begin
+      Exec(RemoveQuotes(U), '', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      Result := False;
+    end
+    else if Btn = IDCANCEL then
+      Result := False;
+  end;
+end;
+
 function NeedsAddPath(Param: string): boolean;
 var
   OrigPath: string;

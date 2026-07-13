@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:oauthResult", h);
   },
 
+  /** ChatGPT 구독 추론 릴레이 */
+  oaiRun: (opts) => ipcRenderer.send("schutz:oaiRun", opts),
+  oaiStop: (id) => ipcRenderer.send("schutz:oaiStop", id),
+  onOaiEvent: (cb) => {
+    const h = (_e, line) => cb(line);
+    ipcRenderer.on("schutz:oaiEvent", h);
+    return () => ipcRenderer.removeListener("schutz:oaiEvent", h);
+  },
+
   onCliEvent: (cb) => {
     const h = (_e, line) => cb(line);
     ipcRenderer.on("schutz:cliEvent", h);

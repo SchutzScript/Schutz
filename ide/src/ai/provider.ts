@@ -112,6 +112,7 @@ export interface OAuthTokens {
   access: string;
   refresh: string | null;
   exp: number;
+  accountId?: string | null;
 }
 
 export function getOAuth(id: string): OAuthTokens | null {
@@ -140,7 +141,7 @@ export async function freshOAuth(id: string): Promise<OAuthTokens | null> {
   if (!t.refresh || !window.schutz?.oauthRefresh) return null;
   const r = await window.schutz.oauthRefresh(id, t.refresh);
   if (!r.ok || !r.access) { return null; }
-  const nt = { access: r.access, refresh: r.refresh ?? t.refresh, exp: r.exp ?? Date.now() + 3600_000 };
+  const nt = { ...t, access: r.access, refresh: r.refresh ?? t.refresh, exp: r.exp ?? Date.now() + 3600_000 };
   setOAuth(id, nt);
   return nt;
 }

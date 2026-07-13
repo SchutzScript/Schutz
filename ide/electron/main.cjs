@@ -406,11 +406,24 @@ async function oauthExchange(id, code, stateOverride) {
   const text = await r.text();
   if (!r.ok) throw new Error("토큰 교환 실패 (" + r.status + "): " + text.slice(0, 200));
   const j = JSON.parse(text);
+  // Codex: 토큰 JWT claim에서 ChatGPT 계정 ID 추출 (백엔드 호출에 필요)
+  let accountId = null;
+  if (id === "codex") {
+    for (const tk of [j.id_token, j.access_token]) {
+      if (accountId || !tk) continue;
+      try {
+        const payload = JSON.parse(Buffer.from(tk.split(".")[1], "base64url").toString("utf8"));
+        const auth = payload["https://api.openai.com/auth"];
+        if (auth && auth.chatgpt_account_id) accountId = auth.chatgpt_account_id;
+      } catch { /* ignore */ }
+    }
+  }
   return {
     ok: true,
     access: j.access_token,
     refresh: j.refresh_token != null ? j.refresh_token : null,
     exp: Date.now() + (j.expires_in != null ? j.expires_in : 3600) * 1000,
+    accountId,
   };
 }
 
@@ -443,4 +456,66 @@ ipcMain.handle("schutz:oauthRefresh", async (_e, id, refreshToken) => {
   } catch (err) {
     return { ok: false, message: String(err && err.message || err) };
   }
+});
+
+// ══ ChatGPT 구독(Codex 백엔드) SSE 릴레이 — 렌더러 CORS 우회용 ═══════════════
+const oaiRuns = new Map(); // reqId → AbortController
+
+ipcMain.on("schutz:oaiRun", async (e, opts) => {
+  // opts: { id, access, accountId, body }
+  const ac = new AbortController();
+  oaiRuns.set(opts.id, ac);
+  const send = payload => {
+    if (!e.sender.isDestroyed()) e.sender.send("schutz:oaiEvent", JSON.stringify({ id: opts.id, ...payload }));
+  };
+  try {
+    const headers = {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+      authorization: "Bearer " + opts.access,
+      "OpenAI-Beta": "responses=experimental",
+      originator: "codex_cli_rs",
+      session_id: opts.id,
+    };
+    if (opts.accountId) headers["chatgpt-account-id"] = opts.accountId;
+    const r = await fetch("https://chatgpt.com/backend-api/codex/responses", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(opts.body),
+      signal: ac.signal,
+    });
+    if (!r.ok || !r.body) {
+      let detail = r.statusText;
+      try { detail = (await r.text()).slice(0, 300); } catch {}
+      send({ error: "ChatGPT 백엔드 오류 (" + r.status + "): " + detail });
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (t.startsWith("data:")) {
+          const json = t.slice(5).trim();
+          if (json && json !== "[DONE]") send({ data: json });
+        }
+      }
+    }
+  } catch (err) {
+    if (!(err && err.name === "AbortError")) send({ error: String(err && err.message || err) });
+  } finally {
+    oaiRuns.delete(opts.id);
+    send({ done: true });
+  }
+});
+
+ipcMain.on("schutz:oaiStop", (_e, id) => {
+  const ac = oaiRuns.get(id);
+  if (ac) ac.abort();
 });

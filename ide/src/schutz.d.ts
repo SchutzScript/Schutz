@@ -32,6 +32,9 @@ interface SchutzApi {
   oauthExchange(id: string, code: string): Promise<{ ok: boolean; access?: string; refresh?: string | null; exp?: number; message?: string }>;
   oauthRefresh(id: string, refreshToken: string): Promise<{ ok: boolean; access?: string; refresh?: string | null; exp?: number; message?: string }>;
   onOauthResult(cb: (line: string) => void): () => void;
+  oaiRun(opts: { id: string; access: string; accountId?: string | null; body: any }): void;
+  oaiStop(id: string): void;
+  onOaiEvent(cb: (line: string) => void): () => void;
 }
 
 interface Window {

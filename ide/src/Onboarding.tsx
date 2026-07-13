@@ -98,7 +98,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     if (!id || !window.schutz) return;
     const r = await window.schutz.oauthExchange(id, this.state.pasteVal);
     if (r.ok && r.access) {
-      setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000 });
+      setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: (r as any).accountId ?? null });
       this.setState(st => ({ pasteFor: null, pasteVal: "", oauthMsg: "", oauthTick: st.oauthTick + 1 }));
     } else {
       this.setState({ oauthMsg: r.message ?? "코드 교환 실패" });
@@ -113,7 +113,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         try {
           const r = JSON.parse(line);
           if (r.provider && r.ok && r.access) {
-            setOAuth(r.provider, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000 });
+            setOAuth(r.provider, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: r.accountId ?? null });
             this.setState(st => ({ oauthWait: false, oauthMsg: "", oauthTick: st.oauthTick + 1 }));
           } else if (r.provider) {
             this.setState({ oauthWait: false, oauthMsg: r.message ?? "로그인 실패" });
