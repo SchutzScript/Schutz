@@ -9,10 +9,10 @@ import {
   FolderIcon, FlowIcon, VcsIcon, TermIcon, GearIcon, TermStatusIcon,
 } from "./icons";
 import {
-  ClaudeProvider, SCHUTZ_SYSTEM_PROMPT, MANAGER_SYSTEM_EXTRA,
+  SCHUTZ_SYSTEM_PROMPT, MANAGER_SYSTEM_EXTRA,
   WORKSPACE_TOOLS, DELEGATE_TOOL,
 } from "./ai/claude";
-import { GPT_PROVIDER, GROK_PROVIDER, GLM_PROVIDER } from "./ai/openaiCompat";
+import { PROVIDERS_MAP, testProvider, getManagerId } from "./ai/registry";
 import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey } from "./ai/provider";
 import { MonacoPane } from "./editor/MonacoPane";
 
@@ -62,6 +62,8 @@ interface S {
   termReal: string;
   termInput: string;
   settingsOpen: boolean;
+  /** 설정 모달의 프로바이더별 연결 테스트 결과 */
+  testMsg: Record<string, string>;
 }
 
 const TYPING_SPEED = 1;
@@ -74,11 +76,8 @@ export class App extends React.Component<{}, S> {
   private _paneRefs: Record<string, HTMLDivElement | null> = {};
   private _chat: HTMLDivElement | null = null;
   private _chatSig = "";
-  private claude = new ClaudeProvider();
   /** 에이전트 id → 프로바이더 (Claude/GPT/Grok/GLM) */
-  private providers: Record<string, AgentProvider> = {
-    claude: this.claude, gpt: GPT_PROVIDER, grok: GROK_PROVIDER, glm: GLM_PROVIDER,
-  };
+  private providers: Record<string, AgentProvider> = PROVIDERS_MAP;
   private history: Message[] = [];
   /** 에이전트별 진행 중 턴 취소 컨트롤러 */
   private abortCtls = new Map<string, AbortController>();
@@ -95,8 +94,14 @@ export class App extends React.Component<{}, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false,
+    termReal: "", termInput: "", settingsOpen: false, testMsg: {},
   };
+
+  async testConn(id: string) {
+    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: "확인 중…" } }));
+    const r = await testProvider(id);
+    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: r.ok ? "✓ 연결됨" : "⚠️ " + r.message.slice(0, 120) } }));
+  }
 
   private _termOff: (() => void) | null = null;
   private _termStarted = false;
@@ -141,11 +146,18 @@ export class App extends React.Component<{}, S> {
     const ws = this.state.workspace;
     if (!p || !ws || !window.schutz || p.status !== "pending") return;
     try {
-      const cur = await window.schutz.readFile(ws.root, p.rel);
-      const idx = cur.indexOf(p.find);
-      if (idx < 0) throw new Error("원문을 찾을 수 없습니다 (파일이 변경됨)");
-      if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error("원문이 여러 번 존재합니다");
-      await window.schutz.writeFile(ws.root, p.rel, cur.replace(p.find, p.replace));
+      if (p.find === "") {
+        // 새 파일 생성
+        await window.schutz.writeFile(ws.root, p.rel, p.replace);
+        const tree = await window.schutz.readTree(ws.root);
+        this.setState({ workspace: tree });
+      } else {
+        const cur = await window.schutz.readFile(ws.root, p.rel);
+        const idx = cur.indexOf(p.find);
+        if (idx < 0) throw new Error("원문을 찾을 수 없습니다 (파일이 변경됨)");
+        if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error("원문이 여러 번 존재합니다");
+        await window.schutz.writeFile(ws.root, p.rel, cur.replace(p.find, p.replace));
+      }
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
         paneVer: { ...s.paneVer, [p.rel]: (s.paneVer[p.rel] ?? 0) + 1 },
@@ -374,9 +386,19 @@ export class App extends React.Component<{}, S> {
 
   send() {
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
-    // 연결된 프로바이더가 하나라도 있으면 실제 모델, 없으면 오프라인 데모 시나리오
-    if (this.configuredAgents().length > 0) void this.runReal(t);
-    else this.startRun(t);
+    // 연결된 프로바이더가 하나라도 있으면 실제 모델
+    if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
+    // 데스크톱 앱: 데모 대신 연결 안내 (데모는 웹 프리뷰 전용)
+    if (window.schutz) {
+      this.setState(s => ({
+        input: "",
+        messages: [...s.messages,
+          { id: "u" + (this._uid++), role: "user" as const, text: t },
+          { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: "아직 연결된 AI가 없습니다. 좌측 하단 ⚙ 설정(또는 메뉴 파일 → 설정…)에서 API 키를 넣고 [테스트]로 연결을 확인한 뒤 다시 요청해 주세요." }],
+      }));
+      return;
+    }
+    this.startRun(t);
   }
 
   /** 설정된 프로바이더 id 목록 */
@@ -402,6 +424,29 @@ export class App extends React.Component<{}, S> {
         const text = await window.schutz.readFile(ws.root, rel);
         this.setTool(toolId, { st: "done", note: (text.length / 1024).toFixed(1) + " KB" });
         return text;
+      }
+      if (call.name === "propose_create") {
+        const rel = String(call.input?.path ?? "");
+        this.addTool(toolId, agentId, "생성", rel);
+        const holder = this.fileLocks.get(rel);
+        if (holder && holder !== agentId) {
+          this.setTool(toolId, { st: "done", note: "락 충돌" });
+          return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락).`;
+        }
+        this.fileLocks.set(rel, agentId);
+        this.setAgent(agentId, { file: rel });
+        const p: Proposal = {
+          id: "pp" + (this._uid++),
+          rel,
+          find: "",
+          replace: String(call.input?.content ?? ""),
+          rationale: String(call.input?.rationale ?? "새 파일 생성"),
+          agent: agentId,
+          status: "pending",
+        };
+        this.setState(s => ({ proposals: [...s.proposals, p] }));
+        this.setTool(toolId, { st: "done", note: "제안됨" });
+        return "파일 생성 제안이 등록되었습니다. 사용자가 수락하면 생성됩니다.";
       }
       if (call.name === "propose_edit") {
         const rel = String(call.input?.path ?? "");
@@ -553,7 +598,8 @@ export class App extends React.Component<{}, S> {
   async runReal(text: string) {
     if (this.state.running) return;
     const configured = this.configuredAgents();
-    const managerId = configured.includes("claude") ? "claude" : configured[0];
+    const pref = getManagerId();
+    const managerId = configured.includes(pref) ? pref : (configured.includes("claude") ? "claude" : configured[0]);
     if (!managerId) return;
     this.history.push({ role: "user", content: text });
     this.setState(s => ({
@@ -567,7 +613,7 @@ export class App extends React.Component<{}, S> {
   componentDidMount() {
     // StrictMode의 mount→unmount→mount에서도 안전: 언마운트 시 타이머가 정리되고,
     // 타이머 내부의 messages.length 가드가 중복 실행을 막는다.
-    if (AUTOPLAY) {
+    if (AUTOPLAY && !window.schutz) {
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
@@ -1455,14 +1501,20 @@ export class App extends React.Component<{}, S> {
                   placeholder="API 키 (비우면 미사용)"
                   style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 30, padding: "0 11px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
                 />
-                <span style={{ flex: "none", fontSize: 10.5, color: this.providers[d.id]?.isConfigured() ? "#8BB292" : "#4B534D" }}>
-                  {this.providers[d.id]?.isConfigured() ? "연결" : "—"}
-                </span>
+                <button className="hv05" onClick={() => void this.testConn(d.id)}
+                  style={{ flex: "none", height: 30, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>테스트</button>
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 10.5, color: "#4B534D", marginTop: 12, lineHeight: 1.6 }}>
-            키는 이 기기(localStorage)에만 저장됩니다. 입력 즉시 반영되며, 연결된 프로바이더가 있으면 채팅이 실제 모델과 대화합니다.
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
+            {AGDEF.filter(d => s.testMsg[d.id]).map(d => (
+              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "#8BB292" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "#8B948C" }}>
+                {d.name}: {s.testMsg[d.id]}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: "#4B534D", marginTop: 10, lineHeight: 1.6 }}>
+            키는 이 기기(localStorage)에만 저장됩니다. [테스트]는 실제 API를 1회 호출해 연결을 검증합니다.
           </div>
         </div>
       </div>

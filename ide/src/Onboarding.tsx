@@ -1,5 +1,6 @@
 import React from "react";
 import { setStoredKey } from "./ai/provider";
+import { testProvider } from "./ai/registry";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
 
@@ -36,7 +37,7 @@ const RULES: [string, string, string][] = [
   ["deps", "의존성 변경 자동 수락", "package.json"],
 ];
 
-interface ConnState { on: boolean; key: string; st: "idle" | "checking" | "ok"; auth: "none" | "pending" | "ok"; mode: "auth" | "key" }
+interface ConnState { on: boolean; key: string; st: "idle" | "checking" | "ok" | "fail"; err?: string; auth: "none" | "pending" | "ok"; mode: "auth" | "key" }
 
 interface S {
   step: number;
@@ -61,9 +62,9 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     policy: "manual", rules: { docs: true, tests: true, deps: false },
     theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13,
     conn: {
-      claude: { on: true, key: "", st: "idle", auth: "none", mode: "auth" },
-      gpt: { on: false, key: "", st: "idle", auth: "none", mode: "auth" },
-      grok: { on: false, key: "", st: "idle", auth: "none", mode: "auth" },
+      claude: { on: true, key: "", st: "idle", auth: "none", mode: "key" },
+      gpt: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
+      grok: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
       glm: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
     },
     manager: "claude",
@@ -74,15 +75,14 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
 
   go(step: number) { this.setState({ step: Math.max(1, Math.min(6, step)) }); }
 
-  verify(id: string) {
-    this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "checking" as const } } }));
-    // 입력한 키를 실제 저장 → IDE가 해당 프로바이더를 실모드로 사용
+  async verify(id: string) {
+    // 키를 저장하고 실제 API를 호출해 검증한다
     setStoredKey(id as any, this.state.conn[id].key.trim());
-    this.qt(() => this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "ok" as const } } })), 900);
-  }
-  login(id: string) {
-    this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], auth: "pending" as const } } }));
-    this.qt(() => this.setState(s => s.conn[id].auth === "pending" ? { conn: { ...s.conn, [id]: { ...s.conn[id], auth: "ok" as const } } } as any : null), 1600);
+    this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "checking" as const, err: undefined } } }));
+    const r = await testProvider(id);
+    this.setState(s => ({
+      conn: { ...s.conn, [id]: { ...s.conn[id], st: r.ok ? "ok" as const : "fail" as const, err: r.ok ? undefined : r.message } },
+    }));
   }
 
   render() {
@@ -325,15 +325,16 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", animation: "szFadeUp .5s ease both" }}>
         <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>에이전트 팀을 구성하세요</div>
-        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>각 AI 계정으로 로그인하면 계정 토큰으로 바로 사용합니다.<br />API 키 직접 입력도 가능하며, 언제든 설정에서 바꿀 수 있습니다.</div>
+        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>사용할 AI를 켜고 API 키를 넣으면 실제 API 호출로 연결을 검증합니다.<br />언제든 설정(⚙)에서 바꿀 수 있습니다.</div>
         <div style={{ width: 560, maxWidth: "90%", display: "flex", flexDirection: "column", gap: 10, marginTop: 30 }}>
           {PROVIDERS.map(p => {
             const c = s.conn[p.id];
             const isMgr = s.manager === p.id;
             const vMap: Record<string, [string, string, string, string]> = {
-              idle: ["확인", "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
+              idle: ["연결", "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
               checking: ["확인 중…", "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
               ok: ["✓ 연결됨", "#0C0E0D", "#8FA893", "#8FA893"],
+              fail: ["다시 시도", "#CE9A9A", "rgba(201,123,123,.08)", "rgba(201,123,123,.4)"],
             };
             const [vLabel, vFg, vBg, vBd] = vMap[c.st];
             return (
@@ -371,44 +372,15 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                 </div>
                 {c.on && (
                   <div style={{ marginTop: 12 }}>
-                    {c.mode === "auth" && c.auth === "none" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <button className="obBright" onClick={() => this.login(p.id)}
-                          style={{ height: 32, padding: "0 16px", display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#0C0E0D", background: p.hue, border: "none" }}>
-                          <svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.6" fill="none" stroke="#0C0E0D" strokeWidth="1.5" /><path d="M2.8 13.5 C3.6 10.8 5.6 9.6 8 9.6 C10.4 9.6 12.4 10.8 13.2 13.5" fill="none" stroke="#0C0E0D" strokeWidth="1.5" strokeLinecap="round" /></svg>
-                          {p.name} 계정으로 로그인
-                        </button>
-                        <button className="obGhostTxt" onClick={() => this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], mode: "key" as const } } }))}
-                          style={{ height: 32, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#5A635C", background: "transparent", border: "none" }}>API 키로 연결</button>
-                      </div>
-                    )}
-                    {c.mode === "auth" && c.auth === "pending" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 9, height: 32, padding: "0 12px", borderRadius: 7, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.08)" }}>
-                        <span style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid rgba(143,168,147,.25)", borderTopColor: "#8FA893", animation: "szSpin .9s linear infinite", flex: "none" }} />
-                        <span style={{ fontSize: 11.5, color: "#8B948C" }}>브라우저에서 {p.name} 인증 대기 중…</span>
-                      </div>
-                    )}
-                    {c.mode === "auth" && c.auth === "ok" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 9, height: 34, padding: "0 12px", borderRadius: 7, background: "rgba(143,168,147,.06)", border: "1px solid rgba(143,168,147,.3)" }}>
-                        <span style={{ width: 18, height: 18, borderRadius: "50%", background: p.hue, color: "#0C0E0D", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, flex: "none" }}>{p.init}</span>
-                        <span style={{ fontSize: 11.5, color: "#C4CBC4" }}>dev@schutz.io · {p.name} 계정</span>
-                        <span style={{ fontSize: 10, color: "#8FA893", background: "rgba(143,168,147,.12)", borderRadius: 3, padding: "1px 6px", whiteSpace: "nowrap" }}>계정 토큰 사용</span>
-                        <div style={{ flex: 1 }} />
-                        <button className="obDanger" onClick={() => this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], auth: "none" as const } } }))}
-                          style={{ height: 22, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>해제</button>
-                      </div>
-                    )}
-                    {c.mode === "key" && (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input value={c.key} placeholder={p.ph}
-                          onChange={e => { const v = e.target.value; this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], key: v, st: "idle" as const } } })); }}
-                          style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 32, padding: "0 12px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }} />
-                        <button className="obBright" onClick={() => this.verify(p.id)}
-                          style={{ height: 32, padding: "0 14px", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: vFg, background: vBg, border: `1px solid ${vBd}` }}>{vLabel}</button>
-                        <button className="obGhostTxt" onClick={() => this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], mode: "auth" as const } } }))}
-                          style={{ height: 32, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#5A635C", background: "transparent", border: "none" }}>계정 로그인으로</button>
-                      </div>
-                    )}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input value={c.key} placeholder={p.ph + " (API 키)"}
+                        onChange={e => { const v = e.target.value; this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], key: v, st: "idle" as const } } })); }}
+                        style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 32, padding: "0 12px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }} />
+                      <button className="obBright" onClick={() => this.verify(p.id)}
+                        style={{ height: 32, padding: "0 14px", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: vFg, background: vBg, border: `1px solid ${vBd}` }}>{vLabel}</button>
+                    </div>
+                    {c.st === "fail" && c.err && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6 }}>⚠️ {c.err}</div>}
+                    <div style={{ fontSize: 10, color: "#4B534D", marginTop: 6 }}>계정 로그인(OAuth)은 준비 중 — 지금은 API 키로 연결됩니다. [연결]을 누르면 실제 API 호출로 검증해요.</div>
                   </div>
                 )}
               </div>
@@ -504,7 +476,10 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 30 }}>
           <button className="hv05" onClick={() => this.go(5)} style={{ ...backBtn, height: 38 }}>이전</button>
-          <button className="hvAccent" onClick={this.props.onFinish}
+          <button className="hvAccent" onClick={() => {
+            try { localStorage.setItem("schutz.manager", this.state.manager ?? "claude"); } catch { /* ignore */ }
+            this.props.onFinish();
+          }}
             style={{ height: 38, display: "flex", alignItems: "center", padding: "0 30px", fontSize: 13, fontWeight: 700, borderRadius: 9, color: "#0C0E0D", background: "#8FA893", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Schutz 시작 →</button>
         </div>
       </div>

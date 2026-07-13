@@ -111,6 +111,7 @@ ipcMain.handle("schutz:readFile", async (_e, root, rel) => {
 
 ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
   const abs = safeJoin(root, rel);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
   return true;
 });

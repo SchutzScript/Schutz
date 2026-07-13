@@ -164,6 +164,19 @@ export const WORKSPACE_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "propose_create",
+    description: "새 파일 생성을 제안한다. 즉시 만들어지지 않고 사용자가 검토 후 수락하면 생성된다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "생성할 파일의 워크스페이스 상대 경로" },
+        content: { type: "string", description: "파일 전체 내용" },
+        rationale: { type: "string", description: "이 파일이 필요한 이유 (한 문장)" },
+      },
+      required: ["path", "content", "rationale"],
+    },
+  },
+  {
     name: "propose_edit",
     description:
       "파일 편집을 제안한다. 즉시 적용되지 않고 사용자가 검토 후 수락/거절한다. " +
