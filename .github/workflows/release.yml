@@ -13,7 +13,21 @@ permissions:
   contents: write
 
 jobs:
+  # 매트릭스 잡들이 각자 드래프트를 만들며 경쟁하지 않도록 릴리스를 먼저 하나 만들어 둔다
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure draft release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            || gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+                 --draft --title "Schutz ${GITHUB_REF_NAME}"
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
