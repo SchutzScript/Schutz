@@ -11,6 +11,8 @@ export interface ThemeTokens {
   /** 헤어라인/호버 오버레이 (다크=흰 알파, 라이트=검정 알파) */
   w03: string; w04: string; w05: string; w06: string; w07: string;
   w08: string; w10: string; w12: string; w14: string;
+  /** 팝업/캡슐 그림자, 은은한 액센트 배경 */
+  shadowPop: string; shadowSoft: string; accentSoft: string;
   monaco: string;
 }
 
@@ -26,6 +28,8 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
     w10: "rgba(255,255,255,.1)", w12: "rgba(255,255,255,.12)", w14: "rgba(255,255,255,.14)",
+    shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
+    accentSoft: "rgba(143,168,147,.14)",
     monaco: "feldgrau",
   },
   graphite: {
@@ -39,19 +43,24 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
     w10: "rgba(255,255,255,.1)", w12: "rgba(255,255,255,.12)", w14: "rgba(255,255,255,.14)",
+    shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
+    accentSoft: "rgba(154,163,178,.16)",
     monaco: "feldgrau",
   },
   paper: {
     name: "Paper",
-    bgRoot: "#F7F6F2", bgPanel: "#EFEDE7", bgEditor: "#FBFAF7", bgCard: "#FFFFFF", bgDock: "#ECEAE4",
-    bgPopup: "#FFFFFF", bdPopup: "#D8D5CC",
-    fg: "#2A2D2A", fgCode: "#333632", fgSub: "#565B56", fgSub2: "#6B706A",
-    fgDim: "#8A8D86", fgDim2: "#A2A49D", fgDim3: "#C0C2BA",
-    accent: "#5F7565", accentHi: "#4C6152",
+    // 따뜻한 종이 톤 — 순백 대신 미색, 패널은 한 단계 어둡게 층 분리
+    bgRoot: "#F3F1EA", bgPanel: "#EAE7DE", bgEditor: "#FAF8F2", bgCard: "#FFFFFF", bgDock: "#E4E1D7",
+    bgPopup: "#FFFFFF", bdPopup: "#CFCABD",
+    fg: "#20241F", fgCode: "#2E332C", fgSub: "#4E5449", fgSub2: "#646A5E",
+    fgDim: "#83887B", fgDim2: "#9BA090", fgDim3: "#BBBFB1",
+    accent: "#4E6A55", accentHi: "#3D5745",
     onAccent: "#FFFFFF",
-    w03: "rgba(0,0,0,.03)", w04: "rgba(0,0,0,.045)", w05: "rgba(0,0,0,.055)",
-    w06: "rgba(0,0,0,.07)", w07: "rgba(0,0,0,.08)", w08: "rgba(0,0,0,.09)",
-    w10: "rgba(0,0,0,.11)", w12: "rgba(0,0,0,.13)", w14: "rgba(0,0,0,.16)",
+    w03: "rgba(40,45,35,.04)", w04: "rgba(40,45,35,.055)", w05: "rgba(40,45,35,.07)",
+    w06: "rgba(40,45,35,.09)", w07: "rgba(40,45,35,.105)", w08: "rgba(40,45,35,.12)",
+    w10: "rgba(40,45,35,.14)", w12: "rgba(40,45,35,.17)", w14: "rgba(40,45,35,.2)",
+    shadowPop: "0 10px 28px rgba(60,60,45,.18)", shadowSoft: "0 4px 14px rgba(60,60,45,.14)",
+    accentSoft: "rgba(78,106,85,.13)",
     monaco: "schutz-paper",
   },
 };
@@ -95,6 +104,9 @@ export function applyTheme(id: string): void {
   r.setProperty("--w03", t.w03); r.setProperty("--w04", t.w04); r.setProperty("--w05", t.w05);
   r.setProperty("--w06", t.w06); r.setProperty("--w07", t.w07); r.setProperty("--w08", t.w08);
   r.setProperty("--w10", t.w10); r.setProperty("--w12", t.w12); r.setProperty("--w14", t.w14);
+  r.setProperty("--shadow-pop", t.shadowPop);
+  r.setProperty("--shadow-soft", t.shadowSoft);
+  r.setProperty("--accent-soft", t.accentSoft);
 }
 
 export function monacoThemeOf(id: string): string {

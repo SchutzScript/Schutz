@@ -57,13 +57,13 @@ monaco.editor.defineTheme("schutz-paper", {
     { token: "comment", foreground: "8A8D86", fontStyle: "italic" },
   ],
   colors: {
-    "editor.background": "#FBFAF7",
+    "editor.background": "#FAF8F2",
     "editor.foreground": "#333632",
     "editorLineNumber.foreground": "#C0C2BA",
     "editorLineNumber.activeForeground": "#6B706A",
-    "editorCursor.foreground": "#5F7565",
-    "editor.selectionBackground": "#5F756533",
-    "editor.lineHighlightBackground": "#EFEDE780",
+    "editorCursor.foreground": "#4E6A55",
+    "editor.selectionBackground": "#4E6A5533",
+    "editor.lineHighlightBackground": "#EAE7DE80",
   },
 });
 

@@ -338,7 +338,8 @@ ipcMain.handle("schutz:oauthStart", async (e, id) => {
   if (!cfg) return { ok: false, message: "지원하지 않는 프로바이더" };
   const verifier = b64url(crypto.randomBytes(32));
   const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
-  const state = b64url(crypto.randomBytes(16));
+  // Claude 플로우는 state 슬롯에 PKCE verifier를 그대로 사용 (검증된 공개 구현과 동일)
+  const state = id === "claude" ? verifier : b64url(crypto.randomBytes(16));
   oauthPending[id] = { verifier, state };
 
   const u = new URL(cfg.authUrl);
@@ -396,7 +397,7 @@ async function oauthExchange(id, code, stateOverride) {
     redirect_uri: cfg.redirect,
     code_verifier: pend.verifier,
   };
-  if (id === "claude") body.state = stateOverride != null ? stateOverride : pend.state;
+  if (id === "claude") body.state = (stateOverride != null && stateOverride !== "") ? stateOverride : pend.verifier;
   const r = await fetch(cfg.tokenUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },

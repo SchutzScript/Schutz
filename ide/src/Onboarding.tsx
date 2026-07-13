@@ -158,7 +158,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const labels = ["환영", "가져오기", "외형", "AI 연결", "자율성", "완료"];
 
     return (
-      <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "radial-gradient(800px 500px at 50% -10%,rgba(125,145,131,.12),transparent 60%),var(--bg-root)", color: "#D5DAD5", fontFamily: "'SUIT Variable',sans-serif", fontSize: 13, overflow: "hidden" }}>
+      <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "radial-gradient(800px 500px at 50% -10%,rgba(125,145,131,.12),transparent 60%),var(--bg-root)", color: "var(--fg)", fontFamily: "'SUIT Variable',sans-serif", fontSize: 13, overflow: "hidden" }}>
 
         {/* top: logo + step dots + skip */}
         <div style={{ flex: "none", height: 60, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, position: "relative" }}>
@@ -168,7 +168,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           </div>
           {labels.map((_, i) => (
             <span key={i} onClick={() => this.go(i + 1)}
-              style={{ width: s.step === i + 1 ? 26 : 10, height: 6, borderRadius: 3, background: s.step === i + 1 ? "#8FA893" : (s.step > i + 1 ? "rgba(143,168,147,.45)" : "rgba(255,255,255,.1)"), transition: "all .35s ease", cursor: "pointer" }} />
+              style={{ width: s.step === i + 1 ? 26 : 10, height: 6, borderRadius: 3, background: s.step === i + 1 ? "var(--accent)" : (s.step > i + 1 ? "var(--accent-soft)" : "var(--w10)"), transition: "all .35s ease", cursor: "pointer" }} />
           ))}
           <div style={{ position: "absolute", right: 24 }}>
             {s.step < 6 && (

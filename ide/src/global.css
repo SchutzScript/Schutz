@@ -1,19 +1,19 @@
-:root { --on-accent:#0C0E0D; --w03:rgba(255,255,255,.03); --w04:rgba(255,255,255,.04); --w05:rgba(255,255,255,.05); --w06:rgba(255,255,255,.06); --w07:rgba(255,255,255,.07); --w08:rgba(255,255,255,.08); --w10:rgba(255,255,255,.1); --w12:rgba(255,255,255,.12); --w14:rgba(255,255,255,.14); --bg-root:#0C0E0D; --bg-panel:#101312; --bg-editor:#0E100F; --bg-card:#151917; --bg-dock:#0A0C0B; --bg-popup:#181C1A; --bd-popup:#2A302C; --fg:#D5DAD5; --fg-code:#C4CBC4; --fg-sub:#9AA59C; --fg-sub2:#8B948C; --fg-dim:#5A635C; --fg-dim2:#4B534D; --fg-dim3:#3A403C; --accent:#8FA893; --accent-hi:#A9BCA9; }
+:root { --shadow-pop:0 12px 32px rgba(0,0,0,.55); --shadow-soft:0 5px 16px rgba(0,0,0,.5); --accent-soft:rgba(143,168,147,.14); --on-accent:#0C0E0D; --w03:rgba(255,255,255,.03); --w04:rgba(255,255,255,.04); --w05:rgba(255,255,255,.05); --w06:rgba(255,255,255,.06); --w07:rgba(255,255,255,.07); --w08:rgba(255,255,255,.08); --w10:rgba(255,255,255,.1); --w12:rgba(255,255,255,.12); --w14:rgba(255,255,255,.14); --bg-root:#0C0E0D; --bg-panel:#101312; --bg-editor:#0E100F; --bg-card:#151917; --bg-dock:#0A0C0B; --bg-popup:#181C1A; --bd-popup:#2A302C; --fg:#D5DAD5; --fg-code:#C4CBC4; --fg-sub:#9AA59C; --fg-sub2:#8B948C; --fg-dim:#5A635C; --fg-dim2:#4B534D; --fg-dim3:#3A403C; --accent:#8FA893; --accent-hi:#A9BCA9; }
 html, body { margin: 0; height: 100%; background: var(--bg-root); }
 * { box-sizing: border-box; }
 #root { height: 100%; }
-a { color: #93A896; text-decoration: none; }
-a:hover { color: #B2C4B4; }
-::selection { background: rgba(125, 145, 131, .28); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hi); }
+::selection { background: var(--accent-soft); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--w08); border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .15); }
+::-webkit-scrollbar-thumb:hover { background: var(--w12); }
 ::-webkit-scrollbar-corner { background: transparent; }
 @keyframes szSpin { to { transform: rotate(360deg); } }
 @keyframes szFadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes szBlink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
 @keyframes szPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-input::placeholder { color: #4B534D; }
+input::placeholder { color: var(--fg-dim2); }
 button { white-space: nowrap; flex: none; }
 
 /* hover utilities (프로토타입 style-hover 치환) */
@@ -23,7 +23,7 @@ button { white-space: nowrap; flex: none; }
 .hv04:hover { background: var(--w04); }
 .hv02:hover { background: var(--w03); }
 .hv08:hover { background: var(--w08); }
-.hvMenuItem:hover { background: rgba(143, 168, 147, .14); }
+.hvMenuItem:hover { background: var(--accent-soft); }
 .hvAccent:hover { background: var(--accent-hi) !important; }
 .hvGreen:hover { background: rgba(139, 178, 146, .12); }
 .hvGreen2:hover { background: rgba(139, 178, 146, .2); }

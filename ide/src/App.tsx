@@ -925,7 +925,7 @@ export class App extends React.Component<{}, S> {
               <span style={{ fontSize: 8, color: "var(--fg-dim)" }}>▾</span>
             </button>
             {s.projOpen && (
-              <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 6, zIndex: 100 }}>
+              <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 6, zIndex: 100 }}>
                 <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>프로젝트</div>
                 {s.workspace ? (
                   <div className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}>
@@ -964,7 +964,7 @@ export class App extends React.Component<{}, S> {
                     {label}
                   </button>
                   {open && (
-                    <div style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 5, zIndex: 100 }}>
+                    <div style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 5, zIndex: 100 }}>
                       {items.map((it, i) => it === null
                         ? <div key={"s" + i} style={{ height: 1, background: "var(--w07)", margin: "4px 6px" }} />
                         : (
@@ -1400,7 +1400,7 @@ export class App extends React.Component<{}, S> {
                       )}
                     </div>
                     {actions && (
-                      <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "0 5px 16px rgba(0,0,0,.5)" }}>
+                      <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
                         <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#9DC4A3", background: "transparent", border: "none" }}>✓ 수락</button>
                         <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
                         <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>✕ 거절</button>
@@ -1702,7 +1702,7 @@ export class App extends React.Component<{}, S> {
       <div onClick={() => this.setState({ settingsOpen: false })}
         style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div onClick={e => e.stopPropagation()}
-          style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.6)", padding: "18px 20px" }}>
+          style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
             <span style={{ fontSize: 15, fontWeight: 700 }}>설정</span>
             <div style={{ flex: 1 }} />
