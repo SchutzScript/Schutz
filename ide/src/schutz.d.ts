@@ -21,6 +21,11 @@ interface SchutzApi {
   termStart(cwd?: string): void;
   termInput(line: string): void;
   onTermData(cb: (data: string) => void): () => void;
+  newWindow(): void;
+  cliCheck(): Promise<{ ok: boolean; version?: string }>;
+  cliRun(opts: { cwd?: string; prompt: string; resume?: string }): void;
+  cliStop(): void;
+  onCliEvent(cb: (line: string) => void): () => void;
 }
 
 interface Window {

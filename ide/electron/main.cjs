@@ -15,7 +15,7 @@ const MAX_ENTRIES = 4000;
 const MAX_DEPTH = 8;
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — 에디터로 열 상한
 
-function createWindow() {
+function createWindow(layout) {
   const win = new BrowserWindow({
     width: 1560,
     height: 960,
@@ -33,10 +33,11 @@ function createWindow() {
     },
   });
 
+  const q = layout ? "?layout=" + layout : "";
   if (isDev) {
-    win.loadURL(DEV_URL);
+    win.loadURL(DEV_URL + q);
   } else {
-    win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+    win.loadFile(path.join(__dirname, "..", "dist", "index.html"), layout ? { search: "layout=" + layout } : undefined);
   }
 
   // 외부 링크는 기본 브라우저로
@@ -114,6 +115,66 @@ ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
   return true;
+});
+
+// ── 새 창 ──────────────────────────────────────────────────────────────────
+ipcMain.on("schutz:newWindow", () => {
+  // 새 창은 VS Code처럼 가볍게 — 기본 1분할
+  createWindow(1);
+});
+
+// ── Claude Code CLI 연동 (구독 계정 인증 사용, API 키 불필요) ──────────────
+const cliProcs = new Map(); // webContents.id → child
+
+ipcMain.handle("schutz:cliCheck", async () => {
+  return await new Promise(resolve => {
+    const p = spawn("claude", ["--version"], { shell: true });
+    let out = "";
+    p.stdout.on("data", d => { out += d.toString(); });
+    p.on("error", () => resolve({ ok: false }));
+    p.on("exit", code => resolve(code === 0 ? { ok: true, version: out.trim() } : { ok: false }));
+    setTimeout(() => { try { p.kill(); } catch {} resolve({ ok: false }); }, 8000);
+  });
+});
+
+ipcMain.on("schutz:cliRun", (e, opts) => {
+  // opts: { cwd, prompt, resume }
+  if (cliProcs.has(e.sender.id)) return;
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
+  if (opts.resume) args.push("--resume", opts.resume);
+  let proc;
+  try {
+    proc = spawn("claude", args, { cwd: opts.cwd || undefined, shell: true, env: process.env });
+  } catch (err) {
+    e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_error", message: String(err.message) }));
+    return;
+  }
+  cliProcs.set(e.sender.id, proc);
+  proc.stdin.write(opts.prompt);
+  proc.stdin.end();
+  let buf = "";
+  proc.stdout.on("data", d => {
+    buf += d.toString();
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (t && !e.sender.isDestroyed()) e.sender.send("schutz:cliEvent", t);
+    }
+  });
+  proc.stderr.on("data", d => {
+    const t = d.toString().trim();
+    if (t && !e.sender.isDestroyed()) e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_stderr", message: t.slice(0, 400) }));
+  });
+  proc.on("exit", code => {
+    cliProcs.delete(e.sender.id);
+    if (!e.sender.isDestroyed()) e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_exit", code }));
+  });
+});
+
+ipcMain.on("schutz:cliStop", e => {
+  const p = cliProcs.get(e.sender.id);
+  if (p) { try { p.kill("SIGTERM"); } catch {} cliProcs.delete(e.sender.id); }
 });
 
 // ── 간이 터미널 (셸 프로세스 파이프 — PTY 아님, v1) ─────────────────────────

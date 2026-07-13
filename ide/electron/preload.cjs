@@ -24,4 +24,18 @@ contextBridge.exposeInMainWorld("schutz", {
     ipcRenderer.on("schutz:termData", h);
     return () => ipcRenderer.removeListener("schutz:termData", h);
   },
+
+  /** 새 IDE 창 (기본 1분할) */
+  newWindow: () => ipcRenderer.send("schutz:newWindow"),
+
+  /** Claude Code CLI 감지 (구독 계정 인증) */
+  cliCheck: () => ipcRenderer.invoke("schutz:cliCheck"),
+  /** Claude Code CLI 턴 실행 */
+  cliRun: (opts) => ipcRenderer.send("schutz:cliRun", opts),
+  cliStop: () => ipcRenderer.send("schutz:cliStop"),
+  onCliEvent: (cb) => {
+    const h = (_e, line) => cb(line);
+    ipcRenderer.on("schutz:cliEvent", h);
+    return () => ipcRenderer.removeListener("schutz:cliEvent", h);
+  },
 });

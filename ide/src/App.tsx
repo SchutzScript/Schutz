@@ -64,6 +64,12 @@ interface S {
   settingsOpen: boolean;
   /** 설정 모달의 프로바이더별 연결 테스트 결과 */
   testMsg: Record<string, string>;
+  /** 에디터 분할 수 (1 | 2 | 4) */
+  layout: number;
+  /** Claude Code CLI(구독 인증) 감지 결과 */
+  cliOk: boolean;
+  cliVersion: string;
+  cliBusy: boolean;
 }
 
 const TYPING_SPEED = 1;
@@ -95,6 +101,12 @@ export class App extends React.Component<{}, S> {
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
     termReal: "", termInput: "", settingsOpen: false, testMsg: {},
+    layout: (() => {
+      const m = /[?&]layout=(\d)/.exec(window.location.search);
+      const v = m ? parseInt(m[1], 10) : 4;
+      return v === 1 || v === 2 ? v : 4;
+    })(),
+    cliOk: false, cliVersion: "", cliBusy: false,
   };
 
   async testConn(id: string) {
@@ -105,6 +117,10 @@ export class App extends React.Component<{}, S> {
 
   private _termOff: (() => void) | null = null;
   private _termStarted = false;
+  private _cliOff: (() => void) | null = null;
+  /** CLI 세션 id (멀티턴 --resume) */
+  private _cliSession: string | null = null;
+  private _cliMsgId: string | null = null;
 
   /** Electron 셸 시작 + 출력 구독 (최초 1회) */
   ensureTerm() {
@@ -317,6 +333,7 @@ export class App extends React.Component<{}, S> {
   }
 
   stopRun() {
+    if (this.state.cliBusy && window.schutz) window.schutz.cliStop();
     for (const a of this.abortCtls.values()) a.abort();
     this.abortCtls.clear();
     this.fileLocks.clear();
@@ -371,9 +388,18 @@ export class App extends React.Component<{}, S> {
   openFile(path: string) {
     this.setState(s => {
       if (s.panes.includes(path)) return null;
-      const panes = s.panes.length < 4 ? [...s.panes, path] : [...s.panes.slice(0, 3), path];
+      const cap = s.layout;
+      const panes = s.panes.length < cap ? [...s.panes, path] : [...s.panes.slice(0, cap - 1), path];
       return { panes } as any;
     });
+  }
+
+  setLayout(n: number) {
+    this.setState(s => ({
+      layout: n,
+      panes: s.panes.slice(0, n),
+      openMenu: null,
+    } as any));
   }
   closePane(path: string) {
     this.setState(s => s.panes.length > 1 ? { panes: s.panes.filter(p => p !== path) } as any : null);
@@ -386,7 +412,9 @@ export class App extends React.Component<{}, S> {
 
   send() {
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
-    // 연결된 프로바이더가 하나라도 있으면 실제 모델
+    // 1순위: Claude Code CLI(구독 인증, 키 불필요) — 데스크톱 전용
+    if (window.schutz && this.state.cliOk) { this.runCliTurn(t); return; }
+    // 2순위: API 키 프로바이더
     if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
     // 데스크톱 앱: 데모 대신 연결 안내 (데모는 웹 프리뷰 전용)
     if (window.schutz) {
@@ -594,6 +622,84 @@ export class App extends React.Component<{}, S> {
     }
   }
 
+  /** Claude Code CLI(구독 인증) 턴 — 편집은 CLI가 직접 수행(acceptEdits), 종료 후 트리·페인 갱신 */
+  runCliTurn(text: string) {
+    if (this.state.cliBusy || !window.schutz) return;
+    const aiId = "a" + (this._uid++);
+    this._cliMsgId = aiId;
+    this.setState(s => ({
+      running: true, cliBusy: true, statusKey: "tool", input: "",
+      agents: { ...s.agents, claude: { ...s.agents.claude, status: "edit" } },
+      messages: [...s.messages,
+        { id: "u" + (this._uid++), role: "user" as const, text },
+        { id: aiId, role: "ai" as const, who: "Claude · 구독(CLI)", text: "", streaming: true }],
+    }));
+    window.schutz.cliRun({
+      cwd: this.state.workspace?.root,
+      prompt: text,
+      resume: this._cliSession ?? undefined,
+    });
+  }
+
+  private handleCliEvent(line: string) {
+    let ev: any;
+    try { ev = JSON.parse(line); } catch { return; }
+    const aiId = this._cliMsgId;
+    const append = (t: string) => {
+      if (!aiId) return;
+      const cur = this.state.messages.find(m => m.id === aiId)?.text ?? "";
+      this.setMsg(aiId, { text: cur ? cur + "\n\n" + t : t });
+    };
+    if (ev.type === "system" && ev.subtype === "init") {
+      if (ev.session_id) this._cliSession = ev.session_id;
+      return;
+    }
+    if (ev.type === "assistant" && ev.message?.content) {
+      for (const b of ev.message.content) {
+        if (b.type === "text" && b.text) append(b.text);
+        else if (b.type === "tool_use") {
+          const file = b.input?.file_path ?? b.input?.path ?? b.input?.pattern ?? b.input?.command ?? "";
+          const verb = /edit|write/i.test(b.name) ? "편집" : /read|glob|grep|ls/i.test(b.name) ? "읽기" : "도구";
+          const tid = "cli" + (this._uid++);
+          this.addTool(tid, "claude", verb, String(file).split(/[\/]/).slice(-2).join("/") || b.name);
+          this.setTool(tid, { st: "done", note: b.name });
+        }
+      }
+      return;
+    }
+    if (ev.type === "result") {
+      if (ev.session_id) this._cliSession = ev.session_id;
+      if (ev.result && aiId && !(this.state.messages.find(m => m.id === aiId)?.text)) append(String(ev.result));
+      if (typeof ev.total_cost_usd === "number") {
+        this.setState(s => ({ agents: { ...s.agents, claude: { ...s.agents.claude, cost: s.agents.claude.cost + ev.total_cost_usd } } }));
+      }
+      return;
+    }
+    if (ev.type === "schutz_stderr") return; // 진행 로그는 무시
+    if (ev.type === "schutz_error") { append("⚠️ " + ev.message); }
+    if (ev.type === "schutz_exit" || ev.type === "schutz_error") {
+      if (aiId) this.setMsg(aiId, { streaming: false });
+      this._cliMsgId = null;
+      this.setState(s => ({
+        running: false, cliBusy: false, statusKey: "idle",
+        agents: { ...s.agents, claude: { ...s.agents.claude, status: "idle" } },
+      }));
+      // CLI가 파일을 직접 수정했을 수 있음 → 트리·열린 페인 리로드
+      void this.refreshWorkspace();
+    }
+  }
+
+  async refreshWorkspace() {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return;
+    const tree = await window.schutz.readTree(ws.root);
+    this.setState(s => {
+      const paneVer: Record<string, number> = { ...s.paneVer };
+      for (const p of s.panes) paneVer[p] = (paneVer[p] ?? 0) + 1;
+      return { workspace: tree, paneVer } as any;
+    });
+  }
+
   /** 실제 모델 턴 시작 — 관리자(Claude 우선, 없으면 연결된 첫 에이전트)가 진입점 */
   async runReal(text: string) {
     if (this.state.running) return;
@@ -611,9 +717,17 @@ export class App extends React.Component<{}, S> {
   }
 
   componentDidMount() {
-    // StrictMode의 mount→unmount→mount에서도 안전: 언마운트 시 타이머가 정리되고,
-    // 타이머 내부의 messages.length 가드가 중복 실행을 막는다.
-    if (AUTOPLAY && !window.schutz) {
+    // 데스크톱 앱: 데모 없이 빈 상태에서 시작 + Claude Code CLI(구독 인증) 감지
+    if (window.schutz) {
+      this.setState({ panes: [], leftTab: "tree" });
+      void window.schutz.cliCheck().then(r => {
+        if (r.ok) this.setState({ cliOk: true, cliVersion: r.version ?? "" });
+      });
+      this._cliOff = window.schutz.onCliEvent(line => this.handleCliEvent(line));
+      return;
+    }
+    // 웹 프리뷰: 데모 오토플레이 (StrictMode 재마운트에도 안전)
+    if (AUTOPLAY) {
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
@@ -622,6 +736,8 @@ export class App extends React.Component<{}, S> {
     this._termOff?.();
     this._termOff = null;
     this._termStarted = false;
+    this._cliOff?.();
+    this._cliOff = null;
   }
 
   componentDidUpdate() {
@@ -782,7 +898,15 @@ export class App extends React.Component<{}, S> {
                         ? <div key={"s" + i} style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "4px 6px" }} />
                         : (
                           <div key={"i" + i} className="hvMenuItem"
-                            onClick={() => it[0] === "프로젝트 열기…" ? void this.openProject() : it[0] === "설정…" ? this.setState({ openMenu: null, settingsOpen: true }) : this.setState({ openMenu: null })}
+                            onClick={() => {
+                              if (it[0] === "프로젝트 열기…") { void this.openProject(); return; }
+                              if (it[0] === "설정…") { this.setState({ openMenu: null, settingsOpen: true }); return; }
+                              if (it[0] === "새 창") { window.schutz?.newWindow(); this.setState({ openMenu: null }); return; }
+                              if (it[0] === "에디터 4분할") { this.setLayout(4); return; }
+                              if (it[0] === "에디터 2분할") { this.setLayout(2); return; }
+                              if (it[0] === "분할 해제") { this.setLayout(1); return; }
+                              this.setState({ openMenu: null });
+                            }}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
                             <span style={{ color: "#C4CBC4" }}>{it[0]}</span>
                             <div style={{ flex: 1 }} />
@@ -841,7 +965,7 @@ export class App extends React.Component<{}, S> {
           </div>
 
           {/* ── Editor grid ── */}
-          <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: 1, background: "rgba(255,255,255,.07)" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "rgba(255,255,255,.07)" }}>
             {this.renderPanes()}
           </div>
 
@@ -939,6 +1063,16 @@ export class App extends React.Component<{}, S> {
   // ── 좌 패널: 파일 트리 ──
   renderTree() {
     const s = this.state;
+    // 데스크톱 앱 + 워크스페이스 없음 → 빈 상태 (데모 트리는 웹 프리뷰 전용)
+    if (window.schutz && !s.workspace) {
+      return (
+        <div style={{ flex: 1.15, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, borderBottom: "1px solid rgba(255,255,255,.06)", padding: "0 20px" }}>
+          <span style={{ fontSize: 12, color: "#5A635C", textAlign: "center", lineHeight: 1.7 }}>아직 열린 프로젝트가 없습니다.</span>
+          <button className="hvAccent" onClick={() => void this.openProject()}
+            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>프로젝트 열기…</button>
+        </div>
+      );
+    }
     // 실제 워크스페이스가 열려 있으면 실파일 트리
     if (s.workspace) {
       const ws = s.workspace;
@@ -1068,8 +1202,8 @@ export class App extends React.Component<{}, S> {
   renderPanes() {
     const s = this.state;
     const n = s.panes.length;
-    const slots: (string | null)[] = [...s.panes];
-    while (slots.length < 4) slots.push(null);
+    const slots: (string | null)[] = [...s.panes.slice(0, s.layout)];
+    while (slots.length < s.layout) slots.push(null);
 
     const lineColors: Record<string, [string, string]> = {
       typing: ["rgba(125,145,131,.1)", ""],
@@ -1084,9 +1218,20 @@ export class App extends React.Component<{}, S> {
       if (!path) {
         return (
           <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "#0E100F" }}>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "#3A403C" }}>
-              <span style={{ fontSize: 20 }}>▢</span>
-              <span style={{ fontSize: 11 }}>빈 편집 창 · 탐색기에서 파일을 열 수 있습니다</span>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "#3A403C" }}>
+              {window.schutz && !s.workspace ? (
+                <>
+                  <img src="./assets/logo-t.png" alt="" style={{ width: 40, height: 40, opacity: .25 }} />
+                  <span style={{ fontSize: 12, color: "#5A635C" }}>프로젝트를 열어 시작하세요</span>
+                  <button className="hvAccent" onClick={() => void this.openProject()}
+                    style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>폴더 열기</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 20 }}>▢</span>
+                  <span style={{ fontSize: 11 }}>빈 편집 창 · 탐색기에서 파일을 열 수 있습니다</span>
+                </>
+              )}
             </div>
           </div>
         );
@@ -1305,7 +1450,7 @@ export class App extends React.Component<{}, S> {
   // ── 우 패널: 변경 검토 ──
   renderReview() {
     const s = this.state;
-    if (s.workspace) return this.renderProposals();
+    if (s.workspace || window.schutz) return this.renderProposals();
     const fstMap: Record<string, [string, string]> = { pending: ["검토 대기", "#C4A882"], accepted: ["수락됨", "#8BB292"], rejected: ["거절됨", "#C97B7B"] };
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     return (
@@ -1452,7 +1597,7 @@ export class App extends React.Component<{}, S> {
                 onKeyDown={e => {
                   if (e.key === "Enter" && window.schutz) {
                     window.schutz.termInput(s.termInput);
-                    this.setState({ termInput: "" });
+                    this.setState(st => ({ termReal: (st.termReal + "\n$ " + st.termInput + "\n").slice(-60_000), termInput: "" }));
                   }
                 }}
                 placeholder="명령 입력 (Enter)"
@@ -1489,7 +1634,22 @@ export class App extends React.Component<{}, S> {
             <button className="hvDim" onClick={() => this.setState({ settingsOpen: false })}
               style={{ width: 24, height: 24, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
           </div>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C", marginBottom: 8 }}>AI 프로바이더 API 키</div>
+          {window.schutz && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: s.cliOk ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${s.cliOk ? "rgba(143,168,147,.35)" : "rgba(255,255,255,.08)"}` }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.cliOk ? "#8BB292" : "#5A635C", flex: "none" }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: s.cliOk ? "#D5DAD5" : "#8B948C" }}>
+                  Claude 구독 인증 {s.cliOk ? "· 연결됨" : "· 미감지"}
+                </div>
+                <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 1 }}>
+                  {s.cliOk
+                    ? `Claude Code(${s.cliVersion})의 계정 인증을 사용합니다 — API 키 불필요, 1순위로 사용됨`
+                    : "Claude Code CLI를 설치하고 로그인하면 API 키 없이 구독으로 사용할 수 있습니다"}
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C", marginBottom: 8 }}>AI 프로바이더 API 키 {window.schutz && s.cliOk ? "(선택 — 구독 인증이 우선)" : ""}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {AGDEF.map(d => (
               <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
