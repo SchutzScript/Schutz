@@ -18,7 +18,7 @@
     "electron": "electron .",
     "electron:build": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win -c.electronDist=node_modules/electron/dist",
+    "dist:win": "npm run build && electron-builder --win --dir -c.electronDist=node_modules/electron/dist && node build/iscc.cjs",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:linux": "npm run build && electron-builder --linux"
   },

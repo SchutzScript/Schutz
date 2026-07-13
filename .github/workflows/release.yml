@@ -1,8 +1,8 @@
 name: Release
 
-# v* 태그를 푸시하면 Windows/macOS/Linux 설치본을 빌드해
+# v* 태그를 푸시하면 Windows(Inno Setup)/macOS/Linux 설치본을 빌드해
 # GitHub Release에 자동 업로드한다.
-#   git tag v0.0.1 && git push origin v0.0.1
+#   git tag v0.0.2 && git push origin v0.0.2
 on:
   push:
     tags:
@@ -51,9 +51,29 @@ jobs:
       - name: Build renderer
         run: npm run build
 
-      - name: Build & publish installers
+      # ── macOS / Linux: electron-builder가 빌드 + 릴리스 업로드 ──
+      - name: Build & publish (mac/linux)
+        if: matrix.os != 'windows-latest'
         run: npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 서명 인증서 없이도 빌드되도록 (추후 코드 서명 도입 시 제거)
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # ── Windows: Inno Setup 설치본 (VS Code식 모던 위저드) ──
+      - name: Package app directory (win)
+        if: matrix.os == 'windows-latest'
+        run: npx electron-builder --win --dir
+
+      - name: Install Inno Setup (win)
+        if: matrix.os == 'windows-latest'
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer (win)
+        if: matrix.os == 'windows-latest'
+        run: node build/iscc.cjs
+
+      - name: Upload installer to release (win)
+        if: matrix.os == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$env:GITHUB_REF_NAME" (Get-ChildItem release/SchutzSetup-*.exe).FullName --repo "$env:GITHUB_REPOSITORY" --clobber
