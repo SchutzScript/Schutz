@@ -8,17 +8,22 @@ import {
   GitBranchIcon, SearchIcon, PlayIcon, DebugIcon, BellIcon,
   FolderIcon, FlowIcon, VcsIcon, TermIcon, GearIcon, TermStatusIcon,
 } from "./icons";
-import { ClaudeProvider, SCHUTZ_SYSTEM_PROMPT, WORKSPACE_TOOLS, ToolCall } from "./ai/claude";
-import { Message } from "./ai/provider";
+import {
+  ClaudeProvider, SCHUTZ_SYSTEM_PROMPT, MANAGER_SYSTEM_EXTRA,
+  WORKSPACE_TOOLS, DELEGATE_TOOL,
+} from "./ai/claude";
+import { GPT_PROVIDER, GROK_PROVIDER, GLM_PROVIDER } from "./ai/openaiCompat";
+import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey } from "./ai/provider";
 import { MonacoPane } from "./editor/MonacoPane";
 
-/** Claude가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
+/** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
 interface Proposal {
   id: string;
   rel: string;
   find: string;
   replace: string;
   rationale: string;
+  agent: string;
   status: "pending" | "accepted" | "rejected" | "failed";
   error?: string;
 }
@@ -53,6 +58,10 @@ interface S {
   proposals: Proposal[];
   /** 수락 후 Monaco 페인 강제 리로드용 버전 */
   paneVer: Record<string, number>;
+  /** 간이 터미널 출력 (Electron) */
+  termReal: string;
+  termInput: string;
+  settingsOpen: boolean;
 }
 
 const TYPING_SPEED = 1;
@@ -66,8 +75,15 @@ export class App extends React.Component<{}, S> {
   private _chat: HTMLDivElement | null = null;
   private _chatSig = "";
   private claude = new ClaudeProvider();
+  /** 에이전트 id → 프로바이더 (Claude/GPT/Grok/GLM) */
+  private providers: Record<string, AgentProvider> = {
+    claude: this.claude, gpt: GPT_PROVIDER, grok: GROK_PROVIDER, glm: GLM_PROVIDER,
+  };
   private history: Message[] = [];
-  private abortCtl: AbortController | null = null;
+  /** 에이전트별 진행 중 턴 취소 컨트롤러 */
+  private abortCtls = new Map<string, AbortController>();
+  /** 파일 락: rel → 잡고 있는 에이전트 id */
+  private fileLocks = new Map<string, string>();
 
   state: S = {
     statusKey: "idle", running: false, messages: [], input: "",
@@ -79,7 +95,21 @@ export class App extends React.Component<{}, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
+    termReal: "", termInput: "", settingsOpen: false,
   };
+
+  private _termOff: (() => void) | null = null;
+  private _termStarted = false;
+
+  /** Electron 셸 시작 + 출력 구독 (최초 1회) */
+  ensureTerm() {
+    if (!window.schutz || this._termStarted) return;
+    this._termStarted = true;
+    window.schutz.termStart(this.state.workspace?.root);
+    this._termOff = window.schutz.onTermData(d => {
+      this.setState(s => ({ termReal: (s.termReal + d).slice(-60_000) }));
+    });
+  }
 
   /** 실제 프로젝트 폴더 열기 (Electron에서만 동작) */
   async openProject() {
@@ -275,7 +305,9 @@ export class App extends React.Component<{}, S> {
   }
 
   stopRun() {
-    this.abortCtl?.abort();
+    for (const a of this.abortCtls.values()) a.abort();
+    this.abortCtls.clear();
+    this.fileLocks.clear();
     this.clearTimers();
     this.setState(s => ({
       running: false, statusKey: "stopped",
@@ -334,47 +366,86 @@ export class App extends React.Component<{}, S> {
   closePane(path: string) {
     this.setState(s => s.panes.length > 1 ? { panes: s.panes.filter(p => p !== path) } as any : null);
   }
+  toggleTerm() {
+    this.setState(st => ({ termOpen: !st.termOpen }), () => {
+      if (this.state.termOpen) this.ensureTerm();
+    });
+  }
+
   send() {
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
-    // Claude API 키가 설정돼 있으면 실제 모델과 대화, 없으면 오프라인 데모 시나리오
-    if (this.claude.isConfigured()) this.runReal(t);
+    // 연결된 프로바이더가 하나라도 있으면 실제 모델, 없으면 오프라인 데모 시나리오
+    if (this.configuredAgents().length > 0) void this.runReal(t);
     else this.startRun(t);
   }
 
-  /** 도구 실행 (워크스페이스 모드) */
-  private async execTool(call: ToolCall): Promise<string> {
+  /** 설정된 프로바이더 id 목록 */
+  private configuredAgents(): string[] {
+    return Object.keys(this.providers).filter(id => this.providers[id].isConfigured());
+  }
+
+  /** 도구 실행 (워크스페이스 모드, 에이전트별) */
+  private async execTool(agentId: string, call: ToolCall): Promise<string> {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return "오류: 워크스페이스가 열려 있지 않습니다.";
     const toolId = "rt" + (this._uid++);
     try {
       if (call.name === "list_files") {
-        this.addTool(toolId, "claude", "목록", ws.name);
+        this.addTool(toolId, agentId, "목록", ws.name);
         const list = ws.entries.filter(e => !e.dir).map(e => e.rel).join("\n");
         this.setTool(toolId, { st: "done", note: ws.entries.filter(e => !e.dir).length + "개" });
         return list || "(빈 워크스페이스)";
       }
       if (call.name === "read_file") {
         const rel = String(call.input?.path ?? "");
-        this.addTool(toolId, "claude", "읽기", rel);
+        this.addTool(toolId, agentId, "읽기", rel);
         const text = await window.schutz.readFile(ws.root, rel);
         this.setTool(toolId, { st: "done", note: (text.length / 1024).toFixed(1) + " KB" });
         return text;
       }
       if (call.name === "propose_edit") {
         const rel = String(call.input?.path ?? "");
-        this.addTool(toolId, "claude", "편집", rel);
+        this.addTool(toolId, agentId, "편집", rel);
+        // 파일 락: 다른 에이전트가 잡고 있으면 거부
+        const holder = this.fileLocks.get(rel);
+        if (holder && holder !== agentId) {
+          this.setTool(toolId, { st: "done", note: "락 충돌" });
+          return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락). 다른 파일을 작업하세요.`;
+        }
+        this.fileLocks.set(rel, agentId);
+        this.setAgent(agentId, { file: rel });
         const p: Proposal = {
           id: "pp" + (this._uid++),
           rel,
           find: String(call.input?.find ?? ""),
           replace: String(call.input?.replace ?? ""),
           rationale: String(call.input?.rationale ?? "수정 제안"),
+          agent: agentId,
           status: "pending",
         };
         this.setState(s => ({ proposals: [...s.proposals, p] }));
         this.setTool(toolId, { st: "done", note: "제안됨" });
         this.openFile(rel);
         return "편집 제안이 등록되었습니다. 사용자가 변경 검토 패널에서 수락/거절합니다.";
+      }
+      if (call.name === "delegate_task") {
+        const target = String(call.input?.agent ?? "");
+        const task = String(call.input?.task ?? "");
+        this.addTool(toolId, agentId, "위임", target);
+        if (!this.providers[target] || target === agentId) {
+          this.setTool(toolId, { st: "done", note: "대상 오류" });
+          return "오류: 알 수 없는 에이전트 " + target;
+        }
+        if (!this.providers[target].isConfigured()) {
+          this.setTool(toolId, { st: "done", note: "미연결" });
+          return `오류: ${this.agDef(target).name}이(가) 연결되어 있지 않습니다 (API 키 없음).`;
+        }
+        this.setTool(toolId, { st: "done", note: "위임됨" });
+        // 병렬 실행 — 관리자 턴을 막지 않는다
+        void this.runAgentLoop(target, [
+          { role: "user", text: `관리자 Claude가 위임한 작업입니다:\n\n${task}` },
+        ], { isManager: false });
+        return `${this.agDef(target).name}에게 위임했습니다. 병렬로 진행되며 결과는 변경 검토에 나타납니다.`;
       }
       return "알 수 없는 도구: " + call.name;
     } catch (e) {
@@ -383,48 +454,52 @@ export class App extends React.Component<{}, S> {
     }
   }
 
-  /** 실제 Claude 에이전트 턴 — 도구 루프 (읽기→편집 제안), 워크스페이스 없으면 순수 대화 */
-  async runReal(text: string) {
-    if (this.state.running) return;
-    this.abortCtl = new AbortController();
-    this.history.push({ role: "user", content: text });
-    this.setState(s => ({
-      running: true, statusKey: "thinking", input: "",
-      agents: { ...s.agents, claude: { ...s.agents.claude, status: "plan" } },
-      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
-    }));
+  /**
+   * 범용 에이전트 루프 — 어떤 프로바이더든 도구를 돌며 작업.
+   * 관리자(첫 진입)는 delegate_task로 다른 에이전트를 병렬 가동할 수 있다.
+   */
+  async runAgentLoop(agentId: string, seed: NeutralMsg[], opts: { isManager: boolean }) {
+    const provider = this.providers[agentId];
+    const d = this.agDef(agentId);
+    const who = d.name + (opts.isManager ? " · 관리자" : "");
+    const abort = new AbortController();
+    this.abortCtls.set(agentId, abort);
+    this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
 
     const useTools = !!(this.state.workspace && window.schutz);
-    // API 원형 메시지 (tool_use/tool_result 블록 유지를 위해 히스토리와 별도로 구성)
-    const apiMsgs: any[] = this.history.map(m => ({ role: m.role, content: m.content }));
+    const others = this.configuredAgents().filter(id => id !== agentId);
+    const tools = useTools
+      ? (opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)
+      : undefined;
+    const system =
+      SCHUTZ_SYSTEM_PROMPT +
+      (opts.isManager ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
+      (useTools ? "\n현재 워크스페이스: " + this.state.workspace!.name : "");
+
+    const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
 
     try {
       for (let round = 0; round < 8; round++) {
         const aiId = "a" + (this._uid++);
         this.setState(s => ({
-          messages: [...s.messages, { id: aiId, role: "ai" as const, who: "Claude · 관리자", text: "", streaming: true }],
+          messages: [...s.messages, { id: aiId, role: "ai" as const, who, text: "", streaming: true }],
         }));
 
         let turnText = "";
         const calls: ToolCall[] = [];
-        let stopReason = "end_turn";
+        let stopReason: string = "end";
 
-        const stream = this.claude.streamTurn({
-          rawMessages: apiMsgs,
-          system: SCHUTZ_SYSTEM_PROMPT + (useTools ? "\n\n현재 워크스페이스: " + this.state.workspace!.name : ""),
-          tools: useTools ? WORKSPACE_TOOLS : undefined,
-          signal: this.abortCtl.signal,
-        });
-        for await (const ev of stream) {
+        for await (const ev of provider.streamAgentTurn({ transcript, system, tools, signal: abort.signal })) {
           if (ev.type === "text") {
             turnText += ev.delta;
             this.setMsg(aiId, { text: turnText });
           } else if (ev.type === "tool_call") {
             calls.push(ev.call);
             this.setState({ statusKey: "tool" });
+            if (!opts.isManager) this.setAgent(agentId, { status: "edit" });
           } else if (ev.type === "usage") {
-            this.bumpAgent("claude", ev.inputTokens, ev.outputTokens);
+            this.bumpAgent(agentId, ev.inputTokens, ev.outputTokens);
           } else if (ev.type === "stop") {
             stopReason = ev.reason;
           } else if (ev.type === "error") {
@@ -435,41 +510,58 @@ export class App extends React.Component<{}, S> {
         }
         this.setMsg(aiId, { streaming: false });
         if (!turnText) {
-          // 빈 텍스트 턴(도구만 호출)이면 말풍선 제거
           this.setState(s => ({ messages: s.messages.filter(m => m.id !== aiId) }));
         }
         finalText = turnText || finalText;
 
         if (stopReason !== "tool_use" || calls.length === 0) break;
 
-        // assistant 턴(텍스트+tool_use) → tool_result 를 원형 메시지에 반영하고 루프 계속
-        const assistantContent: any[] = [];
-        if (turnText) assistantContent.push({ type: "text", text: turnText });
-        for (const c of calls) assistantContent.push({ type: "tool_use", id: c.id, name: c.name, input: c.input });
-        apiMsgs.push({ role: "assistant", content: assistantContent });
-
-        const results: any[] = [];
+        transcript.push({ role: "assistant", text: turnText || undefined, calls });
+        const results: { id: string; content: string }[] = [];
         for (const c of calls) {
-          const out = await this.execTool(c);
-          results.push({ type: "tool_result", tool_use_id: c.id, content: out.slice(0, 40_000) });
+          const out = await this.execTool(agentId, c);
+          results.push({ id: c.id, content: out.slice(0, 40_000) });
         }
-        apiMsgs.push({ role: "user", content: results });
+        transcript.push({ role: "user", results });
       }
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
         this.setState(s => ({
-          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Claude · 관리자", text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who, text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
         }));
       }
     } finally {
-      if (finalText) this.history.push({ role: "assistant", content: finalText });
-      this.abortCtl = null;
-      this.setState(s => ({
-        running: false,
-        statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
-        agents: { ...s.agents, claude: { ...s.agents.claude, status: "idle" } },
-      }));
+      // 이 에이전트의 파일 락 해제
+      for (const [rel, holder] of [...this.fileLocks.entries()]) {
+        if (holder === agentId) this.fileLocks.delete(rel);
+      }
+      this.abortCtls.delete(agentId);
+      const mine = this.state.proposals.some(p => p.agent === agentId && p.status === "pending");
+      this.setAgent(agentId, { status: mine ? "review" : "idle", file: null });
+      if (opts.isManager && finalText) this.history.push({ role: "assistant", content: finalText });
+      // 모든 에이전트가 끝났을 때만 running 해제
+      if (this.abortCtls.size === 0) {
+        this.setState(s => ({
+          running: false,
+          statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
+        }));
+      }
     }
+  }
+
+  /** 실제 모델 턴 시작 — 관리자(Claude 우선, 없으면 연결된 첫 에이전트)가 진입점 */
+  async runReal(text: string) {
+    if (this.state.running) return;
+    const configured = this.configuredAgents();
+    const managerId = configured.includes("claude") ? "claude" : configured[0];
+    if (!managerId) return;
+    this.history.push({ role: "user", content: text });
+    this.setState(s => ({
+      running: true, statusKey: "thinking", input: "",
+      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
+    }));
+    const seed: NeutralMsg[] = this.history.map(m => ({ role: m.role as "user" | "assistant", text: m.content }));
+    await this.runAgentLoop(managerId, seed, { isManager: true });
   }
 
   componentDidMount() {
@@ -479,7 +571,12 @@ export class App extends React.Component<{}, S> {
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
-  componentWillUnmount() { this.clearTimers(); }
+  componentWillUnmount() {
+    this.clearTimers();
+    this._termOff?.();
+    this._termOff = null;
+    this._termStarted = false;
+  }
 
   componentDidUpdate() {
     if (this._chat) {
@@ -580,6 +677,7 @@ export class App extends React.Component<{}, S> {
     return (
       <div style={{ height: "100vh", minWidth: 1400, display: "flex", flexDirection: "column", background: "#0C0E0D", color: "#D5DAD5", fontFamily: SUIT, fontSize: 13, overflow: "hidden" }}>
         {anyMenuOpen && <div onClick={closeMenus} style={{ position: "fixed", inset: 0, zIndex: 40 }} />}
+        {this.renderSettings()}
 
         {/* ══ Header ══ */}
         <div style={{ flex: "none", height: 46, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", background: "#101312", borderBottom: "1px solid rgba(255,255,255,.06)", position: "relative", zIndex: 50 }}>
@@ -638,7 +736,7 @@ export class App extends React.Component<{}, S> {
                         ? <div key={"s" + i} style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "4px 6px" }} />
                         : (
                           <div key={"i" + i} className="hvMenuItem"
-                            onClick={() => it[0] === "프로젝트 열기…" ? void this.openProject() : this.setState({ openMenu: null })}
+                            onClick={() => it[0] === "프로젝트 열기…" ? void this.openProject() : it[0] === "설정…" ? this.setState({ openMenu: null, settingsOpen: true }) : this.setState({ openMenu: null })}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
                             <span style={{ color: "#C4CBC4" }}>{it[0]}</span>
                             <div style={{ flex: 1 }} />
@@ -681,11 +779,11 @@ export class App extends React.Component<{}, S> {
             </button>
             <div style={{ width: 22, height: 1, background: "rgba(255,255,255,.07)", margin: "4px 0" }} />
             <button className="hv07" title="버전 관리" style={railBtn}><VcsIcon /></button>
-            <button className="hv07" title="터미널" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))} style={{ ...railBtn, background: s.termOpen ? "rgba(143,168,147,.16)" : "transparent" }}>
+            <button className="hv07" title="터미널" onClick={() => this.toggleTerm()} style={{ ...railBtn, background: s.termOpen ? "rgba(143,168,147,.16)" : "transparent" }}>
               <TermIcon />
             </button>
             <div style={{ flex: 1 }} />
-            <button className="hv07" title="설정" style={railBtn}><GearIcon /></button>
+            <button className="hv07" title="설정" onClick={() => this.setState({ settingsOpen: true })} style={railBtn}><GearIcon /></button>
           </div>
 
           {/* ── Left column ── */}
@@ -724,7 +822,7 @@ export class App extends React.Component<{}, S> {
           <span style={{ width: 1, height: 13, background: "rgba(255,255,255,.07)" }} />
           <span style={{ fontFamily: MONO }}>Ln 24:5</span>
           <span style={{ fontFamily: MONO }}>UTF-8 · LF · TypeScript</span>
-          <button className="hv08" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))}
+          <button className="hv08" onClick={() => this.toggleTerm()}
             style={{ height: 19, padding: "0 8px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.termOpen ? "#A9BCA9" : "#5A635C", background: s.termOpen ? "rgba(143,168,147,.14)" : "transparent", border: "none" }}>
             <TermStatusIcon />터미널
           </button>
@@ -1122,6 +1220,7 @@ export class App extends React.Component<{}, S> {
                 <div style={{ padding: "10px 13px 9px 16px" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: "#D5DAD5", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
+                    <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "#8FA893", border: `1px solid ${(this.agDef(p.agent)?.color ?? "#8FA893") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: sc }}>{sl}</span>
                   </div>
@@ -1285,7 +1384,7 @@ export class App extends React.Component<{}, S> {
       <div style={{ flex: "none", height: 168, display: "flex", flexDirection: "column", background: "#0A0C0B", borderTop: "1px solid rgba(255,255,255,.07)" }}>
         <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 10px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
           {tabs.map(([k, label, badge]) => (
-            <button key={k} className="hvTermTab" onClick={() => this.setState({ termTab: k, termOpen: true })}
+            <button key={k} className="hvTermTab" onClick={() => this.setState({ termTab: k, termOpen: true }, () => this.ensureTerm())}
               style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: s.termTab === k ? "#D5DAD5" : "#5A635C", background: s.termTab === k ? "rgba(255,255,255,.06)" : "transparent", border: "none" }}>
               {label}
               {badge && <span style={{ fontSize: 9.5, color: "#8B948C", background: "rgba(255,255,255,.07)", borderRadius: 7, padding: "0 5px", lineHeight: "13px" }}>{badge}</span>}
@@ -1294,13 +1393,77 @@ export class App extends React.Component<{}, S> {
           <div style={{ flex: 1 }} />
           <button className="hvDim" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))} title="독 접기" style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>⌄</button>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.75 }}>
-          {termLines.map(tl => (
-            <div key={tl.key} style={{ whiteSpace: "pre-wrap" }}>
-              {tl.segs.map((sg, i) => <span key={i} style={{ color: sg.c }}>{sg.t}</span>)}
-              {tl.caret && <span style={{ display: "inline-block", width: 7, height: 12, background: "#8FA893", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+        {window.schutz && s.termTab === "term" ? (
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#C4CBC4" }}>
+              {s.termReal || "셸을 시작하는 중…"}
             </div>
-          ))}
+            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "4px 16px 8px" }}>
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "#8FA893" }}>$</span>
+              <input
+                value={s.termInput}
+                onChange={e => this.setState({ termInput: e.target.value })}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && window.schutz) {
+                    window.schutz.termInput(s.termInput);
+                    this.setState({ termInput: "" });
+                  }
+                }}
+                placeholder="명령 입력 (Enter)"
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#D5DAD5", fontFamily: MONO, fontSize: 11.5 }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.75 }}>
+            {termLines.map(tl => (
+              <div key={tl.key} style={{ whiteSpace: "pre-wrap" }}>
+                {tl.segs.map((sg, i) => <span key={i} style={{ color: sg.c }}>{sg.t}</span>)}
+                {tl.caret && <span style={{ display: "inline-block", width: 7, height: 12, background: "#8FA893", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── 설정 모달 (프로바이더 API 키) ──
+  renderSettings() {
+    const s = this.state;
+    if (!s.settingsOpen) return null;
+    return (
+      <div onClick={() => this.setState({ settingsOpen: false })}
+        style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div onClick={e => e.stopPropagation()}
+          style={{ width: 480, maxWidth: "92%", background: "#151917", border: "1px solid #2A302C", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.6)", padding: "18px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>설정</span>
+            <div style={{ flex: 1 }} />
+            <button className="hvDim" onClick={() => this.setState({ settingsOpen: false })}
+              style={{ width: 24, height: 24, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C", marginBottom: 8 }}>AI 프로바이더 API 키</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {AGDEF.map(d => (
+              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ flex: "none", width: 52, fontSize: 12, fontWeight: 600, color: d.color }}>{d.name}</span>
+                <input
+                  type="password"
+                  defaultValue={getStoredKey(d.id as any)}
+                  onChange={e => setStoredKey(d.id as any, e.target.value.trim())}
+                  placeholder="API 키 (비우면 미사용)"
+                  style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 30, padding: "0 11px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
+                />
+                <span style={{ flex: "none", fontSize: 10.5, color: this.providers[d.id]?.isConfigured() ? "#8BB292" : "#4B534D" }}>
+                  {this.providers[d.id]?.isConfigured() ? "연결" : "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: "#4B534D", marginTop: 12, lineHeight: 1.6 }}>
+            키는 이 기기(localStorage)에만 저장됩니다. 입력 즉시 반영되며, 연결된 프로바이더가 있으면 채팅이 실제 모델과 대화합니다.
+          </div>
         </div>
       </div>
     );

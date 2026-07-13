@@ -13,4 +13,15 @@ contextBridge.exposeInMainWorld("schutz", {
   readFile: (root, rel) => ipcRenderer.invoke("schutz:readFile", root, rel),
   /** 파일 저장 (UTF-8) */
   writeFile: (root, rel, content) => ipcRenderer.invoke("schutz:writeFile", root, rel, content),
+
+  /** 간이 터미널: 셸 시작 (이미 있으면 무시) */
+  termStart: (cwd) => ipcRenderer.send("schutz:termStart", cwd),
+  /** 터미널에 한 줄 입력 */
+  termInput: (line) => ipcRenderer.send("schutz:termInput", line),
+  /** 터미널 출력 구독 → 해제 함수 반환 */
+  onTermData: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("schutz:termData", h);
+    return () => ipcRenderer.removeListener("schutz:termData", h);
+  },
 });

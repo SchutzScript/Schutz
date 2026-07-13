@@ -16,6 +16,7 @@ export const AGDEF: AgentDef[] = [
   { id: "claude", name: "Claude", model: "Opus 4.5", mgr: true, color: "#8FA893" },
   { id: "gpt", name: "GPT", model: "5.2", mgr: false, color: "#8FA8C0" },
   { id: "grok", name: "Grok", model: "4.1", mgr: false, color: "#C4A882" },
+  { id: "glm", name: "GLM", model: "4.6", mgr: false, color: "#A99BC0" },
 ];
 
 export type LineKind = "base" | "typing" | "fresh" | "pending" | "removed" | "accepted";

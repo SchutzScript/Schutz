@@ -18,6 +18,9 @@ interface SchutzApi {
   readTree(root: string): Promise<SchutzWorkspaceTree>;
   readFile(root: string, rel: string): Promise<string>;
   writeFile(root: string, rel: string, content: string): Promise<boolean>;
+  termStart(cwd?: string): void;
+  termInput(line: string): void;
+  onTermData(cb: (data: string) => void): () => void;
 }
 
 interface Window {

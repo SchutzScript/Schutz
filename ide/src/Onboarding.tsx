@@ -22,6 +22,7 @@ const PROVIDERS = [
   { id: "claude", name: "Claude", model: "Opus 4.5", init: "C", hue: "#8FA893", role: "계획·구현·검토에 두루 강한 범용 에이전트", ph: "sk-ant-…" },
   { id: "gpt", name: "GPT", model: "5.2", init: "G", hue: "#8FA8C0", role: "타입·리팩터링 등 구조 작업에 특화", ph: "sk-…" },
   { id: "grok", name: "Grok", model: "4.1", init: "X", hue: "#C4A882", role: "문서·탐색 등 보조 작업 담당", ph: "xai-…" },
+  { id: "glm", name: "GLM", model: "4.6", init: "Z", hue: "#A99BC0", role: "대량 컨텍스트 처리 · 비용 효율 보조", ph: "…" },
 ];
 const IMPORTS = [
   { k: "vscode", name: "VS Code에서", badge: true, icon: "{}", iconBg: "rgba(143,168,192,.15)", iconFg: "#8FA8C0", desc: "설정 · 키바인딩에 더해 설치된 확장을 그대로 가져와 활성화합니다" },
@@ -63,6 +64,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
       claude: { on: true, key: "", st: "idle", auth: "none", mode: "auth" },
       gpt: { on: false, key: "", st: "idle", auth: "none", mode: "auth" },
       grok: { on: false, key: "", st: "idle", auth: "none", mode: "auth" },
+      glm: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
     },
     manager: "claude",
   };
@@ -74,8 +76,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
 
   verify(id: string) {
     this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "checking" as const } } }));
-    // Claude 키는 실제 저장 → IDE 채팅이 mock 대신 실제 모델과 대화 (타 프로바이더 어댑터는 후속)
-    if (id === "claude") setStoredKey("claude", this.state.conn.claude.key.trim());
+    // 입력한 키를 실제 저장 → IDE가 해당 프로바이더를 실모드로 사용
+    setStoredKey(id as any, this.state.conn[id].key.trim());
     this.qt(() => this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "ok" as const } } })), 900);
   }
   login(id: string) {

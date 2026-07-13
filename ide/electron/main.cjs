@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, ipcMain, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs/promises");
+const { spawn } = require("child_process");
 
 const DEV_URL = process.env.SCHUTZ_DEV_URL || "http://localhost:4322";
 const isDev = !app.isPackaged;
@@ -114,8 +115,52 @@ ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
   return true;
 });
 
+// ── 간이 터미널 (셸 프로세스 파이프 — PTY 아님, v1) ─────────────────────────
+const shells = new Map(); // webContents.id → child process
+
+ipcMain.on("schutz:termStart", (e, cwd) => {
+  if (shells.has(e.sender.id)) return;
+  const isWin = process.platform === "win32";
+  const sh = isWin ? "powershell.exe" : process.env.SHELL || "bash";
+  const args = isWin ? ["-NoLogo"] : [];
+  let proc;
+  try {
+    proc = spawn(sh, args, { cwd: cwd || undefined, env: process.env });
+  } catch (err) {
+    e.sender.send("schutz:termData", "셸 시작 실패: " + err.message + "\n");
+    return;
+  }
+  shells.set(e.sender.id, proc);
+  const send = d => { if (!e.sender.isDestroyed()) e.sender.send("schutz:termData", d.toString()); };
+  proc.stdout.on("data", send);
+  proc.stderr.on("data", send);
+  proc.on("exit", code => {
+    shells.delete(e.sender.id);
+    if (!e.sender.isDestroyed()) e.sender.send("schutz:termData", `\n[셸 종료: ${code}]\n`);
+  });
+});
+
+ipcMain.on("schutz:termInput", (e, line) => {
+  const p = shells.get(e.sender.id);
+  if (p) p.stdin.write(line + "\n");
+});
+
+app.on("web-contents-created", (_e, wc) => {
+  wc.on("destroyed", () => {
+    const p = shells.get(wc.id);
+    if (p) { p.kill(); shells.delete(wc.id); }
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
+  // 자동 업데이트 (패키징된 앱 + GitHub 릴리스 접근 가능할 때만 동작; 실패는 무시)
+  if (!isDev) {
+    try {
+      const { autoUpdater } = require("electron-updater");
+      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    } catch { /* electron-updater 미설치/실패 시 무시 */ }
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

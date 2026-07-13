@@ -29,6 +29,11 @@
       "output": "release",
       "buildResources": "build"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "SchutzScript",
+      "repo": "Schutz"
+    },
     "files": [
       "dist/**",
       "electron/**",
@@ -89,6 +94,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "monaco-editor": "^0.55.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
