@@ -72,12 +72,31 @@ interface S {
   oauthWait: boolean;
   oauthMsg: string;
   oauthTick: number;
+  slashSel: number;
   /** 구독 CLI 에이전트 감지 결과 (claude/codex) */
   cliAgents: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliBusy: boolean;
   /** CLI(stream-json init)가 보고한 실제 모델 */
   cliModel: string;
 }
+
+/** 슬래시 명령 레지스트리 — origin별로 실행 경로가 다르다 */
+interface SlashCmd { cmd: string; origin: "schutz" | "claude" | "codex"; desc: string }
+const SLASH_COMMANDS: SlashCmd[] = [
+  { cmd: "/help", origin: "schutz", desc: "명령 목록" },
+  { cmd: "/model", origin: "schutz", desc: "모델 확인 · 변경 (/model <에이전트> <모델>)" },
+  { cmd: "/usage", origin: "schutz", desc: "세션 토큰 · 비용" },
+  { cmd: "/agents", origin: "schutz", desc: "에이전트 연결 상태" },
+  { cmd: "/clear", origin: "schutz", desc: "대화 초기화" },
+  { cmd: "/init", origin: "claude", desc: "프로젝트 분석 후 CLAUDE.md 생성" },
+  { cmd: "/review", origin: "claude", desc: "변경사항 코드 리뷰" },
+  { cmd: "/security-review", origin: "claude", desc: "보안 관점 리뷰" },
+  { cmd: "/compact", origin: "claude", desc: "세션 컨텍스트 압축 (이어가기 세션)" },
+  { cmd: "/init", origin: "codex", desc: "프로젝트 분석 후 AGENTS.md 생성" },
+  { cmd: "/review", origin: "codex", desc: "변경사항 리뷰" },
+];
+const ORIGIN_LABEL: Record<string, string> = { schutz: "Schutz", claude: "Claude Code", codex: "Codex" };
+const ORIGIN_COLOR: Record<string, string> = { schutz: "var(--accent)", claude: "#C4A882", codex: "#8FA8C0" };
 
 const TYPING_SPEED = 1;
 const SHOW_REASONS = true;
@@ -115,7 +134,20 @@ export class App extends React.Component<{}, S> {
     })(),
     cliAgents: {}, cliBusy: false, cliModel: "",
     oauthPasteFor: null, oauthPasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
+    slashSel: 0,
   };
+
+  /** 현재 입력 기준 팔레트 후보 (사용 가능 origin만) */
+  slashList(): SlashCmd[] {
+    const v = this.state.input;
+    if (!v.startsWith("/") || v.includes(" ")) return [];
+    return SLASH_COMMANDS.filter(c => {
+      if (!c.cmd.startsWith(v)) return false;
+      if (c.origin === "claude") return !!this.state.cliAgents.claude?.ok;
+      if (c.origin === "codex") return !!this.state.cliAgents.codex?.ok;
+      return true;
+    });
+  }
 
   private _oauthOff: (() => void) | null = null;
 
@@ -510,15 +542,16 @@ export class App extends React.Component<{}, S> {
     const [cmd, ...rest] = raw.trim().split(/\s+/);
     const connected = AGDEF.map(d => d.id).filter(id => this.modelOf(id) !== null);
     switch (cmd) {
-      case "/help":
-        this.schutzSay(raw,
-          "사용 가능한 명령:\n" +
-          "/model — 에이전트별 현재 모델 확인\n" +
-          "/model <에이전트> <모델> — 모델 변경 (예: /model claude claude-opus-4-8)\n" +
-          "/usage — 세션 토큰·비용\n" +
-          "/agents — 연결된 에이전트 상태\n" +
-          "/clear — 대화 초기화");
+      case "/help": {
+        const avail = SLASH_COMMANDS.filter(c =>
+          c.origin === "schutz" ||
+          (c.origin === "claude" && this.state.cliAgents.claude?.ok) ||
+          (c.origin === "codex" && this.state.cliAgents.codex?.ok));
+        this.schutzSay(raw, "사용 가능한 명령:\n" +
+          avail.map(c => `${c.cmd} — ${c.desc} [${ORIGIN_LABEL[c.origin]}]`).join("\n") +
+          "\n\n/ 를 입력하면 자동완성 팔레트가 열립니다.");
         return true;
+      }
       case "/model": {
         if (rest.length >= 2) {
           const [ag, model] = rest;
@@ -574,9 +607,31 @@ export class App extends React.Component<{}, S> {
     }
   }
 
+  /** Claude Code/Codex 명령 포워딩 — 해당 CLI 세션에서 실제 실행 */
+  private forwardSlash(raw: string): boolean {
+    const token = raw.split(/\s+/)[0];
+    const cand = SLASH_COMMANDS.filter(c => c.cmd === token && c.origin !== "schutz");
+    if (!cand.length || !window.schutz) return false;
+    const pick = cand.find(c => c.origin === "claude" && this.state.cliAgents.claude?.ok)
+      ?? cand.find(c => c.origin === "codex" && this.state.cliAgents.codex?.ok);
+    if (!pick) {
+      this.schutzSay(raw, "이 명령은 " + cand.map(c => ORIGIN_LABEL[c.origin]).join("/") + " 명령입니다. 해당 CLI가 설치·로그인되어 있어야 실행할 수 있어요.");
+      return true;
+    }
+    if (!this.state.workspace) {
+      this.schutzSay(raw, "`" + token + "` 은(는) 프로젝트 컨텍스트가 필요합니다. 먼저 폴더를 열어주세요 (파일 → 프로젝트 열기…).");
+      return true;
+    }
+    this.runCliTurn(pick.origin, raw, token === "/compact");
+    return true;
+  }
+
   send() {
     const rawIn = this.state.input.trim();
-    if (rawIn.startsWith("/")) { if (this.handleSlash(rawIn)) return; }
+    if (rawIn.startsWith("/")) {
+      if (this.forwardSlash(rawIn)) return;
+      if (this.handleSlash(rawIn)) return;
+    }
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
     // 1순위: 앱 내 연결된 계정(OAuth) 또는 API 키 — Schutz 통합 에이전트 루프
     if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
@@ -1391,12 +1446,45 @@ export class App extends React.Component<{}, S> {
             </div>
           ))}
         </div>
-        <div style={{ flex: "none", padding: "10px 12px", borderTop: "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ flex: "none", padding: "10px 12px", borderTop: "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
           <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#4D5D53)" : "var(--w10)", transition: "background .4s ease" }}>
+            {(() => {
+              const list = this.slashList();
+              if (!list.length) return null;
+              const sel = Math.min(s.slashSel, list.length - 1);
+              return (
+                <div style={{ position: "absolute", bottom: 58, left: 12, right: 12, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 60, maxHeight: 220, overflowY: "auto" }}>
+                  {list.map((c, i) => (
+                    <div key={c.origin + c.cmd}
+                      onMouseDown={ev => { ev.preventDefault(); this.setState({ input: c.cmd + (c.cmd === "/model" ? " " : "") }, () => { if (c.cmd !== "/model") this.send(); }); }}
+                      onMouseEnter={() => this.setState({ slashSel: i })}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
+                      <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", fontWeight: 600 }}>{c.cmd}</span>
+                      <span style={{ fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{c.desc}</span>
+                      <span style={{ flex: "none", fontSize: 9.5, color: ORIGIN_COLOR[c.origin], border: `1px solid ${ORIGIN_COLOR[c.origin]}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{ORIGIN_LABEL[c.origin]}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             <input value={s.input}
-              onChange={e => this.setState({ input: e.target.value })}
-              onKeyDown={e => { if (e.key === "Enter") this.send(); }}
-              placeholder="에이전트 팀에게 작업 요청 (Enter)"
+              onChange={e => this.setState({ input: e.target.value, slashSel: 0 })}
+              onKeyDown={e => {
+                const list = this.slashList();
+                if (list.length) {
+                  const sel = Math.min(s.slashSel, list.length - 1);
+                  if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ slashSel: (sel + 1) % list.length }); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ slashSel: (sel - 1 + list.length) % list.length }); return; }
+                  if (e.key === "Tab") { e.preventDefault(); this.setState({ input: list[sel].cmd + " " }); return; }
+                  if (e.key === "Enter" && s.input !== list[sel].cmd && list[sel].cmd.startsWith(s.input)) {
+                    e.preventDefault();
+                    this.setState({ input: list[sel].cmd }, () => this.send());
+                    return;
+                  }
+                }
+                if (e.key === "Enter") this.send();
+              }}
+              placeholder="요청 입력 · /명령 (Enter)"
               style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, height: 34, padding: "0 13px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none", display: "block" }} />
           </div>
           <button className="hvAccent" onClick={() => this.send()}
