@@ -10,6 +10,7 @@ import {
 } from "./icons";
 import { ClaudeProvider, SCHUTZ_SYSTEM_PROMPT } from "./ai/claude";
 import { Message } from "./ai/provider";
+import { MonacoPane } from "./editor/MonacoPane";
 
 const MONO = "'IBM Plex Mono',monospace";
 const SUIT = "'SUIT Variable',sans-serif";
@@ -34,6 +35,9 @@ interface S {
   termOpen: boolean;
   termTab: string;
   agents: Record<string, AgentState>;
+  /** 실제로 연 프로젝트 폴더 (Electron 전용). null이면 데모 모드 */
+  workspace: SchutzWorkspaceTree | null;
+  paneDirty: Record<string, boolean>;
 }
 
 const TYPING_SPEED = 1;
@@ -58,7 +62,32 @@ export class App extends React.Component<{}, S> {
     agentsOpen: true, reviewOpen: true,
     termOpen: false, termTab: "term",
     agents: this.freshAgents(),
+    workspace: null, paneDirty: {},
   };
+
+  /** 실제 프로젝트 폴더 열기 (Electron에서만 동작) */
+  async openProject() {
+    this.setState({ openMenu: null, projOpen: false });
+    if (!window.schutz) {
+      this.setState(s => ({
+        messages: [...s.messages, {
+          id: "a" + (this._uid++), role: "ai" as const, who: "Schutz",
+          text: "프로젝트 열기는 데스크톱 앱에서만 가능합니다. Schutz 앱(설치본 또는 npm run electron)에서 실행해 주세요.",
+        }],
+      }));
+      return;
+    }
+    const root = await window.schutz.openFolder();
+    if (!root) return;
+    const tree = await window.schutz.readTree(root);
+    this.clearTimers();
+    this.setState({
+      workspace: tree, leftTab: "tree", panes: [],
+      docs: freshDocs(), files: [], plan: [], tools: [], chips: {},
+      expanded: null, paneDirty: {}, statusKey: "idle", running: false,
+      agents: this.freshAgents(),
+    });
+  }
 
   freshAgents(): Record<string, AgentState> {
     const o: Record<string, AgentState> = {};
@@ -433,7 +462,7 @@ export class App extends React.Component<{}, S> {
           <div style={{ position: "relative" }}>
             <button className="hv06" onClick={() => this.setState(st => ({ projOpen: !st.projOpen, openMenu: null }))}
               style={{ height: 28, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: "#D5DAD5", background: s.projOpen ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 7, cursor: "pointer" }}>
-              schutz-core
+              {s.workspace ? s.workspace.name : "schutz-core"}
               <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#8B948C", fontWeight: 400, fontFamily: MONO, background: "rgba(255,255,255,.05)", borderRadius: 4, padding: "2px 7px 2px 5px" }}>
                 <GitBranchIcon />feature/token-refresh
               </span>
@@ -454,7 +483,7 @@ export class App extends React.Component<{}, S> {
                   </div>
                 ))}
                 <div style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "5px 6px" }} />
-                <div className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#9AA59C" }}>
+                <div className="hv05" onClick={() => void this.openProject()} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#9AA59C" }}>
                   프로젝트 열기…<div style={{ flex: 1 }} /><span style={{ fontSize: 10.5, color: "#5A635C", fontFamily: MONO }}>⇧⌘O</span>
                 </div>
               </div>
@@ -481,7 +510,9 @@ export class App extends React.Component<{}, S> {
                       {items.map((it, i) => it === null
                         ? <div key={"s" + i} style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "4px 6px" }} />
                         : (
-                          <div key={"i" + i} className="hvMenuItem" onClick={() => this.setState({ openMenu: null })} style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+                          <div key={"i" + i} className="hvMenuItem"
+                            onClick={() => it[0] === "프로젝트 열기…" ? void this.openProject() : this.setState({ openMenu: null })}
+                            style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
                             <span style={{ color: "#C4CBC4" }}>{it[0]}</span>
                             <div style={{ flex: 1 }} />
                             <span style={{ color: "#5A635C", fontSize: 10.5, fontFamily: MONO }}>{it[1]}</span>
@@ -637,6 +668,38 @@ export class App extends React.Component<{}, S> {
   // ── 좌 패널: 파일 트리 ──
   renderTree() {
     const s = this.state;
+    // 실제 워크스페이스가 열려 있으면 실파일 트리
+    if (s.workspace) {
+      const ws = s.workspace;
+      return (
+        <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
+          <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "#5A635C" }}>{ws.name.toUpperCase()}</div>
+          {ws.entries.map(en => {
+            const pad = 16 + en.depth * 14;
+            if (en.dir) {
+              return (
+                <div key={en.rel} style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px` }}>
+                  <span style={{ flex: "none", fontSize: 9, color: "#5A635C", width: 8 }}>▾</span>
+                  <span style={{ fontSize: 12, color: "#8B948C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+                </div>
+              );
+            }
+            const inPane = s.panes.includes(en.rel);
+            const dirty = s.paneDirty[en.rel];
+            return (
+              <div key={en.rel} className="hv04" onClick={() => this.openFile(en.rel)}
+                style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
+                <span style={{ flex: "none", fontSize: 9, width: 8 }}></span>
+                <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "#D5DAD5" : "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+                <div style={{ flex: 1 }} />
+                {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
+              </div>
+            );
+          })}
+          {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "#4B534D" }}>… 항목이 많아 일부만 표시합니다</div>}
+        </div>
+      );
+    }
     const lockOf = (path: string) => AGDEF.find(d => s.agents[d.id].file === path);
     const pendOf = (path: string) => s.files.find(f => f.path === path && f.status === "pending");
     const fileRow = (path: string, name: string, pad: number) => {
@@ -757,6 +820,30 @@ export class App extends React.Component<{}, S> {
           </div>
         );
       }
+
+      // 실제 워크스페이스 파일 → Monaco 편집 페인
+      if (s.workspace && !s.docs[path]) {
+        const dirty = s.paneDirty[path];
+        return (
+          <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "#0E100F" }}>
+            <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 9, padding: "0 14px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
+              <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: dirty ? "#CCB491" : "#4B534D" }} />
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+              <div style={{ flex: 1 }} />
+              <span style={{ flex: "none", display: "flex", alignItems: "center", height: 19, padding: "0 8px", borderRadius: 10, fontSize: 10.5, whiteSpace: "nowrap", color: dirty ? "#CCB491" : "#535B55", background: dirty ? "rgba(196,168,130,.1)" : "rgba(255,255,255,.04)" }}>{dirty ? "수정됨" : "✓"}</span>
+              {n > 1 && (
+                <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
+              )}
+            </div>
+            <MonacoPane
+              root={s.workspace.root}
+              rel={path}
+              onDirtyChange={(rel, d) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }))}
+            />
+          </div>
+        );
+      }
+
       const doc = s.docs[path] || [];
       const isMd = path.endsWith(".md");
       const agColor = this.agentColorFor(path) || "#7D9183";
