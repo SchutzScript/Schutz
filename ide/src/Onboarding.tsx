@@ -98,7 +98,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* top: logo + step dots + skip */}
         <div style={{ flex: "none", height: 60, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, position: "relative" }}>
           <div style={{ position: "absolute", left: 24, display: "flex", alignItems: "center", gap: 9 }}>
-            <img src="/assets/logo-t.png" alt="Schutz" style={{ width: 22, height: 22, display: "block" }} />
+            <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 22, height: 22, display: "block" }} />
             <span style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: .5, color: "#8B948C" }}>Schutz</span>
           </div>
           {labels.map((_, i) => (
@@ -132,7 +132,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     ];
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "safe center" as any, padding: "20px 0", animation: "szFadeUp .5s ease both" }}>
-        <img src="/assets/logo-t.png" alt="Schutz" style={{ width: 84, height: 84, display: "block", marginBottom: 26 }} />
+        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 84, height: 84, display: "block", marginBottom: 26 }} />
         <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -.5 }}>Schutz에 오신 것을 환영합니다</div>
         <div style={{ fontSize: 14.5, color: "#8B948C", marginTop: 14, lineHeight: 1.8, textAlign: "center", maxWidth: 520 }}>
           AI가 코드를 쓰는 시대의 본격 IDE.<br />
@@ -280,7 +280,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* live preview */}
         <div style={{ flex: 1, maxWidth: 640, minWidth: 0, borderRadius: 14, overflow: "hidden", border: `1px solid ${th.frameBd}`, boxShadow: "0 20px 60px rgba(0,0,0,.5)", background: th.bg, transition: "background .3s ease" }}>
           <div style={{ height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", background: th.chrome, borderBottom: `1px solid ${th.line}`, transition: "background .3s ease" }}>
-            <img src="/assets/logo-t.png" alt="" style={{ width: 16, height: 16, filter: th.logoFilter }} />
+            <img src="./assets/logo-t.png" alt="" style={{ width: 16, height: 16, filter: th.logoFilter }} />
             <span style={{ fontSize: 11.5, fontWeight: 700, color: th.fg, fontFamily: uiStack }}>schutz-core</span>
             <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: th.dim, fontFamily: codeStack, background: th.badgeBg, borderRadius: 4, padding: "1px 6px" }}>
               <svg width="9" height="9" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><circle cx="4.5" cy="12.5" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><circle cx="11.5" cy="6" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><path d="M4.5 5.3 V10.7 M11.5 7.8 C11.5 10 8.5 10.8 6.4 11.4" fill="none" stroke={th.accent} strokeWidth="1.6" strokeLinecap="round" /></svg>

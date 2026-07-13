@@ -427,7 +427,7 @@ export class App extends React.Component<{}, S> {
 
         {/* ══ Header ══ */}
         <div style={{ flex: "none", height: 46, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", background: "#101312", borderBottom: "1px solid rgba(255,255,255,.06)", position: "relative", zIndex: 50 }}>
-          <img src="/assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block" }} />
+          <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block" }} />
 
           {/* project switcher */}
           <div style={{ position: "relative" }}>
