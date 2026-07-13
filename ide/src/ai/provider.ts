@@ -104,3 +104,43 @@ export function setStoredKey(provider: ProviderId, key: string): void {
     // storage 불가 환경이면 무시
   }
 }
+
+
+// ── 앱 내 OAuth 토큰 저장 (구독 계정 인증) ─────────────────────────────────
+
+export interface OAuthTokens {
+  access: string;
+  refresh: string | null;
+  exp: number;
+}
+
+export function getOAuth(id: string): OAuthTokens | null {
+  try {
+    const raw = localStorage.getItem("schutz.oauth." + id);
+    if (!raw) return null;
+    const t = JSON.parse(raw);
+    return t && t.access ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setOAuth(id: string, tokens: OAuthTokens | null): void {
+  try {
+    if (tokens) localStorage.setItem("schutz.oauth." + id, JSON.stringify(tokens));
+    else localStorage.removeItem("schutz.oauth." + id);
+  } catch { /* ignore */ }
+}
+
+/** 만료 임박 시 자동 갱신 후 액세스 토큰 반환 (실패 시 null) */
+export async function freshOAuth(id: string): Promise<OAuthTokens | null> {
+  const t = getOAuth(id);
+  if (!t) return null;
+  if (Date.now() < t.exp - 60_000) return t;
+  if (!t.refresh || !window.schutz?.oauthRefresh) return null;
+  const r = await window.schutz.oauthRefresh(id, t.refresh);
+  if (!r.ok || !r.access) { return null; }
+  const nt = { access: r.access, refresh: r.refresh ?? t.refresh, exp: r.exp ?? Date.now() + 3600_000 };
+  setOAuth(id, nt);
+  return nt;
+}

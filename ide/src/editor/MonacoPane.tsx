@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import monaco, { languageOf } from "./monacoSetup";
+import { getThemeId, monacoThemeOf } from "../theme";
 
 interface Props {
   root: string;
@@ -26,7 +27,7 @@ export function MonacoPane({ root, rel, onDirtyChange }: Props) {
     const editor = monaco.editor.create(hostRef.current, {
       value: "",
       language: languageOf(rel),
-      theme: "feldgrau",
+      theme: monacoThemeOf(getThemeId()),
       fontFamily: "'IBM Plex Mono', monospace",
       fontSize: 12,
       lineHeight: 20,

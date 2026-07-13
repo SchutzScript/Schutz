@@ -307,3 +307,139 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// ══ 앱 내 직접 OAuth (PKCE) — 구독 계정 로그인 ═════════════════════════════
+const crypto = require("crypto");
+const http = require("http");
+
+const b64url = buf => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+const OAUTH = {
+  claude: {
+    clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+    authUrl: "https://claude.ai/oauth/authorize",
+    tokenUrl: "https://console.anthropic.com/v1/oauth/token",
+    redirect: "https://console.anthropic.com/oauth/code/callback",
+    scope: "org:create_api_key user:profile user:inference",
+  },
+  codex: {
+    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+    authUrl: "https://auth.openai.com/oauth/authorize",
+    tokenUrl: "https://auth.openai.com/oauth/token",
+    redirect: "http://localhost:1455/auth/callback",
+    scope: "openid profile email offline_access",
+  },
+};
+const oauthPending = {}; // id → { verifier, state }
+let codexServer = null;
+
+ipcMain.handle("schutz:oauthStart", async (e, id) => {
+  const cfg = OAUTH[id];
+  if (!cfg) return { ok: false, message: "지원하지 않는 프로바이더" };
+  const verifier = b64url(crypto.randomBytes(32));
+  const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
+  const state = b64url(crypto.randomBytes(16));
+  oauthPending[id] = { verifier, state };
+
+  const u = new URL(cfg.authUrl);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", cfg.clientId);
+  u.searchParams.set("redirect_uri", cfg.redirect);
+  u.searchParams.set("scope", cfg.scope);
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  u.searchParams.set("state", state);
+  if (id === "claude") u.searchParams.set("code", "true");
+  if (id === "codex") {
+    u.searchParams.set("id_token_add_organizations", "true");
+    u.searchParams.set("codex_cli_simplified_flow", "true");
+  }
+
+  if (id === "codex") {
+    // 로컬 콜백 서버 — 브라우저 승인 후 자동으로 코드 수신·교환
+    try { if (codexServer) codexServer.close(); } catch {}
+    codexServer = http.createServer(async (req, res) => {
+      try {
+        const ru = new URL(req.url, "http://localhost:1455");
+        if (ru.pathname !== "/auth/callback") { res.writeHead(404); res.end(); return; }
+        const code = ru.searchParams.get("code");
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end("<body style='font-family:sans-serif;background:#0C0E0D;color:#D5DAD5;display:flex;align-items:center;justify-content:center;height:100vh'>&#10003; 로그인 완료 — 이 창을 닫고 Schutz로 돌아가세요.</body>");
+        const tok = await oauthExchange("codex", code, null);
+        if (!e.sender.isDestroyed()) e.sender.send("schutz:oauthResult", JSON.stringify({ provider: "codex", ...tok }));
+      } catch (err) {
+        if (!e.sender.isDestroyed()) e.sender.send("schutz:oauthResult", JSON.stringify({ provider: "codex", ok: false, message: String(err && err.message || err) }));
+      } finally {
+        try { if (codexServer) codexServer.close(); } catch {}
+        codexServer = null;
+      }
+    });
+    await new Promise((res) => {
+      codexServer.once("error", () => res());
+      codexServer.listen(1455, "127.0.0.1", res);
+    });
+    setTimeout(() => { try { if (codexServer) { codexServer.close(); codexServer = null; } } catch {} }, 5 * 60 * 1000);
+  }
+
+  shell.openExternal(u.toString());
+  return { ok: true, mode: id === "claude" ? "paste" : "callback" };
+});
+
+async function oauthExchange(id, code, stateOverride) {
+  const cfg = OAUTH[id];
+  const pend = oauthPending[id];
+  if (!pend) throw new Error("로그인 세션이 없습니다. [로그인]을 다시 눌러주세요.");
+  const body = {
+    grant_type: "authorization_code",
+    client_id: cfg.clientId,
+    code,
+    redirect_uri: cfg.redirect,
+    code_verifier: pend.verifier,
+  };
+  if (id === "claude") body.state = stateOverride != null ? stateOverride : pend.state;
+  const r = await fetch(cfg.tokenUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("토큰 교환 실패 (" + r.status + "): " + text.slice(0, 200));
+  const j = JSON.parse(text);
+  return {
+    ok: true,
+    access: j.access_token,
+    refresh: j.refresh_token != null ? j.refresh_token : null,
+    exp: Date.now() + (j.expires_in != null ? j.expires_in : 3600) * 1000,
+  };
+}
+
+ipcMain.handle("schutz:oauthExchange", async (_e, id, pasted) => {
+  try {
+    let code = String(pasted).trim(), state = null;
+    if (id === "claude" && code.includes("#")) {
+      const i = code.indexOf("#");
+      state = code.slice(i + 1).trim();
+      code = code.slice(0, i).trim();
+    }
+    return await oauthExchange(id, code, state);
+  } catch (err) {
+    return { ok: false, message: String(err && err.message || err) };
+  }
+});
+
+ipcMain.handle("schutz:oauthRefresh", async (_e, id, refreshToken) => {
+  try {
+    const cfg = OAUTH[id];
+    const r = await fetch(cfg.tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: cfg.clientId }),
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error("갱신 실패 (" + r.status + "): " + text.slice(0, 200));
+    const j = JSON.parse(text);
+    return { ok: true, access: j.access_token, refresh: j.refresh_token != null ? j.refresh_token : refreshToken, exp: Date.now() + (j.expires_in != null ? j.expires_in : 3600) * 1000 };
+  } catch (err) {
+    return { ok: false, message: String(err && err.message || err) };
+  }
+});

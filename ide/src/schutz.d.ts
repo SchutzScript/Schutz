@@ -28,6 +28,10 @@ interface SchutzApi {
   cliRun(opts: { agent?: string; cwd?: string; prompt: string; resume?: string; continue?: boolean }): void;
   cliStop(): void;
   onCliEvent(cb: (line: string) => void): () => void;
+  oauthStart(id: string): Promise<{ ok: boolean; mode?: string; message?: string }>;
+  oauthExchange(id: string, code: string): Promise<{ ok: boolean; access?: string; refresh?: string | null; exp?: number; message?: string }>;
+  oauthRefresh(id: string, refreshToken: string): Promise<{ ok: boolean; access?: string; refresh?: string | null; exp?: number; message?: string }>;
+  onOauthResult(cb: (line: string) => void): () => void;
 }
 
 interface Window {

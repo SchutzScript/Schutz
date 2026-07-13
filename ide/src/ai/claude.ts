@@ -1,7 +1,7 @@
 import {
   AIProvider, ChatRequest, StreamEvent,
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
-  getStoredKey,
+  getStoredKey, getOAuth, freshOAuth,
 } from "./provider";
 
 export type { ToolCall } from "./provider";
@@ -15,7 +15,8 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
   readonly label = "Claude";
 
   isConfigured(): boolean {
-    return getStoredKey("claude").trim().length > 0;
+    // 구독 계정(OAuth) 또는 API 키
+    return !!getOAuth("claude") || getStoredKey("claude").trim().length > 0;
   }
 
   /** AIProvider 계약용 단순 래퍼 (텍스트 전용) */
@@ -48,28 +49,43 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
   }
 
   async *streamAgentTurn(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
+    // 인증 우선순위: 구독 계정(OAuth Bearer) → API 키
+    const oauth = await freshOAuth("claude");
     const apiKey = getStoredKey("claude").trim();
-    if (!apiKey) {
-      yield { type: "error", message: "Claude API 키가 설정되지 않았습니다. 온보딩(#/onboarding) 4단계 또는 설정에서 입력하세요." };
+    if (!oauth && !apiKey) {
+      yield { type: "error", message: "Claude 계정이 연결되지 않았습니다. 설정(⚙)에서 [Claude 계정으로 로그인] 또는 API 키를 입력하세요." };
       yield { type: "done" };
       return;
+    }
+
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    };
+    let system: any = req.system;
+    if (oauth) {
+      headers["authorization"] = "Bearer " + oauth.access;
+      headers["anthropic-beta"] = "oauth-2025-04-20";
+      // 구독(OAuth) 경로는 Claude Code 시스템 프리픽스가 필수
+      system = [
+        { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+        ...(req.system ? [{ type: "text", text: req.system }] : []),
+      ];
+    } else {
+      headers["x-api-key"] = apiKey;
     }
 
     let res: Response;
     try {
       res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
+        headers,
         body: JSON.stringify({
           model: req.model || "claude-sonnet-5",
           max_tokens: 8192,
           stream: true,
-          ...(req.system ? { system: req.system } : {}),
+          ...(system ? { system } : {}),
           ...(req.tools && req.tools.length ? { tools: req.tools } : {}),
           messages: this.toNative(req.transcript),
         }),

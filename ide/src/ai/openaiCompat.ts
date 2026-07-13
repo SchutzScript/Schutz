@@ -1,6 +1,6 @@
 import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
-  ProviderId, getStoredKey,
+  ProviderId, getStoredKey, getOAuth,
 } from "./provider";
 
 export interface CompatConfig {
@@ -22,6 +22,7 @@ export class OpenAICompatProvider implements AgentProvider {
   }
 
   isConfigured(): boolean {
+    if (this.cfg.id === "gpt" && getOAuth("codex")) return true;
     return getStoredKey(this.cfg.id).trim().length > 0;
   }
 
@@ -60,7 +61,11 @@ export class OpenAICompatProvider implements AgentProvider {
   async *streamAgentTurn(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
     const apiKey = getStoredKey(this.cfg.id).trim();
     if (!apiKey) {
-      yield { type: "error", message: `${this.label} API 키가 설정되지 않았습니다.` };
+      if (this.cfg.id === "gpt" && getOAuth("codex")) {
+        yield { type: "error", message: "ChatGPT 계정은 연결되었지만, 구독 토큰을 통한 GPT 추론 연동은 다음 업데이트에서 활성화됩니다. 당분간 GPT는 API 키로 사용해주세요." };
+      } else {
+        yield { type: "error", message: `${this.label} API 키가 설정되지 않았습니다.` };
+      }
       yield { type: "done" };
       return;
     }

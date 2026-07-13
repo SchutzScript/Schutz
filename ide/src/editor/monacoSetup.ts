@@ -45,6 +45,28 @@ monaco.editor.defineTheme("feldgrau", {
   },
 });
 
+monaco.editor.defineTheme("schutz-paper", {
+  base: "vs",
+  inherit: true,
+  rules: [
+    { token: "", foreground: "333632" },
+    { token: "keyword", foreground: "9A6A2E" },
+    { token: "string", foreground: "3E7D4E" },
+    { token: "number", foreground: "3E7D4E" },
+    { token: "type", foreground: "3E6D7D" },
+    { token: "comment", foreground: "8A8D86", fontStyle: "italic" },
+  ],
+  colors: {
+    "editor.background": "#FBFAF7",
+    "editor.foreground": "#333632",
+    "editorLineNumber.foreground": "#C0C2BA",
+    "editorLineNumber.activeForeground": "#6B706A",
+    "editorCursor.foreground": "#5F7565",
+    "editor.selectionBackground": "#5F756533",
+    "editor.lineHighlightBackground": "#EFEDE780",
+  },
+});
+
 export function languageOf(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {

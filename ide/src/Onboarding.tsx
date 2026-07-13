@@ -1,5 +1,5 @@
 import React from "react";
-import { setStoredKey } from "./ai/provider";
+import { setStoredKey, getOAuth, setOAuth } from "./ai/provider";
 import { testProvider } from "./ai/registry";
 import { setThemeId, applyTheme, THEME_TOKENS } from "./theme";
 
@@ -54,6 +54,12 @@ interface S {
   manager: string | null;
   cli: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliChecked: boolean;
+  /** 앱 내 OAuth 로그인 진행 상태 */
+  pasteFor: string | null;
+  pasteVal: string;
+  oauthWait: boolean;
+  oauthMsg: string;
+  oauthTick: number;
 }
 
 export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
@@ -72,10 +78,49 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     },
     manager: "claude",
     cli: {}, cliChecked: false,
+    pasteFor: null, pasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
   };
 
+  private _oauthOff: (() => void) | null = null;
+
+  /** [계정으로 로그인] — 브라우저 OAuth 승인 플로우 시작 */
+  async startOauth(id: string) {
+    if (!window.schutz) { this.setState({ oauthMsg: "데스크톱 앱에서만 로그인할 수 있습니다." }); return; }
+    this.setState({ oauthMsg: "", pasteFor: null, oauthWait: id === "codex" });
+    const r = await window.schutz.oauthStart(id);
+    if (!r.ok) { this.setState({ oauthMsg: r.message ?? "로그인 시작 실패", oauthWait: false }); return; }
+    if (r.mode === "paste") this.setState({ pasteFor: id, pasteVal: "" });
+  }
+
+  /** (Claude) 승인 코드 붙여넣기 → 토큰 교환 */
+  async submitPaste() {
+    const id = this.state.pasteFor;
+    if (!id || !window.schutz) return;
+    const r = await window.schutz.oauthExchange(id, this.state.pasteVal);
+    if (r.ok && r.access) {
+      setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000 });
+      this.setState(st => ({ pasteFor: null, pasteVal: "", oauthMsg: "", oauthTick: st.oauthTick + 1 }));
+    } else {
+      this.setState({ oauthMsg: r.message ?? "코드 교환 실패" });
+    }
+  }
+
   componentDidMount() {
+    applyTheme(this.state.theme);
     void this.detectCli();
+    if (window.schutz) {
+      this._oauthOff = window.schutz.onOauthResult(line => {
+        try {
+          const r = JSON.parse(line);
+          if (r.provider && r.ok && r.access) {
+            setOAuth(r.provider, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000 });
+            this.setState(st => ({ oauthWait: false, oauthMsg: "", oauthTick: st.oauthTick + 1 }));
+          } else if (r.provider) {
+            this.setState({ oauthWait: false, oauthMsg: r.message ?? "로그인 실패" });
+          }
+        } catch { /* ignore */ }
+      });
+    }
   }
 
   async detectCli() {
@@ -85,7 +130,11 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   }
 
   qt(fn: () => void, ms: number) { this._timers.push(setTimeout(fn, ms)); }
-  componentWillUnmount() { this._timers.forEach(clearTimeout); }
+  componentWillUnmount() {
+    this._timers.forEach(clearTimeout);
+    this._oauthOff?.();
+    this._oauthOff = null;
+  }
 
   go(step: number) { this.setState({ step: Math.max(1, Math.min(6, step)) }); }
 
@@ -109,7 +158,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const labels = ["환영", "가져오기", "외형", "AI 연결", "자율성", "완료"];
 
     return (
-      <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "radial-gradient(800px 500px at 50% -10%,rgba(125,145,131,.1),transparent 60%),#0C0E0D", color: "#D5DAD5", fontFamily: "'SUIT Variable',sans-serif", fontSize: 13, overflow: "hidden" }}>
+      <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "radial-gradient(800px 500px at 50% -10%,rgba(125,145,131,.12),transparent 60%),var(--bg-root)", color: "#D5DAD5", fontFamily: "'SUIT Variable',sans-serif", fontSize: 13, overflow: "hidden" }}>
 
         {/* top: logo + step dots + skip */}
         <div style={{ flex: "none", height: 60, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, position: "relative" }}>
@@ -123,7 +172,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           ))}
           <div style={{ position: "absolute", right: 24 }}>
             {s.step < 6 && (
-              <button className="obGhostTxt" onClick={() => this.setState({ step: 6, theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13, importFrom: "fresh", keymap: "intellij", policy: "manual" })}
+              <button className="obGhostTxt" onClick={() => { this.setState({ step: 6, theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13, importFrom: "fresh", keymap: "intellij", policy: "manual" }); setThemeId("feldgrau"); applyTheme("feldgrau"); }}
                 style={{ height: 26, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>기본값으로 건너뛰기</button>
             )}
           </div>
@@ -248,16 +297,15 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             <div style={{ display: "flex", gap: 8 }}>
               {Object.entries(THEMES).map(([k, t]) => {
                 const sel = s.theme === k;
-                const ready = k !== "paper";
                 return (
-                  <div key={k} className="obCard" onClick={() => ready && this.setState({ theme: k })}
+                  <div key={k} className="obCard" onClick={() => { this.setState({ theme: k }); setThemeId(k); applyTheme(k); }}
                     style={{ flex: 1, cursor: "pointer", borderRadius: 10, border: `1.5px solid ${sel ? "#8FA893" : "rgba(255,255,255,.08)"}`, background: sel ? "rgba(143,168,147,.08)" : "#151917", padding: "9px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ display: "flex", gap: 3 }}>
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.bg }} />
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.accent }} />
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.chrome }} />
                     </div>
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: sel ? "#D5DAD5" : "#8B948C" }}>{t.name}{k === "paper" ? " · 준비 중" : ""}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 600, color: sel ? "#D5DAD5" : "#8B948C" }}>{t.name}</span>
                   </div>
                 );
               })}
@@ -290,7 +338,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
             <button className="hv05" onClick={() => this.go(2)} style={backBtn}>이전</button>
             <button className="hvAccent" onClick={() => this.go(4)} style={nextBtn}>다음</button>
-            <button className="obGhostTxt" onClick={() => this.setState({ theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13 })}
+            <button className="obGhostTxt" onClick={() => { this.setState({ theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13 }); setThemeId("feldgrau"); applyTheme("feldgrau"); }}
               style={{ height: 36, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "#5A635C", background: "transparent", border: "none" }}>기본값으로</button>
           </div>
         </div>
@@ -386,33 +434,50 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                   </button>
                 </div>
                 {c.on && (p.id === "claude" || p.id === "gpt") && (() => {
-                  const cliId = p.id === "claude" ? "claude" : "codex";
-                  const subName = p.id === "claude" ? "Claude Pro/Max 구독" : "ChatGPT 구독 (Codex)";
-                  const install = p.id === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex";
-                  const a = s.cli[cliId];
-                  const ok = !!a?.ok;
+                  const oid = p.id === "claude" ? "claude" : "codex";
+                  const subName = p.id === "claude" ? "Claude Pro/Max 구독" : "ChatGPT Plus/Pro 구독";
+                  const connected = !!getOAuth(oid);
                   return (
-                    <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: ok ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${ok ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
+                    <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: connected ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${connected ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: ok ? "#8BB292" : "#5A635C", flex: "none" }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: ok ? "#9DC4A3" : "#8B948C" }}>
-                          {subName} {ok ? "· 감지됨" : s.cliChecked ? "· 미감지" : "· 확인 중…"}
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#8BB292" : "#5A635C", flex: "none" }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: connected ? "#9DC4A3" : "#8B948C" }}>
+                          {subName} {connected ? "· 계정 연결됨" : "· 미연결"}
                         </span>
-                        {ok && <span style={{ fontSize: 10, color: "#8B948C", fontFamily: MONO }}>{a!.version}</span>}
                         <div style={{ flex: 1 }} />
-                        {window.schutz && (
-                          <button className="obBright" onClick={() => window.schutz!.cliLogin(cliId)}
-                            style={{ height: 24, padding: "0 12px", fontSize: 10.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#0C0E0D", background: "#8FA893", border: "none" }}>로그인</button>
+                        {connected ? (
+                          <button className="obGhostTxt" onClick={() => { setOAuth(oid, null); this.setState(st => ({ oauthTick: st.oauthTick + 1 })); }}
+                            style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>연결 해제</button>
+                        ) : (
+                          <button className="obBright" onClick={() => void this.startOauth(oid)}
+                            style={{ height: 26, padding: "0 14px", fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#0C0E0D", background: "#8FA893", border: "none" }}>
+                            {p.name} 계정으로 로그인
+                          </button>
                         )}
-                        <button className="obGhostTxt" onClick={() => void this.detectCli()}
-                          style={{ height: 24, padding: "0 9px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
                       </div>
-                      <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 5, lineHeight: 1.6 }}>
-                        {ok
-                          ? (a!.hasConfig
-                            ? "기존 환경 감지 — 설정·이전 세션을 그대로 이어서 사용합니다. API 키 불필요."
-                            : "감지됨 — [로그인]을 눌러 계정 인증을 완료하세요 (브라우저가 열립니다).")
-                          : <>구독으로 쓰려면 설치 후 [로그인]: <span style={{ fontFamily: MONO, color: "#8B948C" }}>{install}</span></>}
+                      {!connected && s.pasteFor === oid && (
+                        <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
+                          <input value={s.pasteVal} placeholder="브라우저 승인 후 표시된 코드를 붙여넣으세요"
+                            onChange={e => this.setState({ pasteVal: e.target.value })}
+                            onKeyDown={e => { if (e.key === "Enter") void this.submitPaste(); }}
+                            style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid rgba(143,168,147,.35)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
+                          <button className="obBright" onClick={() => void this.submitPaste()}
+                            style={{ height: 30, padding: "0 13px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#0C0E0D", background: "#8FA893", border: "none" }}>연결</button>
+                        </div>
+                      )}
+                      {!connected && oid === "codex" && s.oauthWait && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 9, fontSize: 11, color: "#8B948C" }}>
+                          <span style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid rgba(143,168,147,.25)", borderTopColor: "#8FA893", animation: "szSpin .9s linear infinite" }} />
+                          브라우저에서 승인하면 자동으로 연결됩니다…
+                        </div>
+                      )}
+                      {s.oauthMsg && s.pasteFor !== "done" && (
+                        <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6 }}>⚠️ {s.oauthMsg}</div>
+                      )}
+                      <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 6, lineHeight: 1.6 }}>
+                        {connected
+                          ? "구독 계정으로 사용합니다 — API 키가 필요 없고, 아래 키 입력은 선택사항입니다."
+                          : "버튼을 누르면 브라우저에서 공식 로그인 페이지가 열립니다. 승인하면 이 앱이 구독 계정으로 연결됩니다."}
                       </div>
                     </div>
                   );

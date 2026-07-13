@@ -35,6 +35,19 @@ contextBridge.exposeInMainWorld("schutz", {
   /** Claude Code CLI 턴 실행 */
   cliRun: (opts) => ipcRenderer.send("schutz:cliRun", opts),
   cliStop: () => ipcRenderer.send("schutz:cliStop"),
+  /** 앱 내 직접 OAuth — 브라우저 승인 플로우 시작 */
+  oauthStart: (id) => ipcRenderer.invoke("schutz:oauthStart", id),
+  /** (claude) 승인 코드 붙여넣기 → 토큰 교환 */
+  oauthExchange: (id, code) => ipcRenderer.invoke("schutz:oauthExchange", id, code),
+  /** 토큰 갱신 */
+  oauthRefresh: (id, refreshToken) => ipcRenderer.invoke("schutz:oauthRefresh", id, refreshToken),
+  /** (codex) 로컬 콜백 자동 로그인 결과 구독 */
+  onOauthResult: (cb) => {
+    const h = (_e, line) => cb(line);
+    ipcRenderer.on("schutz:oauthResult", h);
+    return () => ipcRenderer.removeListener("schutz:oauthResult", h);
+  },
+
   onCliEvent: (cb) => {
     const h = (_e, line) => cb(line);
     ipcRenderer.on("schutz:cliEvent", h);

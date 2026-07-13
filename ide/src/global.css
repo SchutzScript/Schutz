@@ -1,4 +1,4 @@
-:root { --bg-root:#0C0E0D; --bg-panel:#101312; --bg-editor:#0E100F; --bg-card:#151917; --bg-dock:#0A0C0B; --bg-popup:#181C1A; --bd-popup:#2A302C; --fg:#D5DAD5; --fg-code:#C4CBC4; --fg-sub:#9AA59C; --fg-sub2:#8B948C; --fg-dim:#5A635C; --fg-dim2:#4B534D; --fg-dim3:#3A403C; --accent:#8FA893; --accent-hi:#A9BCA9; }
+:root { --on-accent:#0C0E0D; --w03:rgba(255,255,255,.03); --w04:rgba(255,255,255,.04); --w05:rgba(255,255,255,.05); --w06:rgba(255,255,255,.06); --w07:rgba(255,255,255,.07); --w08:rgba(255,255,255,.08); --w10:rgba(255,255,255,.1); --w12:rgba(255,255,255,.12); --w14:rgba(255,255,255,.14); --bg-root:#0C0E0D; --bg-panel:#101312; --bg-editor:#0E100F; --bg-card:#151917; --bg-dock:#0A0C0B; --bg-popup:#181C1A; --bd-popup:#2A302C; --fg:#D5DAD5; --fg-code:#C4CBC4; --fg-sub:#9AA59C; --fg-sub2:#8B948C; --fg-dim:#5A635C; --fg-dim2:#4B534D; --fg-dim3:#3A403C; --accent:#8FA893; --accent-hi:#A9BCA9; }
 html, body { margin: 0; height: 100%; background: var(--bg-root); }
 * { box-sizing: border-box; }
 #root { height: 100%; }
@@ -6,7 +6,7 @@ a { color: #93A896; text-decoration: none; }
 a:hover { color: #B2C4B4; }
 ::selection { background: rgba(125, 145, 131, .28); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .08); border-radius: 6px; }
+::-webkit-scrollbar-thumb { background: var(--w08); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .15); }
 ::-webkit-scrollbar-corner { background: transparent; }
 @keyframes szSpin { to { transform: rotate(360deg); } }
@@ -17,26 +17,26 @@ input::placeholder { color: #4B534D; }
 button { white-space: nowrap; flex: none; }
 
 /* hover utilities (프로토타입 style-hover 치환) */
-.hv06:hover { background: rgba(255, 255, 255, .06); }
-.hv07:hover { background: rgba(255, 255, 255, .07); }
-.hv05:hover { background: rgba(255, 255, 255, .05); }
-.hv04:hover { background: rgba(255, 255, 255, .04); }
-.hv02:hover { background: rgba(255, 255, 255, .02); }
-.hv08:hover { background: rgba(255, 255, 255, .08); }
+.hv06:hover { background: var(--w06); }
+.hv07:hover { background: var(--w07); }
+.hv05:hover { background: var(--w05); }
+.hv04:hover { background: var(--w04); }
+.hv02:hover { background: var(--w03); }
+.hv08:hover { background: var(--w08); }
 .hvMenuItem:hover { background: rgba(143, 168, 147, .14); }
 .hvAccent:hover { background: var(--accent-hi) !important; }
 .hvGreen:hover { background: rgba(139, 178, 146, .12); }
 .hvGreen2:hover { background: rgba(139, 178, 146, .2); }
 .hvRed:hover { background: rgba(201, 123, 123, .12); }
 .hvRed2:hover { background: rgba(201, 123, 123, .16); }
-.hvMenuBtn:hover { background: rgba(255, 255, 255, .06); color: #D5DAD5 !important; }
-.hvDim:hover { background: rgba(255, 255, 255, .07); color: #9AA59C !important; }
-.hvHead:hover { color: #8B948C !important; }
-.hvTermTab:hover { color: #D5DAD5 !important; }
+.hvMenuBtn:hover { background: var(--w06); color: var(--fg) !important; }
+.hvDim:hover { background: var(--w07); color: var(--fg-sub) !important; }
+.hvHead:hover { color: var(--fg-sub2) !important; }
+.hvTermTab:hover { color: var(--fg) !important; }
 
 /* 온보딩 hover */
 .obCard:hover { border-color: rgba(143, 168, 147, .6) !important; }
-.obGhostTxt:hover { color: #9AA59C !important; }
+.obGhostTxt:hover { color: var(--fg-sub) !important; }
 .obBright:hover { filter: brightness(1.12); }
 .obDanger:hover { color: #CE9A9A !important; }
 .obMgrBtn:hover { border-color: #8FA893 !important; }
