@@ -37,10 +37,16 @@ function createWindow(layout) {
   });
 
   const q = layout ? "?layout=" + layout : "";
-  if (isDev) {
-    win.loadURL(DEV_URL + q);
-  } else {
+  const loadDist = () =>
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"), layout ? { search: "layout=" + layout } : undefined);
+  if (isDev) {
+    // dev 서버가 죽어 있으면 빈 창 대신 빌드본으로 폴백
+    win.webContents.once("did-fail-load", (_e, code) => {
+      if (code === -102 /* CONNECTION_REFUSED */ || code === -105 || code === -106) void loadDist();
+    });
+    win.loadURL(DEV_URL + q).catch(() => void loadDist());
+  } else {
+    void loadDist();
   }
 
   // 외부 링크는 기본 브라우저로
