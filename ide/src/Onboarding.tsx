@@ -1,6 +1,7 @@
 import React from "react";
 import { setStoredKey } from "./ai/provider";
 import { testProvider } from "./ai/registry";
+import { setThemeId, applyTheme, THEME_TOKENS } from "./theme";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
 
@@ -51,7 +52,8 @@ interface S {
   fontSize: number;
   conn: Record<string, ConnState>;
   manager: string | null;
-  cli: { checked: boolean; ok: boolean; version: string };
+  cli: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
+  cliChecked: boolean;
 }
 
 export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
@@ -69,7 +71,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
       glm: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
     },
     manager: "claude",
-    cli: { checked: false, ok: false, version: "" },
+    cli: {}, cliChecked: false,
   };
 
   componentDidMount() {
@@ -77,9 +79,9 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   }
 
   async detectCli() {
-    if (!window.schutz) { this.setState({ cli: { checked: true, ok: false, version: "" } }); return; }
+    if (!window.schutz) { this.setState({ cliChecked: true }); return; }
     const r = await window.schutz.cliCheck();
-    this.setState({ cli: { checked: true, ok: r.ok, version: r.version ?? "" } });
+    this.setState({ cli: r.agents ?? {}, cliChecked: true });
   }
 
   qt(fn: () => void, ms: number) { this._timers.push(setTimeout(fn, ms)); }
@@ -246,15 +248,16 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             <div style={{ display: "flex", gap: 8 }}>
               {Object.entries(THEMES).map(([k, t]) => {
                 const sel = s.theme === k;
+                const ready = k !== "paper";
                 return (
-                  <div key={k} className="obCard" onClick={() => this.setState({ theme: k })}
+                  <div key={k} className="obCard" onClick={() => ready && this.setState({ theme: k })}
                     style={{ flex: 1, cursor: "pointer", borderRadius: 10, border: `1.5px solid ${sel ? "#8FA893" : "rgba(255,255,255,.08)"}`, background: sel ? "rgba(143,168,147,.08)" : "#151917", padding: "9px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ display: "flex", gap: 3 }}>
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.bg }} />
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.accent }} />
                       <span style={{ width: 14, height: 14, borderRadius: 4, background: t.chrome }} />
                     </div>
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: sel ? "#D5DAD5" : "#8B948C" }}>{t.name}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 600, color: sel ? "#D5DAD5" : "#8B948C" }}>{t.name}{k === "paper" ? " · 준비 중" : ""}</span>
                   </div>
                 );
               })}
@@ -382,26 +385,40 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                     <span style={{ position: "absolute", top: 2.5, left: c.on ? 20.5 : 2.5, width: 17, height: 17, borderRadius: "50%", background: c.on ? "#0C0E0D" : "#8B948C", transition: "left .25s ease" }} />
                   </button>
                 </div>
-                {c.on && p.id === "claude" && (
-                  <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: s.cli.ok ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${s.cli.ok ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.cli.ok ? "#8BB292" : "#5A635C", flex: "none" }} />
-                      <span style={{ fontSize: 12, fontWeight: 700, color: s.cli.ok ? "#9DC4A3" : "#8B948C" }}>
-                        {s.cli.ok ? "구독 계정 인증 감지됨" : s.cli.checked ? "구독 인증 미감지" : "구독 인증 확인 중…"}
-                      </span>
-                      {s.cli.ok && <span style={{ fontSize: 10, color: "#8B948C", fontFamily: MONO }}>{s.cli.version}</span>}
-                      <div style={{ flex: 1 }} />
-                      {!s.cli.ok && s.cli.checked && (
+                {c.on && (p.id === "claude" || p.id === "gpt") && (() => {
+                  const cliId = p.id === "claude" ? "claude" : "codex";
+                  const subName = p.id === "claude" ? "Claude Pro/Max 구독" : "ChatGPT 구독 (Codex)";
+                  const install = p.id === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex";
+                  const a = s.cli[cliId];
+                  const ok = !!a?.ok;
+                  return (
+                    <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: ok ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${ok ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: ok ? "#8BB292" : "#5A635C", flex: "none" }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: ok ? "#9DC4A3" : "#8B948C" }}>
+                          {subName} {ok ? "· 감지됨" : s.cliChecked ? "· 미감지" : "· 확인 중…"}
+                        </span>
+                        {ok && <span style={{ fontSize: 10, color: "#8B948C", fontFamily: MONO }}>{a!.version}</span>}
+                        <div style={{ flex: 1 }} />
+                        {window.schutz && (
+                          <button className="obBright" onClick={() => window.schutz!.cliLogin(cliId)}
+                            style={{ height: 24, padding: "0 12px", fontSize: 10.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#0C0E0D", background: "#8FA893", border: "none" }}>로그인</button>
+                        )}
                         <button className="obGhostTxt" onClick={() => void this.detectCli()}
-                          style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
-                      )}
+                          style={{ height: 24, padding: "0 9px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 5, lineHeight: 1.6 }}>
+                        {ok
+                          ? (a!.hasConfig
+                            ? "기존 환경 감지 — 설정·이전 세션을 그대로 이어서 사용합니다. API 키 불필요."
+                            : "감지됨 — [로그인]을 눌러 계정 인증을 완료하세요 (브라우저가 열립니다).")
+                          : <>구독으로 쓰려면 설치 후 [로그인]: <span style={{ fontFamily: MONO, color: "#8B948C" }}>{install}</span></>}
+                      </div>
                     </div>
-                    <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 5, lineHeight: 1.6 }}>
-                      {s.cli.ok
-                        ? "Claude Pro/Max 구독으로 사용합니다 — API 키가 필요 없고, 아래 키 입력은 선택사항입니다."
-                        : <>Claude 구독(Pro/Max)으로 쓰려면 Claude Code를 설치·로그인하세요: 터미널에서 <span style={{ fontFamily: MONO, color: "#8B948C" }}>npm i -g @anthropic-ai/claude-code</span> 후 <span style={{ fontFamily: MONO, color: "#8B948C" }}>claude</span> 실행 → 로그인 → [다시 감지]</>}
-                    </div>
-                  </div>
+                  );
+                })()}
+                {c.on && (p.id === "grok" || p.id === "glm") && (
+                  <div style={{ marginTop: 10, fontSize: 10.5, color: "#5A635C" }}>구독 CLI 미제공 — API 키 방식만 지원됩니다.</div>
                 )}
                 {c.on && (
                   <div style={{ marginTop: 12 }}>
@@ -511,6 +528,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           <button className="hv05" onClick={() => this.go(5)} style={{ ...backBtn, height: 38 }}>이전</button>
           <button className="hvAccent" onClick={() => {
             try { localStorage.setItem("schutz.manager", this.state.manager ?? "claude"); } catch { /* ignore */ }
+            const themeId = THEME_TOKENS[this.state.theme] ? this.state.theme : "feldgrau";
+            setThemeId(themeId); applyTheme(themeId);
             this.props.onFinish();
           }}
             style={{ height: 38, display: "flex", alignItems: "center", padding: "0 30px", fontSize: 13, fontWeight: 700, borderRadius: 9, color: "#0C0E0D", background: "#8FA893", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Schutz 시작 →</button>

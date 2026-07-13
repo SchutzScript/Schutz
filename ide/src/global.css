@@ -1,4 +1,5 @@
-html, body { margin: 0; height: 100%; background: #0C0E0D; }
+:root { --bg-root:#0C0E0D; --bg-panel:#101312; --bg-editor:#0E100F; --bg-card:#151917; --bg-dock:#0A0C0B; --bg-popup:#181C1A; --bd-popup:#2A302C; --fg:#D5DAD5; --fg-code:#C4CBC4; --fg-sub:#9AA59C; --fg-sub2:#8B948C; --fg-dim:#5A635C; --fg-dim2:#4B534D; --fg-dim3:#3A403C; --accent:#8FA893; --accent-hi:#A9BCA9; }
+html, body { margin: 0; height: 100%; background: var(--bg-root); }
 * { box-sizing: border-box; }
 #root { height: 100%; }
 a { color: #93A896; text-decoration: none; }
@@ -23,7 +24,7 @@ button { white-space: nowrap; flex: none; }
 .hv02:hover { background: rgba(255, 255, 255, .02); }
 .hv08:hover { background: rgba(255, 255, 255, .08); }
 .hvMenuItem:hover { background: rgba(143, 168, 147, .14); }
-.hvAccent:hover { background: #A9BCA9 !important; }
+.hvAccent:hover { background: var(--accent-hi) !important; }
 .hvGreen:hover { background: rgba(139, 178, 146, .12); }
 .hvGreen2:hover { background: rgba(139, 178, 146, .2); }
 .hvRed:hover { background: rgba(201, 123, 123, .12); }

@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  AGDEF, MENUS, PROJECTS, TM, TY, MD,
+  AGDEF, MENUS, TM, TY, MD,
   freshDocs, hunkDefs,
   DocLine, AgentState, PlanItem, ToolItem, ReviewFile, ChatMsg,
 } from "./ide/data";
@@ -15,6 +15,7 @@ import {
 import { PROVIDERS_MAP, testProvider, getManagerId } from "./ai/registry";
 import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey } from "./ai/provider";
 import { MonacoPane } from "./editor/MonacoPane";
+import { applyTheme, getThemeId } from "./theme";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
 interface Proposal {
@@ -66,9 +67,8 @@ interface S {
   testMsg: Record<string, string>;
   /** 에디터 분할 수 (1 | 2 | 4) */
   layout: number;
-  /** Claude Code CLI(구독 인증) 감지 결과 */
-  cliOk: boolean;
-  cliVersion: string;
+  /** 구독 CLI 에이전트 감지 결과 (claude/codex) */
+  cliAgents: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliBusy: boolean;
 }
 
@@ -106,8 +106,15 @@ export class App extends React.Component<{}, S> {
       const v = m ? parseInt(m[1], 10) : 4;
       return v === 1 || v === 2 ? v : 4;
     })(),
-    cliOk: false, cliVersion: "", cliBusy: false,
+    cliAgents: {}, cliBusy: false,
   };
+
+  /** 구독 CLI 재감지 */
+  async detectCli() {
+    if (!window.schutz) return;
+    const r = await window.schutz.cliCheck();
+    this.setState({ cliAgents: r.agents ?? {} });
+  }
 
   async testConn(id: string) {
     this.setState(st => ({ testMsg: { ...st.testMsg, [id]: "확인 중…" } }));
@@ -121,6 +128,7 @@ export class App extends React.Component<{}, S> {
   /** CLI 세션 id (멀티턴 --resume) */
   private _cliSession: string | null = null;
   private _cliMsgId: string | null = null;
+  private _cliAgentKey = "claude";
 
   /** Electron 셸 시작 + 출력 구독 (최초 1회) */
   ensureTerm() {
@@ -412,8 +420,12 @@ export class App extends React.Component<{}, S> {
 
   send() {
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
-    // 1순위: Claude Code CLI(구독 인증, 키 불필요) — 데스크톱 전용
-    if (window.schutz && this.state.cliOk) { this.runCliTurn(t); return; }
+    // 1순위: 구독 CLI (claude → codex), 키 불필요 — 데스크톱 전용
+    if (window.schutz) {
+      const ca = this.state.cliAgents;
+      if (ca.claude?.ok) { this.runCliTurn("claude", t); return; }
+      if (ca.codex?.ok) { this.runCliTurn("codex", t); return; }
+    }
     // 2순위: API 키 프로바이더
     if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
     // 데스크톱 앱: 데모 대신 연결 안내 (데모는 웹 프리뷰 전용)
@@ -623,21 +635,26 @@ export class App extends React.Component<{}, S> {
   }
 
   /** Claude Code CLI(구독 인증) 턴 — 편집은 CLI가 직접 수행(acceptEdits), 종료 후 트리·페인 갱신 */
-  runCliTurn(text: string) {
+  runCliTurn(agent: string, text: string, cont = false) {
     if (this.state.cliBusy || !window.schutz) return;
     const aiId = "a" + (this._uid++);
     this._cliMsgId = aiId;
+    const agentKey = agent === "codex" ? "gpt" : "claude";
+    const who = agent === "codex" ? "Codex · 구독" : "Claude · 구독";
+    this._cliAgentKey = agentKey;
     this.setState(s => ({
       running: true, cliBusy: true, statusKey: "tool", input: "",
-      agents: { ...s.agents, claude: { ...s.agents.claude, status: "edit" } },
+      agents: { ...s.agents, [agentKey]: { ...s.agents[agentKey], status: "edit" } },
       messages: [...s.messages,
         { id: "u" + (this._uid++), role: "user" as const, text },
-        { id: aiId, role: "ai" as const, who: "Claude · 구독(CLI)", text: "", streaming: true }],
+        { id: aiId, role: "ai" as const, who, text: "", streaming: true }],
     }));
     window.schutz.cliRun({
+      agent,
       cwd: this.state.workspace?.root,
       prompt: text,
-      resume: this._cliSession ?? undefined,
+      resume: cont ? undefined : this._cliSession ?? undefined,
+      continue: cont,
     });
   }
 
@@ -675,14 +692,24 @@ export class App extends React.Component<{}, S> {
       }
       return;
     }
+    if (ev.type === "schutz_raw") {
+      // codex 등 비-claude CLI: ANSI 제거한 원문 스트림
+      const clean = String(ev.text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+      if (clean.trim() && aiId) {
+        const cur = this.state.messages.find(m => m.id === aiId)?.text ?? "";
+        this.setMsg(aiId, { text: cur ? cur + "\n" + clean : clean });
+      }
+      return;
+    }
     if (ev.type === "schutz_stderr") return; // 진행 로그는 무시
     if (ev.type === "schutz_error") { append("⚠️ " + ev.message); }
     if (ev.type === "schutz_exit" || ev.type === "schutz_error") {
       if (aiId) this.setMsg(aiId, { streaming: false });
       this._cliMsgId = null;
+      const ak = this._cliAgentKey;
       this.setState(s => ({
         running: false, cliBusy: false, statusKey: "idle",
-        agents: { ...s.agents, claude: { ...s.agents.claude, status: "idle" } },
+        agents: { ...s.agents, [ak]: { ...s.agents[ak], status: "idle" } },
       }));
       // CLI가 파일을 직접 수정했을 수 있음 → 트리·열린 페인 리로드
       void this.refreshWorkspace();
@@ -717,12 +744,11 @@ export class App extends React.Component<{}, S> {
   }
 
   componentDidMount() {
+    applyTheme(getThemeId());
     // 데스크톱 앱: 데모 없이 빈 상태에서 시작 + Claude Code CLI(구독 인증) 감지
     if (window.schutz) {
       this.setState({ panes: [], leftTab: "tree" });
-      void window.schutz.cliCheck().then(r => {
-        if (r.ok) this.setState({ cliOk: true, cliVersion: r.version ?? "" });
-      });
+      void this.detectCli();
       this._cliOff = window.schutz.onCliEvent(line => this.handleCliEvent(line));
       return;
     }
@@ -762,7 +788,7 @@ export class App extends React.Component<{}, S> {
     if (!text) return "";
     if (md) {
       if (/^#/.test(text)) return <span style={{ color: "#93A896", fontWeight: 600 }}>{text}</span>;
-      const base = /^\|/.test(text) ? "#9AA59C" : "#C4CBC4";
+      const base = /^\|/.test(text) ? "var(--fg-sub)" : "var(--fg-code)";
       const parts = text.split(/(`[^`]+`)/g);
       return parts.map((p, i) => <span key={i} style={{ color: p.startsWith("`") ? "#8BB292" : base }}>{p}</span>);
     }
@@ -808,7 +834,7 @@ export class App extends React.Component<{}, S> {
       if (!include[i]) { prevIncluded = false; return; }
       if (!prevIncluded && rows.length) rows.push({ key: "sep" + i, sep: true });
       prevIncluded = true;
-      let sign = " ", bg = "transparent", color = "#8B948C", signColor = "transparent";
+      let sign = " ", bg = "transparent", color = "var(--fg-sub2)", signColor = "transparent";
       if (l.kind === "removed") { sign = "−"; bg = "rgba(201,123,123,.1)"; color = "#C99A9A"; signColor = "#C97B7B"; }
       else if (marked[i]) { sign = "+"; bg = "rgba(139,178,146,.09)"; color = "#B7CBBA"; signColor = "#8BB292"; }
       rows.push({
@@ -837,41 +863,45 @@ export class App extends React.Component<{}, S> {
     const closeMenus = () => this.setState({ openMenu: null, projOpen: false });
 
     return (
-      <div style={{ height: "100vh", minWidth: 1400, display: "flex", flexDirection: "column", background: "#0C0E0D", color: "#D5DAD5", fontFamily: SUIT, fontSize: 13, overflow: "hidden" }}>
+      <div style={{ height: "100vh", minWidth: 1400, display: "flex", flexDirection: "column", background: "var(--bg-root)", color: "var(--fg)", fontFamily: SUIT, fontSize: 13, overflow: "hidden" }}>
         {anyMenuOpen && <div onClick={closeMenus} style={{ position: "fixed", inset: 0, zIndex: 40 }} />}
         {this.renderSettings()}
 
         {/* ══ Header ══ */}
-        <div style={{ flex: "none", height: 46, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", background: "#101312", borderBottom: "1px solid rgba(255,255,255,.06)", position: "relative", zIndex: 50 }}>
+        <div style={{ flex: "none", height: 46, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid rgba(255,255,255,.06)", position: "relative", zIndex: 50 }}>
           <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block" }} />
 
           {/* project switcher */}
           <div style={{ position: "relative" }}>
             <button className="hv06" onClick={() => this.setState(st => ({ projOpen: !st.projOpen, openMenu: null }))}
-              style={{ height: 28, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: "#D5DAD5", background: s.projOpen ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 7, cursor: "pointer" }}>
-              {s.workspace ? s.workspace.name : "schutz-core"}
-              <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#8B948C", fontWeight: 400, fontFamily: MONO, background: "rgba(255,255,255,.05)", borderRadius: 4, padding: "2px 7px 2px 5px" }}>
-                <GitBranchIcon />feature/token-refresh
-              </span>
-              <span style={{ fontSize: 8, color: "#5A635C" }}>▾</span>
+              style={{ height: 28, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: "var(--fg)", background: s.projOpen ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 7, cursor: "pointer" }}>
+              {s.workspace ? s.workspace.name : (window.schutz ? "프로젝트 열기" : "schutz-core")}
+              {s.workspace?.branch && (
+                <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--fg-sub2)", fontWeight: 400, fontFamily: MONO, background: "rgba(255,255,255,.05)", borderRadius: 4, padding: "2px 7px 2px 5px" }}>
+                  <GitBranchIcon />{s.workspace.branch}
+                </span>
+              )}
+              <span style={{ fontSize: 8, color: "var(--fg-dim)" }}>▾</span>
             </button>
             {s.projOpen && (
-              <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "#181C1A", border: "1px solid #2A302C", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 6, zIndex: 100 }}>
-                <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "#5A635C" }}>프로젝트</div>
-                {PROJECTS.map(pj => (
-                  <div key={pj.key} className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}>
-                    <span style={{ flex: "none", width: 20, height: 20, borderRadius: 5, background: pj.hue, color: "#0C0E0D", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{pj.init}</span>
+              <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 6, zIndex: 100 }}>
+                <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>프로젝트</div>
+                {s.workspace ? (
+                  <div className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}>
+                    <span style={{ flex: "none", width: 20, height: 20, borderRadius: 5, background: "var(--accent)", color: "var(--bg-root)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{s.workspace.name.slice(0, 1).toUpperCase()}</span>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12, color: "#D5DAD5" }}>{pj.name}</div>
-                      <div style={{ fontSize: 10, color: "#5A635C", fontFamily: MONO }}>{pj.path}</div>
+                      <div style={{ fontSize: 12, color: "var(--fg)" }}>{s.workspace.name}</div>
+                      <div style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 180 }}>{s.workspace.root}</div>
                     </div>
                     <div style={{ flex: 1 }} />
-                    {pj.current && <span style={{ fontSize: 11, color: "#8FA893" }}>✓</span>}
+                    <span style={{ fontSize: 11, color: "var(--accent)" }}>✓</span>
                   </div>
-                ))}
+                ) : (
+                  <div style={{ padding: "4px 8px 8px", fontSize: 11, color: "var(--fg-dim2)" }}>열린 프로젝트가 없습니다.</div>
+                )}
                 <div style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "5px 6px" }} />
-                <div className="hv05" onClick={() => void this.openProject()} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "#9AA59C" }}>
-                  프로젝트 열기…<div style={{ flex: 1 }} /><span style={{ fontSize: 10.5, color: "#5A635C", fontFamily: MONO }}>⇧⌘O</span>
+                <div className="hv05" onClick={() => void this.openProject()} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "var(--fg-sub)" }}>
+                  프로젝트 열기…<div style={{ flex: 1 }} /><span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>⇧⌘O</span>
                 </div>
               </div>
             )}
@@ -889,11 +919,11 @@ export class App extends React.Component<{}, S> {
                     className="hvMenuBtn"
                     onClick={() => this.setState(st => ({ openMenu: st.openMenu === k ? null : k, projOpen: false }))}
                     onMouseEnter={() => this.setState(st => (st.openMenu && st.openMenu !== k) ? { openMenu: k } as any : null)}
-                    style={{ height: 26, padding: "0 10px", fontFamily: "inherit", fontSize: 12, color: open ? "#D5DAD5" : "#8B948C", background: open ? "rgba(255,255,255,.07)" : "transparent", border: "none", borderRadius: 6, cursor: "pointer" }}>
+                    style={{ height: 26, padding: "0 10px", fontFamily: "inherit", fontSize: 12, color: open ? "var(--fg)" : "var(--fg-sub2)", background: open ? "rgba(255,255,255,.07)" : "transparent", border: "none", borderRadius: 6, cursor: "pointer" }}>
                     {label}
                   </button>
                   {open && (
-                    <div style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "#181C1A", border: "1px solid #2A302C", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 5, zIndex: 100 }}>
+                    <div style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,.55)", padding: 5, zIndex: 100 }}>
                       {items.map((it, i) => it === null
                         ? <div key={"s" + i} style={{ height: 1, background: "rgba(255,255,255,.07)", margin: "4px 6px" }} />
                         : (
@@ -908,9 +938,9 @@ export class App extends React.Component<{}, S> {
                               this.setState({ openMenu: null });
                             }}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-                            <span style={{ color: "#C4CBC4" }}>{it[0]}</span>
+                            <span style={{ color: "var(--fg-code)" }}>{it[0]}</span>
                             <div style={{ flex: 1 }} />
-                            <span style={{ color: "#5A635C", fontSize: 10.5, fontFamily: MONO }}>{it[1]}</span>
+                            <span style={{ color: "var(--fg-dim)", fontSize: 10.5, fontFamily: MONO }}>{it[1]}</span>
                           </div>
                         ))}
                     </div>
@@ -926,26 +956,26 @@ export class App extends React.Component<{}, S> {
           <button className="hv07" title="디버그 (⌃D)" style={iconBtn}><DebugIcon /></button>
           <button className="hv07" title="알림" style={{ ...iconBtn, position: "relative" }}><BellIcon /></button>
           <span style={{ width: 1, height: 16, background: "rgba(255,255,255,.08)" }} />
-          <span style={{ fontSize: 12, color: "#8B948C", whiteSpace: "nowrap" }}>{statusLabel}</span>
+          <span style={{ fontSize: 12, color: "var(--fg-sub2)", whiteSpace: "nowrap" }}>{statusLabel}</span>
           <span style={{ width: 1, height: 16, background: "rgba(255,255,255,.08)" }} />
-          <span style={{ fontFamily: MONO, fontSize: 11, color: "#5A635C", whiteSpace: "nowrap" }}>Σ 입력 {totIn.toLocaleString()} · 출력 {totOut.toLocaleString()} · {costText}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Σ 입력 {totIn.toLocaleString()} · 출력 {totOut.toLocaleString()} · {costText}</span>
         </div>
 
         {/* progress beam */}
         <div style={{ flex: "none", height: 2.5, background: "#141715" }}>
-          <div style={{ height: "100%", width: beamW, opacity: beamOp, background: "linear-gradient(90deg,#4D5D53,#7D9183,#A9BCA9)", transition: "width .5s ease,opacity .8s ease" }} />
+          <div style={{ height: "100%", width: beamW, opacity: beamOp, background: "linear-gradient(90deg,#4D5D53,#7D9183,var(--accent-hi))", transition: "width .5s ease,opacity .8s ease" }} />
         </div>
 
         {/* ══ Main ══ */}
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
 
           {/* tool rail */}
-          <div style={{ flex: "none", width: 42, background: "#101312", borderRight: "1px solid rgba(255,255,255,.06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
+          <div style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid rgba(255,255,255,.06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
             <button className="hv07" title="프로젝트" onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: !flow ? "rgba(143,168,147,.16)" : "transparent" }}>
-              <FolderIcon color={!flow ? "#A9BCA9" : "#6E776F"} />
+              <FolderIcon color={!flow ? "var(--accent-hi)" : "#6E776F"} />
             </button>
             <button className="hv07" title="작업 흐름" onClick={() => this.setState({ leftTab: "flow" })} style={{ ...railBtn, background: flow ? "rgba(143,168,147,.16)" : "transparent" }}>
-              <FlowIcon color={flow ? "#A9BCA9" : "#6E776F"} />
+              <FlowIcon color={flow ? "var(--accent-hi)" : "#6E776F"} />
             </button>
             <div style={{ width: 22, height: 1, background: "rgba(255,255,255,.07)", margin: "4px 0" }} />
             <button className="hv07" title="버전 관리" style={railBtn}><VcsIcon /></button>
@@ -957,8 +987,8 @@ export class App extends React.Component<{}, S> {
           </div>
 
           {/* ── Left column ── */}
-          <div style={{ flex: "none", width: 272, display: "flex", flexDirection: "column", borderRight: "1px solid rgba(255,255,255,.06)", background: "#101312" }}>
-            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C" }}>{flow ? "작업 흐름" : "프로젝트"}</div>
+          <div style={{ flex: "none", width: 272, display: "flex", flexDirection: "column", borderRight: "1px solid rgba(255,255,255,.06)", background: "var(--bg-panel)" }}>
+            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{flow ? "작업 흐름" : "프로젝트"}</div>
 
             {flow ? this.renderFlow() : this.renderTree()}
             {this.renderChat()}
@@ -970,7 +1000,7 @@ export class App extends React.Component<{}, S> {
           </div>
 
           {/* ── Right column ── */}
-          <div style={{ flex: "none", width: 336, display: "flex", flexDirection: "column", borderLeft: "1px solid rgba(255,255,255,.06)", background: "#101312" }}>
+          <div style={{ flex: "none", width: 336, display: "flex", flexDirection: "column", borderLeft: "1px solid rgba(255,255,255,.06)", background: "var(--bg-panel)" }}>
             {this.renderAgents()}
             {this.renderReview()}
           </div>
@@ -980,20 +1010,19 @@ export class App extends React.Component<{}, S> {
         {s.termOpen && this.renderTerm()}
 
         {/* ══ Status bar ══ */}
-        <div style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "#101312", borderTop: "1px solid rgba(255,255,255,.06)", fontSize: 11, color: "#5A635C" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "#8B948C" }}>
-            <GitBranchIcon size={10} sw={1.6} />feature/token-refresh
-          </span>
-          <span style={{ color: "#8BB292" }}>✓ 문제 없음</span>
-          <span style={{ color: pendingFiles > 0 ? "#CCB491" : "#5A635C" }}>{pendingFiles > 0 ? "검토 대기 " + pendingFiles + "개 파일" : "변경 없음"}</span>
+        <div style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "var(--bg-panel)", borderTop: "1px solid rgba(255,255,255,.06)", fontSize: 11, color: "var(--fg-dim)" }}>
+          {s.workspace?.branch && (
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)" }}>
+              <GitBranchIcon size={10} sw={1.6} />{s.workspace.branch}
+            </span>
+          )}
+          <span style={{ color: pendingFiles > 0 ? "#CCB491" : "var(--fg-dim)" }}>{pendingFiles > 0 ? "검토 대기 " + pendingFiles + "개 파일" : "변경 없음"}</span>
           <div style={{ flex: 1 }} />
           <span>에이전트 {AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length + "/" + AGDEF.length + " 활성"}</span>
           <span style={{ fontFamily: MONO }}>{costText}</span>
           <span style={{ width: 1, height: 13, background: "rgba(255,255,255,.07)" }} />
-          <span style={{ fontFamily: MONO }}>Ln 24:5</span>
-          <span style={{ fontFamily: MONO }}>UTF-8 · LF · TypeScript</span>
           <button className="hv08" onClick={() => this.toggleTerm()}
-            style={{ height: 19, padding: "0 8px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.termOpen ? "#A9BCA9" : "#5A635C", background: s.termOpen ? "rgba(143,168,147,.14)" : "transparent", border: "none" }}>
+            style={{ height: 19, padding: "0 8px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.termOpen ? "var(--accent-hi)" : "var(--fg-dim)", background: s.termOpen ? "rgba(143,168,147,.14)" : "transparent", border: "none" }}>
             <TermStatusIcon />터미널
           </button>
         </div>
@@ -1004,30 +1033,30 @@ export class App extends React.Component<{}, S> {
   // ── 좌 패널: 작업 흐름 ──
   renderFlow() {
     const s = this.state;
-    const planIcon: Record<string, [string, string]> = { pending: ["○", "#4B534D"], done: ["✓", "#8BB292"], stopped: ["–", "#C97B7B"] };
+    const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "#8BB292"], stopped: ["–", "#C97B7B"] };
     return (
       <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 14px 14px", position: "relative", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
         <div style={{ position: "absolute", left: 21, top: 0, bottom: 0, width: 2, background: "linear-gradient(180deg,#3B463F,#7D9183,#3B463F)", opacity: .4 }} />
         {s.plan.length === 0 && (
-          <div style={{ position: "relative", paddingLeft: 22, fontSize: 12, color: "#4B534D", marginTop: 8 }}>요청을 보내면 계획과 실행 과정이 이곳에 기록됩니다.</div>
+          <div style={{ position: "relative", paddingLeft: 22, fontSize: 12, color: "var(--fg-dim2)", marginTop: 8 }}>요청을 보내면 계획과 실행 과정이 이곳에 기록됩니다.</div>
         )}
         {s.plan.length > 0 && (
           <div style={{ position: "relative", marginTop: 6 }}>
-            <span style={{ position: "absolute", left: 4, top: 8, width: 8, height: 8, borderRadius: "50%", background: "#8FA893" }} />
-            <div style={{ marginLeft: 22, background: "#151917", border: "1px solid rgba(255,255,255,.06)", borderRadius: 10, padding: "10px 12px" }}>
+            <span style={{ position: "absolute", left: 4, top: 8, width: 8, height: 8, borderRadius: "50%", background: "var(--accent)" }} />
+            <div style={{ marginLeft: 22, background: "var(--bg-card)", border: "1px solid rgba(255,255,255,.06)", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "#5A635C" }}>계획</span>
-                <span style={{ fontSize: 10, color: "#8FA893", background: "rgba(143,168,147,.1)", borderRadius: 3, padding: "0 6px", lineHeight: "15px" }}>Claude · 관리자</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>계획</span>
+                <span style={{ fontSize: 10, color: "var(--accent)", background: "rgba(143,168,147,.1)", borderRadius: 3, padding: "0 6px", lineHeight: "15px" }}>Claude · 관리자</span>
               </div>
               {s.plan.map(p => {
-                const [icon, iconColor] = planIcon[p.st] || ["○", "#4B534D"];
+                const [icon, iconColor] = planIcon[p.st] || ["○", "var(--fg-dim2)"];
                 const d = this.agDef(p.agent);
-                const labelColor = p.st === "done" ? "#535B55" : p.st === "active" ? "#D5DAD5" : p.st === "stopped" ? "#B98A8A" : "#8B948C";
+                const labelColor = p.st === "done" ? "#535B55" : p.st === "active" ? "var(--fg)" : p.st === "stopped" ? "#B98A8A" : "var(--fg-sub2)";
                 return (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2.5px 0" }}>
                     <span style={{ flex: "none", width: 13, height: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {p.st === "active"
-                        ? <span style={spinner("#8FA893", "rgba(143,168,147,.25)")} />
+                        ? <span style={spinner("var(--accent)", "rgba(143,168,147,.25)")} />
                         : <span style={{ fontSize: 10.5, color: iconColor }}>{icon}</span>}
                     </span>
                     <span style={{ fontSize: 11.5, color: labelColor, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
@@ -1047,10 +1076,10 @@ export class App extends React.Component<{}, S> {
               <div style={{ marginLeft: 22, display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
                 <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, padding: "0 6px", lineHeight: "16px", borderRadius: 3, color: t.verb === "편집" ? "#CCB491" : "#A3B5A6", background: t.verb === "편집" ? "rgba(196,168,130,.1)" : "rgba(125,145,131,.12)" }}>{t.verb}</span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: "#9AA59C", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.path.split("/").pop()}</span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-sub)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.path.split("/").pop()}</span>
                 <div style={{ flex: 1 }} />
                 {t.st === "run"
-                  ? <span style={{ ...spinner("#8FA893", "rgba(143,168,147,.25)"), flex: "none" }} />
+                  ? <span style={{ ...spinner("var(--accent)", "rgba(143,168,147,.25)"), flex: "none" }} />
                   : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55" }}>{t.note || "완료"}</span>}
               </div>
             </div>
@@ -1067,9 +1096,9 @@ export class App extends React.Component<{}, S> {
     if (window.schutz && !s.workspace) {
       return (
         <div style={{ flex: 1.15, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, borderBottom: "1px solid rgba(255,255,255,.06)", padding: "0 20px" }}>
-          <span style={{ fontSize: 12, color: "#5A635C", textAlign: "center", lineHeight: 1.7 }}>아직 열린 프로젝트가 없습니다.</span>
+          <span style={{ fontSize: 12, color: "var(--fg-dim)", textAlign: "center", lineHeight: 1.7 }}>아직 열린 프로젝트가 없습니다.</span>
           <button className="hvAccent" onClick={() => void this.openProject()}
-            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>프로젝트 열기…</button>
+            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>프로젝트 열기…</button>
         </div>
       );
     }
@@ -1078,14 +1107,14 @@ export class App extends React.Component<{}, S> {
       const ws = s.workspace;
       return (
         <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
-          <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "#5A635C" }}>{ws.name.toUpperCase()}</div>
+          <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{ws.name.toUpperCase()}</div>
           {ws.entries.map(en => {
             const pad = 16 + en.depth * 14;
             if (en.dir) {
               return (
                 <div key={en.rel} style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px` }}>
-                  <span style={{ flex: "none", fontSize: 9, color: "#5A635C", width: 8 }}>▾</span>
-                  <span style={{ fontSize: 12, color: "#8B948C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+                  <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}>▾</span>
+                  <span style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
                 </div>
               );
             }
@@ -1095,13 +1124,13 @@ export class App extends React.Component<{}, S> {
               <div key={en.rel} className="hv04" onClick={() => this.openFile(en.rel)}
                 style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
                 <span style={{ flex: "none", fontSize: 9, width: 8 }}></span>
-                <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "#D5DAD5" : "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+                <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
                 <div style={{ flex: 1 }} />
                 {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
               </div>
             );
           })}
-          {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "#4B534D" }}>… 항목이 많아 일부만 표시합니다</div>}
+          {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "var(--fg-dim2)" }}>… 항목이 많아 일부만 표시합니다</div>}
         </div>
       );
     }
@@ -1114,8 +1143,8 @@ export class App extends React.Component<{}, S> {
       return (
         <div key={path} className="hv04" onClick={() => this.openFile(path)}
           style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
-          <span style={{ flex: "none", fontSize: 9, color: "#5A635C", width: 8 }}></span>
-          <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "#D5DAD5" : "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+          <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}></span>
+          <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
           <div style={{ flex: 1 }} />
           {lock && (
             <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, color: lock.color, border: `1px solid ${lock.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>
@@ -1128,8 +1157,8 @@ export class App extends React.Component<{}, S> {
     };
     const dirRow = (key: string, name: string, pad: number) => (
       <div key={key} style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "default" }}>
-        <span style={{ flex: "none", fontSize: 9, color: "#5A635C", width: 8 }}>▾</span>
-        <span style={{ fontSize: 12, color: "#8B948C" }}>{name}</span>
+        <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}>▾</span>
+        <span style={{ fontSize: 12, color: "var(--fg-sub2)" }}>{name}</span>
       </div>
     );
     const plainRow = (key: string, name: string, pad: number) => (
@@ -1140,7 +1169,7 @@ export class App extends React.Component<{}, S> {
     );
     return (
       <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
-        <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "#5A635C" }}>SCHUTZ-CORE</div>
+        <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>SCHUTZ-CORE</div>
         {dirRow("d1", "src", 16)}
         {dirRow("d2", "auth", 30)}
         {fileRow(TM, "token-manager.ts", 44)}
@@ -1159,9 +1188,14 @@ export class App extends React.Component<{}, S> {
     const s = this.state;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C" }}>
+        <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           대화
           <div style={{ flex: 1 }} />
+          {window.schutz && s.cliAgents.claude?.ok && s.workspace && !s.running && (
+            <button className="hv05" title="이 폴더의 최근 Claude 세션을 이어서 진행"
+              onClick={() => this.runCliTurn("claude", "직전 작업을 이어서 계속 진행해줘.", true)}
+              style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontWeight: 500, letterSpacing: 0, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--accent)", background: "rgba(143,168,147,.08)", border: "1px solid rgba(143,168,147,.3)" }}>↻ 이어가기</button>
+          )}
           {s.running && (
             <button className="hvRed2" onClick={() => this.stopRun()}
               style={{ height: 22, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 500, letterSpacing: 0, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#C98A8A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.3)" }}>
@@ -1172,27 +1206,27 @@ export class App extends React.Component<{}, S> {
         <div ref={el => { this._chat = el; }} style={{ flex: 1, overflowY: "auto", padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
           {s.messages.map(m => (
             <div key={m.id} style={{ display: "flex", gap: 8 }}>
-              <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "#8FA893" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
+              <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
               <div style={{ minWidth: 0 }}>
-                {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: "#8FA893", marginBottom: 2 }}>{m.who}</div>}
-                <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", color: m.role === "user" ? "#E0E5E0" : "#8B948C", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
+                {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: "var(--accent)", marginBottom: 2 }}>{m.who}</div>}
+                <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", color: m.role === "user" ? "#E0E5E0" : "var(--fg-sub2)", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
                   {m.text}
-                  {m.streaming && <span style={{ display: "inline-block", width: 2, height: 12, marginLeft: 2, background: "#8FA893", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+                  {m.streaming && <span style={{ display: "inline-block", width: 2, height: 12, marginLeft: 2, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
                 </div>
               </div>
             </div>
           ))}
         </div>
         <div style={{ flex: "none", padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,#8FA893,#4D5D53)" : "rgba(255,255,255,.1)", transition: "background .4s ease" }}>
+          <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#4D5D53)" : "rgba(255,255,255,.1)", transition: "background .4s ease" }}>
             <input value={s.input}
               onChange={e => this.setState({ input: e.target.value })}
               onKeyDown={e => { if (e.key === "Enter") this.send(); }}
               placeholder="에이전트 팀에게 작업 요청 (Enter)"
-              style={{ width: "100%", background: "#0C0E0D", border: "none", borderRadius: 8.5, height: 34, padding: "0 13px", color: "#D5DAD5", fontSize: 12.5, fontFamily: SUIT, outline: "none", display: "block" }} />
+              style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, height: 34, padding: "0 13px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none", display: "block" }} />
           </div>
           <button className="hvAccent" onClick={() => this.send()}
-            style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "#0C0E0D", background: "#8FA893", border: "none", fontWeight: 700 }}>↑</button>
+            style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "var(--bg-root)", background: "var(--accent)", border: "none", fontWeight: 700 }}>↑</button>
         </div>
       </div>
     );
@@ -1217,14 +1251,14 @@ export class App extends React.Component<{}, S> {
     return slots.map((path, si) => {
       if (!path) {
         return (
-          <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "#0E100F" }}>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "#3A403C" }}>
+          <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--fg-dim3)" }}>
               {window.schutz && !s.workspace ? (
                 <>
                   <img src="./assets/logo-t.png" alt="" style={{ width: 40, height: 40, opacity: .25 }} />
-                  <span style={{ fontSize: 12, color: "#5A635C" }}>프로젝트를 열어 시작하세요</span>
+                  <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>프로젝트를 열어 시작하세요</span>
                   <button className="hvAccent" onClick={() => void this.openProject()}
-                    style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>폴더 열기</button>
+                    style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>폴더 열기</button>
                 </>
               ) : (
                 <>
@@ -1241,14 +1275,14 @@ export class App extends React.Component<{}, S> {
       if (s.workspace && !s.docs[path]) {
         const dirty = s.paneDirty[path];
         return (
-          <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "#0E100F" }}>
+          <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
             <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 9, padding: "0 14px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
-              <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: dirty ? "#CCB491" : "#4B534D" }} />
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+              <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: dirty ? "#CCB491" : "var(--fg-dim2)" }} />
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
               <div style={{ flex: 1 }} />
               <span style={{ flex: "none", display: "flex", alignItems: "center", height: 19, padding: "0 8px", borderRadius: 10, fontSize: 10.5, whiteSpace: "nowrap", color: dirty ? "#CCB491" : "#535B55", background: dirty ? "rgba(196,168,130,.1)" : "rgba(255,255,255,.04)" }}>{dirty ? "수정됨" : "✓"}</span>
               {n > 1 && (
-                <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
+                <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
               )}
             </div>
             <MonacoPane
@@ -1283,10 +1317,10 @@ export class App extends React.Component<{}, S> {
       let num = 0;
 
       return (
-        <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "#0E100F" }}>
+        <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
           <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 9, padding: "0 14px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
-            <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: this.agentColorFor(path) || "#4B534D" }} />
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: "#9AA59C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+            <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: this.agentColorFor(path) || "var(--fg-dim2)" }} />
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
             {lock && (
               <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: lock.color, border: `1px solid ${lock.color}50`, borderRadius: 4, padding: "0 6px", lineHeight: "16px" }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: lock.color, animation: "szPulse 1.1s ease-in-out infinite" }} />{lock.name} 작업 중
@@ -1295,7 +1329,7 @@ export class App extends React.Component<{}, S> {
             <div style={{ flex: 1 }} />
             <span style={{ flex: "none", display: "flex", alignItems: "center", height: 19, padding: "0 8px", borderRadius: 10, fontSize: 10.5, whiteSpace: "nowrap", color: inspColor, background: inspBg }}>{inspText}</span>
             {n > 1 && (
-              <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
+              <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
             )}
           </div>
           <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
@@ -1315,9 +1349,9 @@ export class App extends React.Component<{}, S> {
                 const hk = l.hunk!;
                 return (
                   <div key={l.id} style={{ position: "relative", display: "flex", alignItems: "flex-start", minHeight: 20, background: rowBg, transition: "background .7s ease" }}>
-                    <div style={{ flex: "none", width: 46, textAlign: "right", paddingRight: 10, fontSize: 10.5, lineHeight: "20px", color: l.kind === "base" ? "#3A403C" : "#8B948C", userSelect: "none" }}>{removed ? "" : String(num)}</div>
+                    <div style={{ flex: "none", width: 46, textAlign: "right", paddingRight: 10, fontSize: 10.5, lineHeight: "20px", color: l.kind === "base" ? "var(--fg-dim3)" : "var(--fg-sub2)", userSelect: "none" }}>{removed ? "" : String(num)}</div>
                     <div style={{ flex: "none", width: 2.5, borderRadius: 2, alignSelf: "stretch", margin: "1px 0", background: barColor }} />
-                    <div style={{ paddingLeft: 14, whiteSpace: "pre", lineHeight: "20px", fontSize: 12, color: "#C4CBC4", textDecoration: removed ? "line-through" : "none", opacity: removed ? 0.5 : 1 }}>
+                    <div style={{ paddingLeft: 14, whiteSpace: "pre", lineHeight: "20px", fontSize: 12, color: "var(--fg-code)", textDecoration: removed ? "line-through" : "none", opacity: removed ? 0.5 : 1 }}>
                       {this.hl(l.text, isMd)}
                       {l.kind === "typing" && <span style={{ display: "inline-block", width: 2, height: 13, marginLeft: 1, background: agColor, verticalAlign: -2, animation: "szBlink 1s steps(1) infinite" }} />}
                       {chip && (
@@ -1325,7 +1359,7 @@ export class App extends React.Component<{}, S> {
                       )}
                     </div>
                     {actions && (
-                      <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "#181C1A", border: "1px solid #2A302C", borderRadius: 8, padding: "2px 3px", boxShadow: "0 5px 16px rgba(0,0,0,.5)" }}>
+                      <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "0 5px 16px rgba(0,0,0,.5)" }}>
                         <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#9DC4A3", background: "transparent", border: "none" }}>✓ 수락</button>
                         <div style={{ width: 1, height: 12, background: "rgba(255,255,255,.1)" }} />
                         <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>✕ 거절</button>
@@ -1344,13 +1378,13 @@ export class App extends React.Component<{}, S> {
   // ── 우 패널: 에이전트 ──
   renderAgents() {
     const s = this.state;
-    const astMap: Record<string, [string, string]> = { idle: ["대기", "#5A635C"], plan: ["계획 수립 중", "#A3B5A6"], edit: ["작업 중", "#A3B5A6"], review: ["완료 · 검토 대기", "#C4A882"], stop: ["중지됨", "#C98A8A"] };
+    const astMap: Record<string, [string, string]> = { idle: ["대기", "var(--fg-dim)"], plan: ["계획 수립 중", "#A3B5A6"], edit: ["작업 중", "#A3B5A6"], review: ["완료 · 검토 대기", "#C4A882"], stop: ["중지됨", "#C98A8A"] };
     return (
       <div style={{ flex: "none", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
         <div className="hvHead" onClick={() => this.setState(st => ({ agentsOpen: !st.agentsOpen }))}
-          style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C", cursor: "pointer", userSelect: "none" }}>
+          style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", cursor: "pointer", userSelect: "none" }}>
           <span style={{ fontSize: 8.5, width: 10 }}>{s.agentsOpen ? "▾" : "▸"}</span>에이전트
-          <span style={{ fontSize: 10.5, fontWeight: 400, letterSpacing: 0, color: "#4B534D" }}>{s.agentsOpen ? "동시 작업 · 파일 락 격리" : ""}</span>
+          <span style={{ fontSize: 10.5, fontWeight: 400, letterSpacing: 0, color: "var(--fg-dim2)" }}>{s.agentsOpen ? "동시 작업 · 파일 락 격리" : ""}</span>
         </div>
         {s.agentsOpen && (
           <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1358,19 +1392,19 @@ export class App extends React.Component<{}, S> {
               const a = s.agents[d.id];
               const [stText, stColor] = astMap[a.status];
               return (
-                <div key={d.id} style={{ background: "#151917", border: "1px solid rgba(255,255,255,.06)", borderRadius: 10, padding: "9px 12px", borderLeft: `3px solid ${d.color}` }}>
+                <div key={d.id} style={{ background: "var(--bg-card)", border: "1px solid rgba(255,255,255,.06)", borderRadius: 10, padding: "9px 12px", borderLeft: `3px solid ${d.color}` }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "#D5DAD5" }}>{d.name}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "#8B948C", background: "rgba(255,255,255,.05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{d.model}</span>
-                    {d.mgr && <span style={{ fontSize: 9.5, color: "#0C0E0D", background: d.color, borderRadius: 3, padding: "0 5px", lineHeight: "15px", fontWeight: 700 }}>관리자</span>}
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "rgba(255,255,255,.05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{d.model}</span>
+                    {d.mgr && <span style={{ fontSize: 9.5, color: "var(--bg-root)", background: d.color, borderRadius: 3, padding: "0 5px", lineHeight: "15px", fontWeight: 700 }}>관리자</span>}
                     <div style={{ flex: 1 }} />
                     {(a.status === "edit" || a.status === "plan") && <span style={{ ...spinner(d.color, d.color + "40"), flex: "none" }} />}
                     <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: stColor }}>{stText}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: a.file ? d.color : "#3A403C", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file ?? "—"}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: a.file ? d.color : "var(--fg-dim3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file ?? "—"}</span>
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "#5A635C", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "#8B948C" }}>${a.cost.toFixed(3)}</span></span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>${a.cost.toFixed(3)}</span></span>
                   </div>
                 </div>
               );
@@ -1392,33 +1426,33 @@ export class App extends React.Component<{}, S> {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C" }}>변경 검토</span>
-          {s.proposals.length > 0 && <span style={{ fontSize: 10.5, color: "#8B948C", background: "rgba(255,255,255,.06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.proposals.length}</span>}
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>변경 검토</span>
+          {s.proposals.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "rgba(255,255,255,.06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.proposals.length}</span>}
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "#4B534D", padding: "6px 2px" }}>Claude에게 작업을 요청하면 편집 제안이 여기에 표시됩니다.</div>}
+          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>Claude에게 작업을 요청하면 편집 제안이 여기에 표시됩니다.</div>}
           {pending > 1 && (
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>모두 수락</button>
-              <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>모두 거절</button>
+              <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>모두 수락</button>
+              <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>모두 거절</button>
             </div>
           )}
           {s.proposals.map(p => {
             const [sl, sc] = pstMap[p.status];
             return (
-              <div key={p.id} style={{ position: "relative", background: "#151917", border: "1px solid rgba(255,255,255,.07)", borderRadius: 10, overflow: "hidden" }}>
-                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#8FA893", zIndex: 2 }} />
+              <div key={p.id} style={{ position: "relative", background: "var(--bg-card)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 10, overflow: "hidden" }}>
+                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "var(--accent)", zIndex: 2 }} />
                 <div style={{ padding: "10px 13px 9px 16px" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: "#D5DAD5", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
-                    <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "#8FA893", border: `1px solid ${(this.agDef(p.agent)?.color ?? "#8FA893") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
+                    <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "var(--accent)", border: `1px solid ${(this.agDef(p.agent)?.color ?? "var(--accent)") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: sc }}>{sl}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: "#8B948C", marginTop: 4 }}>{p.rationale}</div>
+                  <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.rationale}</div>
                   {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
                 </div>
-                <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", background: "#0E100F", maxHeight: 180, overflow: "auto", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
+                <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", background: "var(--bg-editor)", maxHeight: 180, overflow: "auto", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
                   {p.find.split("\n").map((l, i) => (
                     <div key={"o" + i} style={{ display: "flex", background: "rgba(201,123,123,.1)" }}>
                       <span style={{ flex: "none", width: 16, textAlign: "center", color: "#C97B7B", userSelect: "none" }}>−</span>
@@ -1457,17 +1491,17 @@ export class App extends React.Component<{}, S> {
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div onClick={() => this.setState(st => ({ reviewOpen: !st.reviewOpen }))}
           style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", cursor: "pointer", userSelect: "none" }}>
-          <span style={{ fontSize: 8.5, width: 10, color: "#5A635C" }}>{s.reviewOpen ? "▾" : "▸"}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C" }}>변경 검토</span>
-          {s.files.length > 0 && <span style={{ fontSize: 10.5, color: "#8B948C", background: "rgba(255,255,255,.06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.files.length}</span>}
+          <span style={{ fontSize: 8.5, width: 10, color: "var(--fg-dim)" }}>{s.reviewOpen ? "▾" : "▸"}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>변경 검토</span>
+          {s.files.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "rgba(255,255,255,.06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.files.length}</span>}
         </div>
         {s.reviewOpen && (
           <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {s.files.length === 0 && <div style={{ fontSize: 12, color: "#4B534D", padding: "6px 2px" }}>검토할 변경이 없습니다.</div>}
+            {s.files.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>검토할 변경이 없습니다.</div>}
             {pendingFiles > 0 && (
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="hvAccent" onClick={() => this.resolveAll(true)} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>모두 수락</button>
-                <button className="hv05" onClick={() => this.resolveAll(false)} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>모두 거절</button>
+                <button className="hvAccent" onClick={() => this.resolveAll(true)} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>모두 수락</button>
+                <button className="hv05" onClick={() => this.resolveAll(false)} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>모두 거절</button>
               </div>
             )}
             {s.files.map(f => {
@@ -1477,13 +1511,13 @@ export class App extends React.Component<{}, S> {
               const tot = Math.max(f.add + f.del, 1);
               const expanded = s.expanded === f.path;
               return (
-                <div key={f.path} style={{ position: "relative", background: "#151917", border: `1px solid ${expanded ? d.color + "60" : "rgba(255,255,255,.07)"}`, borderRadius: 10, overflow: "hidden" }}>
+                <div key={f.path} style={{ position: "relative", background: "var(--bg-card)", border: `1px solid ${expanded ? d.color + "60" : "rgba(255,255,255,.07)"}`, borderRadius: 10, overflow: "hidden" }}>
                   <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: d.color, zIndex: 2 }} />
                   <div className="hv02" onClick={() => this.setState(st => ({ expanded: st.expanded === f.path ? null : f.path }))} style={{ padding: "11px 13px 11px 16px", cursor: "pointer" }}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                      <span style={{ fontSize: 9, color: "#5A635C" }}>{expanded ? "▾" : "▸"}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 12.5, color: "#D5DAD5", whiteSpace: "nowrap" }}>{name}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 10.5, color: "#4B534D", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{seg.join("/") + "/"}</span>
+                      <span style={{ fontSize: 9, color: "var(--fg-dim)" }}>{expanded ? "▾" : "▸"}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)", whiteSpace: "nowrap" }}>{name}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{seg.join("/") + "/"}</span>
                       <div style={{ flex: 1 }} />
                       <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
                     </div>
@@ -1499,9 +1533,9 @@ export class App extends React.Component<{}, S> {
                     </div>
                   </div>
                   {expanded && (
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", background: "#0E100F", maxHeight: 300, overflow: "auto" }}>
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", background: "var(--bg-editor)", maxHeight: 300, overflow: "auto" }}>
                       {this.diffRows(f.path).map(dd => dd.sep
-                        ? <div key={dd.key} style={{ fontFamily: MONO, fontSize: 10, lineHeight: "18px", color: "#4B534D", background: "#12151340", textAlign: "center", borderTop: "1px solid rgba(255,255,255,.04)", borderBottom: "1px solid rgba(255,255,255,.04)" }}>· · ·</div>
+                        ? <div key={dd.key} style={{ fontFamily: MONO, fontSize: 10, lineHeight: "18px", color: "var(--fg-dim2)", background: "#12151340", textAlign: "center", borderTop: "1px solid rgba(255,255,255,.04)", borderBottom: "1px solid rgba(255,255,255,.04)" }}>· · ·</div>
                         : (
                           <div key={dd.key} style={{ display: "flex", fontFamily: MONO, fontSize: 10.5, lineHeight: "19px", background: dd.bg }}>
                             <span style={{ flex: "none", width: 30, textAlign: "right", paddingRight: 5, color: "#49524B", userSelect: "none" }}>{dd.oldN}</span>
@@ -1511,7 +1545,7 @@ export class App extends React.Component<{}, S> {
                           </div>
                         ))}
                       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 12px", borderTop: "1px solid rgba(255,255,255,.05)" }}>
-                        <button className="hv05" onClick={e => { e.stopPropagation(); this.openFile(f.path); }} style={{ height: 23, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.12)" }}>에디터에서 열기</button>
+                        <button className="hv05" onClick={e => { e.stopPropagation(); this.openFile(f.path); }} style={{ height: 23, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid rgba(255,255,255,.12)" }}>에디터에서 열기</button>
                         <div style={{ flex: 1 }} />
                         {f.status === "pending" && (
                           <>
@@ -1534,7 +1568,7 @@ export class App extends React.Component<{}, S> {
   // ── 터미널 독 ──
   renderTerm() {
     const s = this.state;
-    const DIM = "#5A635C", TXT = "#C4CBC4", SUB = "#9AA59C", OK = "#8BB292", AC = "#8FA893";
+    const DIM = "var(--fg-dim)", TXT = "var(--fg-code)", SUB = "var(--fg-sub)", OK = "#8BB292", AC = "var(--accent)";
     let termLines: { key: string; segs: { t: string; c: string }[]; caret?: boolean }[];
     if (s.termTab === "term") termLines = [
       { key: "t1", segs: [{ t: "$ ", c: AC }, { t: "pnpm vitest run src/auth", c: TXT }] },
@@ -1572,25 +1606,25 @@ export class App extends React.Component<{}, S> {
     }
     const tabs: [string, string, string | null][] = [["term", "터미널", null], ["prob", "문제", "0"], ["out", "출력", null], ["ai", "AI 로그", null]];
     return (
-      <div style={{ flex: "none", height: 168, display: "flex", flexDirection: "column", background: "#0A0C0B", borderTop: "1px solid rgba(255,255,255,.07)" }}>
+      <div style={{ flex: "none", height: 168, display: "flex", flexDirection: "column", background: "var(--bg-dock)", borderTop: "1px solid rgba(255,255,255,.07)" }}>
         <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 10px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
           {tabs.map(([k, label, badge]) => (
             <button key={k} className="hvTermTab" onClick={() => this.setState({ termTab: k, termOpen: true }, () => this.ensureTerm())}
-              style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: s.termTab === k ? "#D5DAD5" : "#5A635C", background: s.termTab === k ? "rgba(255,255,255,.06)" : "transparent", border: "none" }}>
+              style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: s.termTab === k ? "var(--fg)" : "var(--fg-dim)", background: s.termTab === k ? "rgba(255,255,255,.06)" : "transparent", border: "none" }}>
               {label}
-              {badge && <span style={{ fontSize: 9.5, color: "#8B948C", background: "rgba(255,255,255,.07)", borderRadius: 7, padding: "0 5px", lineHeight: "13px" }}>{badge}</span>}
+              {badge && <span style={{ fontSize: 9.5, color: "var(--fg-sub2)", background: "rgba(255,255,255,.07)", borderRadius: 7, padding: "0 5px", lineHeight: "13px" }}>{badge}</span>}
             </button>
           ))}
           <div style={{ flex: 1 }} />
-          <button className="hvDim" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))} title="독 접기" style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "none" }}>⌄</button>
+          <button className="hvDim" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))} title="독 접기" style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>⌄</button>
         </div>
         {window.schutz && s.termTab === "term" ? (
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#C4CBC4" }}>
+            <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "var(--fg-code)" }}>
               {s.termReal || "셸을 시작하는 중…"}
             </div>
             <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "4px 16px 8px" }}>
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "#8FA893" }}>$</span>
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--accent)" }}>$</span>
               <input
                 value={s.termInput}
                 onChange={e => this.setState({ termInput: e.target.value })}
@@ -1601,7 +1635,7 @@ export class App extends React.Component<{}, S> {
                   }
                 }}
                 placeholder="명령 입력 (Enter)"
-                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#D5DAD5", fontFamily: MONO, fontSize: 11.5 }}
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "var(--fg)", fontFamily: MONO, fontSize: 11.5 }}
               />
             </div>
           </div>
@@ -1610,7 +1644,7 @@ export class App extends React.Component<{}, S> {
             {termLines.map(tl => (
               <div key={tl.key} style={{ whiteSpace: "pre-wrap" }}>
                 {tl.segs.map((sg, i) => <span key={i} style={{ color: sg.c }}>{sg.t}</span>)}
-                {tl.caret && <span style={{ display: "inline-block", width: 7, height: 12, background: "#8FA893", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+                {tl.caret && <span style={{ display: "inline-block", width: 7, height: 12, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
               </div>
             ))}
           </div>
@@ -1627,33 +1661,47 @@ export class App extends React.Component<{}, S> {
       <div onClick={() => this.setState({ settingsOpen: false })}
         style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div onClick={e => e.stopPropagation()}
-          style={{ width: 480, maxWidth: "92%", background: "#151917", border: "1px solid #2A302C", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.6)", padding: "18px 20px" }}>
+          style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "0 24px 64px rgba(0,0,0,.6)", padding: "18px 20px" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
             <span style={{ fontSize: 15, fontWeight: 700 }}>설정</span>
             <div style={{ flex: 1 }} />
             <button className="hvDim" onClick={() => this.setState({ settingsOpen: false })}
-              style={{ width: 24, height: 24, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>✕</button>
+              style={{ width: 24, height: 24, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
           </div>
           {window.schutz && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: s.cliOk ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${s.cliOk ? "rgba(143,168,147,.35)" : "rgba(255,255,255,.08)"}` }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.cliOk ? "#8BB292" : "#5A635C", flex: "none" }} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: s.cliOk ? "#D5DAD5" : "#8B948C" }}>
-                  Claude 구독 인증 {s.cliOk ? "· 연결됨" : "· 미감지"}
-                </div>
-                <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 1 }}>
-                  {s.cliOk
-                    ? `Claude Code(${s.cliVersion})의 계정 인증을 사용합니다 — API 키 불필요, 1순위로 사용됨`
-                    : "Claude Code CLI를 설치하고 로그인하면 API 키 없이 구독으로 사용할 수 있습니다"}
-                </div>
-              </div>
-              {!s.cliOk && (
-                <button className="hv05" onClick={() => void window.schutz!.cliCheck().then(r => this.setState({ cliOk: r.ok, cliVersion: r.version ?? "" }))}
-                  style={{ flex: "none", height: 26, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
-              )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>구독 계정 인증 (권장 · API 키 불필요)</div>
+              {[
+                { id: "claude", label: "Claude (Pro/Max 구독)", installHint: "npm i -g @anthropic-ai/claude-code" },
+                { id: "codex", label: "Codex (ChatGPT 구독)", installHint: "npm i -g @openai/codex" },
+              ].map(c => {
+                const a = s.cliAgents[c.id];
+                const ok = !!a?.ok;
+                return (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, background: ok ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${ok ? "rgba(143,168,147,.35)" : "rgba(255,255,255,.08)"}` }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: ok ? "#8BB292" : "var(--fg-dim)", flex: "none" }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: ok ? "var(--fg)" : "var(--fg-sub2)" }}>
+                        {c.label} {ok ? "· 감지됨" : "· 미감지"}
+                        {ok && <span style={{ fontSize: 10, color: "var(--fg-sub2)", fontFamily: MONO, marginLeft: 6 }}>{a!.version}</span>}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "var(--fg-dim)", marginTop: 1 }}>
+                        {ok
+                          ? (a!.hasConfig ? "기존 환경 감지 — 설정·세션을 그대로 이어서 사용합니다" : "감지됨 — [로그인]으로 계정 인증을 완료하세요")
+                          : `설치: ${c.installHint} → [로그인]`}
+                      </div>
+                    </div>
+                    <button className="hv05" onClick={() => window.schutz!.cliLogin(c.id)}
+                      style={{ flex: "none", height: 26, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#0C0E0D", background: "var(--accent)", border: "none", fontWeight: 600 }}>로그인</button>
+                    <button className="hv05" onClick={() => void this.detectCli()}
+                      style={{ flex: "none", height: 26, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--accent)", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10, color: "var(--fg-dim2)" }}>Grok·GLM은 구독 CLI가 없어 API 키 방식만 지원됩니다.</div>
             </div>
           )}
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C", marginBottom: 8 }}>AI 프로바이더 API 키 {window.schutz && s.cliOk ? "(선택 — 구독 인증이 우선)" : ""}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>AI 프로바이더 API 키 {window.schutz && (s.cliAgents.claude?.ok || s.cliAgents.codex?.ok) ? "(선택 — 구독 인증이 우선)" : ""}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {AGDEF.map(d => (
               <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -1663,21 +1711,21 @@ export class App extends React.Component<{}, S> {
                   defaultValue={getStoredKey(d.id as any)}
                   onChange={e => setStoredKey(d.id as any, e.target.value.trim())}
                   placeholder="API 키 (비우면 미사용)"
-                  style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 30, padding: "0 11px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
+                  style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
                 />
                 <button className="hv05" onClick={() => void this.testConn(d.id)}
-                  style={{ flex: "none", height: 30, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>테스트</button>
+                  style={{ flex: "none", height: 30, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--fg-sub)", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>테스트</button>
               </div>
             ))}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
             {AGDEF.filter(d => s.testMsg[d.id]).map(d => (
-              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "#8BB292" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "#8B948C" }}>
+              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "#8BB292" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "var(--fg-sub2)" }}>
                 {d.name}: {s.testMsg[d.id]}
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 10.5, color: "#4B534D", marginTop: 10, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", marginTop: 10, lineHeight: 1.6 }}>
             키는 이 기기(localStorage)에만 저장됩니다. [테스트]는 실제 API를 1회 호출해 연결을 검증합니다.
           </div>
         </div>

@@ -98,7 +98,14 @@ ipcMain.handle("schutz:readTree", async (_e, root) => {
     }
   }
   await walk(root, "", 0);
-  return { root, name: path.basename(root), entries, truncated: entries.length >= MAX_ENTRIES };
+  // 실제 git 브랜치 (.git/HEAD) — 없으면 null
+  let branch = null;
+  try {
+    const head = await fs.readFile(path.join(root, ".git", "HEAD"), "utf8");
+    const m = /ref: refs\/heads\/(.+)/.exec(head.trim());
+    branch = m ? m[1] : head.trim().slice(0, 8);
+  } catch { /* git 아님 */ }
+  return { root, name: path.basename(root), entries, branch, truncated: entries.length >= MAX_ENTRIES };
 });
 
 ipcMain.handle("schutz:readFile", async (_e, root, rel) => {
@@ -126,7 +133,24 @@ ipcMain.on("schutz:newWindow", () => {
 // ── Claude Code CLI 연동 (구독 계정 인증 사용, API 키 불필요) ──────────────
 const cliProcs = new Map(); // webContents.id → child
 
-let cliCmd = null; // 감지된 claude 실행 경로 (cliRun에서 재사용)
+const os = require("os");
+const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
+const APPDATA = process.env.APPDATA || "";
+
+// 구독 인증 CLI 에이전트 정의 — 각 벤더의 공식 에이전트를 그대로 구동한다 (권한·품질 무손실)
+const CLI_DEFS = {
+  claude: {
+    candidates: ["claude", `"${path.join(HOME, ".local", "bin", "claude.exe")}"`, `"${path.join(APPDATA, "npm", "claude.cmd")}"`],
+    login: null, // 감지된 명령 자체를 실행 (대화형 로그인 플로우)
+    configDir: path.join(HOME, ".claude"),
+  },
+  codex: {
+    candidates: ["codex", `"${path.join(APPDATA, "npm", "codex.cmd")}"`, `"${path.join(HOME, ".local", "bin", "codex.exe")}"`],
+    login: "login",
+    configDir: path.join(HOME, ".codex"),
+  },
+};
+const cliCmds = {}; // id → 감지된 실행 명령
 
 function tryCli(cmd) {
   return new Promise(resolve => {
@@ -140,39 +164,58 @@ function tryCli(cmd) {
     let out = "";
     p.stdout.on("data", d => { out += d.toString(); });
     p.on("error", () => resolve(null));
-    p.on("exit", code => resolve(code === 0 && out.trim() ? out.trim() : null));
+    p.on("exit", code => resolve(code === 0 && out.trim() ? out.trim().split(/\r?\n/)[0] : null));
     setTimeout(() => { try { p.kill(); } catch {} resolve(null); }, 8000);
   });
 }
 
 ipcMain.handle("schutz:cliCheck", async () => {
-  // GUI로 실행된 앱은 PATH가 좁을 수 있으므로 알려진 설치 경로도 직접 시도
-  const home = process.env.USERPROFILE || process.env.HOME || "";
-  const candidates = [
-    "claude",
-    home ? `"${path.join(home, ".local", "bin", "claude.exe")}"` : null,
-    process.env.APPDATA ? `"${path.join(process.env.APPDATA, "npm", "claude.cmd")}"` : null,
-    home ? `"${path.join(home, ".local", "bin", "claude")}"` : null,
-  ].filter(Boolean);
-  for (const cmd of candidates) {
-    const v = await tryCli(cmd);
-    if (v) {
-      cliCmd = cmd;
-      return { ok: true, version: v };
+  const agents = {};
+  for (const [id, def] of Object.entries(CLI_DEFS)) {
+    let ok = false, version = "";
+    for (const cmd of def.candidates) {
+      const v = await tryCli(cmd);
+      if (v) { ok = true; version = v; cliCmds[id] = cmd; break; }
     }
+    if (!ok) delete cliCmds[id];
+    let hasConfig = false;
+    try { hasConfig = require("fs").existsSync(def.configDir); } catch {}
+    agents[id] = { ok, version, hasConfig };
   }
-  cliCmd = null;
-  return { ok: false };
+  return { agents };
+});
+
+// 앱 내 [로그인] — 실제 콘솔 창을 띄워 해당 CLI의 공식 OAuth 로그인 플로우를 그대로 실행
+ipcMain.on("schutz:cliLogin", (_e, id) => {
+  const def = CLI_DEFS[id];
+  if (!def) return;
+  const base = cliCmds[id] || id;
+  const cmdline = def.login ? `${base} ${def.login}` : base;
+  try {
+    spawn("cmd.exe", ["/c", "start", `Schutz - ${id} 로그인`, "cmd", "/k", cmdline], { detached: true });
+  } catch { /* ignore */ }
 });
 
 ipcMain.on("schutz:cliRun", (e, opts) => {
-  // opts: { cwd, prompt, resume }
+  // opts: { agent, cwd, prompt, resume, continue }
   if (cliProcs.has(e.sender.id)) return;
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
-  if (opts.resume) args.push("--resume", opts.resume);
+  const agent = opts.agent || "claude";
+  let args;
+  let stdinPrompt = true;
+  if (agent === "claude") {
+    args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
+    if (opts.continue) args.push("--continue");
+    else if (opts.resume) args.push("--resume", opts.resume);
+  } else if (agent === "codex") {
+    // Codex CLI(ChatGPT 구독): exec 비대화 모드, 프롬프트는 stdin
+    args = ["exec", "--skip-git-repo-check", "-"];
+  } else {
+    e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_error", message: "알 수 없는 CLI 에이전트: " + agent }));
+    return;
+  }
   let proc;
   try {
-    proc = spawn(cliCmd || "claude", args, { cwd: opts.cwd || undefined, shell: true, env: process.env });
+    proc = spawn(cliCmds[agent] || agent, args, { cwd: opts.cwd || undefined, shell: true, env: process.env });
   } catch (err) {
     e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_error", message: String(err.message) }));
     return;
@@ -187,7 +230,12 @@ ipcMain.on("schutz:cliRun", (e, opts) => {
     buf = lines.pop() ?? "";
     for (const line of lines) {
       const t = line.trim();
-      if (t && !e.sender.isDestroyed()) e.sender.send("schutz:cliEvent", t);
+      if (!t || e.sender.isDestroyed()) continue;
+      if (agent === "claude") {
+        e.sender.send("schutz:cliEvent", t);
+      } else {
+        e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_raw", text: line }));
+      }
     }
   });
   proc.stderr.on("data", d => {

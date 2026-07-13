@@ -10,6 +10,7 @@ interface SchutzWorkspaceTree {
   root: string;
   name: string;
   entries: SchutzTreeEntry[];
+  branch?: string | null;
   truncated: boolean;
 }
 
@@ -22,8 +23,9 @@ interface SchutzApi {
   termInput(line: string): void;
   onTermData(cb: (data: string) => void): () => void;
   newWindow(): void;
-  cliCheck(): Promise<{ ok: boolean; version?: string }>;
-  cliRun(opts: { cwd?: string; prompt: string; resume?: string }): void;
+  cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
+  cliLogin(id: string): void;
+  cliRun(opts: { agent?: string; cwd?: string; prompt: string; resume?: string; continue?: boolean }): void;
   cliStop(): void;
   onCliEvent(cb: (line: string) => void): () => void;
 }

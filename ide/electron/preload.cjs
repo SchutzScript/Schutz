@@ -28,8 +28,10 @@ contextBridge.exposeInMainWorld("schutz", {
   /** 새 IDE 창 (기본 1분할) */
   newWindow: () => ipcRenderer.send("schutz:newWindow"),
 
-  /** Claude Code CLI 감지 (구독 계정 인증) */
+  /** 구독 CLI 에이전트 감지 (claude/codex — 계정 인증) */
   cliCheck: () => ipcRenderer.invoke("schutz:cliCheck"),
+  /** 앱 내 로그인 — 해당 CLI의 공식 OAuth 플로우를 콘솔로 실행 */
+  cliLogin: (id) => ipcRenderer.send("schutz:cliLogin", id),
   /** Claude Code CLI 턴 실행 */
   cliRun: (opts) => ipcRenderer.send("schutz:cliRun", opts),
   cliStop: () => ipcRenderer.send("schutz:cliStop"),
