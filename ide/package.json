@@ -3,10 +3,13 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "electron .",
+    "electron:build": "npm run build && electron ."
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -16,7 +19,11 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^43.1.0",
     "typescript": "^5.4.5",
     "vite": "^5.4.0"
+  },
+  "allowScripts": {
+    "electron@43.1.0": true
   }
 }

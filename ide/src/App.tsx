@@ -8,6 +8,8 @@ import {
   GitBranchIcon, SearchIcon, PlayIcon, DebugIcon, BellIcon,
   FolderIcon, FlowIcon, VcsIcon, TermIcon, GearIcon, TermStatusIcon,
 } from "./icons";
+import { ClaudeProvider, SCHUTZ_SYSTEM_PROMPT } from "./ai/claude";
+import { Message } from "./ai/provider";
 
 const MONO = "'IBM Plex Mono',monospace";
 const SUIT = "'SUIT Variable',sans-serif";
@@ -44,6 +46,9 @@ export class App extends React.Component<{}, S> {
   private _paneRefs: Record<string, HTMLDivElement | null> = {};
   private _chat: HTMLDivElement | null = null;
   private _chatSig = "";
+  private claude = new ClaudeProvider();
+  private history: Message[] = [];
+  private abortCtl: AbortController | null = null;
 
   state: S = {
     statusKey: "idle", running: false, messages: [], input: "",
@@ -196,6 +201,7 @@ export class App extends React.Component<{}, S> {
   }
 
   stopRun() {
+    this.abortCtl?.abort();
     this.clearTimers();
     this.setState(s => ({
       running: false, statusKey: "stopped",
@@ -256,7 +262,58 @@ export class App extends React.Component<{}, S> {
   }
   send() {
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
-    this.startRun(t);
+    // Claude API 키가 설정돼 있으면 실제 모델과 대화, 없으면 오프라인 데모 시나리오
+    if (this.claude.isConfigured()) this.runReal(t);
+    else this.startRun(t);
+  }
+
+  /** 실제 Claude 스트리밍 턴 (텍스트 대화 — 편집 도구 연동은 후속) */
+  async runReal(text: string) {
+    if (this.state.running) return;
+    this.abortCtl = new AbortController();
+    this.history.push({ role: "user", content: text });
+    const aiId = "a" + (this._uid++);
+    this.setState(s => ({
+      running: true, statusKey: "thinking", input: "",
+      agents: { ...s.agents, claude: { ...s.agents.claude, status: "plan" } },
+      messages: [
+        ...s.messages,
+        { id: "u" + (this._uid++), role: "user" as const, text },
+        { id: aiId, role: "ai" as const, who: "Claude · 관리자", text: "", streaming: true },
+      ],
+    }));
+
+    let full = "";
+    try {
+      const stream = this.claude.streamChat({
+        messages: [{ role: "system", content: SCHUTZ_SYSTEM_PROMPT }, ...this.history],
+        signal: this.abortCtl.signal,
+      });
+      for await (const ev of stream) {
+        if (ev.type === "text") {
+          full += ev.delta;
+          this.setMsg(aiId, { text: full });
+        } else if (ev.type === "usage") {
+          this.bumpAgent("claude", ev.inputTokens, ev.outputTokens);
+        } else if (ev.type === "error") {
+          full = full ? full + "\n\n⚠️ " + ev.message : "⚠️ " + ev.message;
+          this.setMsg(aiId, { text: full });
+        }
+      }
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        full += "\n\n⚠️ " + (e instanceof Error ? e.message : String(e));
+        this.setMsg(aiId, { text: full });
+      }
+    } finally {
+      if (full) this.history.push({ role: "assistant", content: full });
+      this.abortCtl = null;
+      this.setMsg(aiId, { streaming: false });
+      this.setState(s => ({
+        running: false, statusKey: "idle",
+        agents: { ...s.agents, claude: { ...s.agents.claude, status: "idle" } },
+      }));
+    }
   }
 
   componentDidMount() {

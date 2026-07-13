@@ -1,4 +1,5 @@
 import React from "react";
+import { setStoredKey } from "./ai/provider";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
 
@@ -73,6 +74,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
 
   verify(id: string) {
     this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "checking" as const } } }));
+    // Claude 키는 실제 저장 → IDE 채팅이 mock 대신 실제 모델과 대화 (타 프로바이더 어댑터는 후속)
+    if (id === "claude") setStoredKey("claude", this.state.conn.claude.key.trim());
     this.qt(() => this.setState(s => ({ conn: { ...s.conn, [id]: { ...s.conn[id], st: "ok" as const } } })), 900);
   }
   login(id: string) {
