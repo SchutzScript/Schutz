@@ -73,6 +73,10 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent
 
+[UninstallDelete]
+; 제거 시 사용자 데이터(온보딩 기록·설정·키)도 삭제 → 재설치하면 튜토리얼부터 다시 시작
+Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"
+
 [Code]
 function NeedsAddPath(Param: string): boolean;
 var
