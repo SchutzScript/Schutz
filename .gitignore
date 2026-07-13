@@ -33,3 +33,6 @@ webview-ui/.astro/
 # Misc
 coverage/
 .cache/
+
+# electron-builder 산출물
+ide/release/

@@ -1,5 +1,12 @@
 {
   "name": "schutz-ide",
+  "productName": "Schutz",
+  "description": "AI가 코드를 고치는 과정을 실시간으로 보여주는 AI 네이티브 IDE",
+  "author": "SchutzScript",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SchutzScript/Schutz.git"
+  },
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,7 +16,51 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "electron": "electron .",
-    "electron:build": "npm run build && electron ."
+    "electron:build": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "io.schutzscript.schutz",
+    "productName": "Schutz",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "public/assets/**"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Schutz"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
+      "category": "Development",
+      "maintainer": "SchutzScript <rush94434@gmail.com>"
+    }
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -20,6 +71,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.4.5",
     "vite": "^5.4.0"
   },
