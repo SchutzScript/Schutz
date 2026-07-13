@@ -407,7 +407,6 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                       <span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name}</span>
-                      <span style={{ fontSize: 10, color: "#8B948C", fontFamily: MONO, background: "rgba(255,255,255,.05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{p.model}</span>
                     </div>
                     <div style={{ fontSize: 11, color: "#5A635C", marginTop: 1 }}>{p.role}</div>
                   </div>

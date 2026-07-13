@@ -75,6 +75,8 @@ interface S {
   /** 구독 CLI 에이전트 감지 결과 (claude/codex) */
   cliAgents: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliBusy: boolean;
+  /** CLI(stream-json init)가 보고한 실제 모델 */
+  cliModel: string;
 }
 
 const TYPING_SPEED = 1;
@@ -111,7 +113,7 @@ export class App extends React.Component<{}, S> {
       const v = m ? parseInt(m[1], 10) : 4;
       return v === 1 || v === 2 ? v : 4;
     })(),
-    cliAgents: {}, cliBusy: false,
+    cliAgents: {}, cliBusy: false, cliModel: "",
     oauthPasteFor: null, oauthPasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
   };
 
@@ -235,6 +237,26 @@ export class App extends React.Component<{}, S> {
   }
 
   agDef(id: string) { return AGDEF.find(a => a.id === id)!; }
+
+  /** 에이전트가 실제로 사용할 모델 라벨 (미연결이면 null) */
+  modelOf(id: string): string | null {
+    // 웹 프리뷰(데모)는 디자인 라벨 유지
+    if (!window.schutz) return this.agDef(id).model;
+    if (id === "claude") {
+      if (getOAuth("claude") || getStoredKey("claude").trim()) return "claude-sonnet-5";
+      if (this.state.cliAgents.claude?.ok) return this.state.cliModel || "Claude Code";
+      return null;
+    }
+    if (id === "gpt") {
+      if (getStoredKey("gpt").trim()) return "gpt-5.2";
+      if (getOAuth("codex")) return "gpt-5.2-codex";
+      if (this.state.cliAgents.codex?.ok) return "Codex CLI";
+      return null;
+    }
+    if (id === "grok") return getStoredKey("grok").trim() ? "grok-4" : null;
+    if (id === "glm") return getStoredKey("glm").trim() ? "glm-4.6" : null;
+    return null;
+  }
 
   qt(fn: () => void, at: number) { this._timers.push(setTimeout(fn, at)); }
   clearTimers() { this._timers.forEach(clearTimeout); this._timers = []; }
@@ -697,6 +719,7 @@ export class App extends React.Component<{}, S> {
     };
     if (ev.type === "system" && ev.subtype === "init") {
       if (ev.session_id) this._cliSession = ev.session_id;
+      if (ev.model) this.setState({ cliModel: String(ev.model) });
       return;
     }
     if (ev.type === "assistant" && ev.message?.content) {
@@ -1436,7 +1459,9 @@ export class App extends React.Component<{}, S> {
                 <div key={d.id} style={{ background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 10, padding: "9px 12px", borderLeft: `3px solid ${d.color}` }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{d.model}</span>
+                    {(() => { const m = this.modelOf(d.id); return m
+                      ? <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{m}</span>
+                      : <span style={{ fontSize: 9.5, color: "var(--fg-dim2)", border: "1px solid var(--w08)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>미연결</span>; })()}
                     {d.mgr && <span style={{ fontSize: 9.5, color: "var(--bg-root)", background: d.color, borderRadius: 3, padding: "0 5px", lineHeight: "15px", fontWeight: 700 }}>관리자</span>}
                     <div style={{ flex: 1 }} />
                     {(a.status === "edit" || a.status === "plan") && <span style={{ ...spinner(d.color, d.color + "40"), flex: "none" }} />}
