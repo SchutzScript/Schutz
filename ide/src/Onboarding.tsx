@@ -51,6 +51,7 @@ interface S {
   fontSize: number;
   conn: Record<string, ConnState>;
   manager: string | null;
+  cli: { checked: boolean; ok: boolean; version: string };
 }
 
 export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
@@ -68,7 +69,18 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
       glm: { on: false, key: "", st: "idle", auth: "none", mode: "key" },
     },
     manager: "claude",
+    cli: { checked: false, ok: false, version: "" },
   };
+
+  componentDidMount() {
+    void this.detectCli();
+  }
+
+  async detectCli() {
+    if (!window.schutz) { this.setState({ cli: { checked: true, ok: false, version: "" } }); return; }
+    const r = await window.schutz.cliCheck();
+    this.setState({ cli: { checked: true, ok: r.ok, version: r.version ?? "" } });
+  }
 
   qt(fn: () => void, ms: number) { this._timers.push(setTimeout(fn, ms)); }
   componentWillUnmount() { this._timers.forEach(clearTimeout); }
@@ -370,6 +382,27 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                     <span style={{ position: "absolute", top: 2.5, left: c.on ? 20.5 : 2.5, width: 17, height: 17, borderRadius: "50%", background: c.on ? "#0C0E0D" : "#8B948C", transition: "left .25s ease" }} />
                   </button>
                 </div>
+                {c.on && p.id === "claude" && (
+                  <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: s.cli.ok ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${s.cli.ok ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.cli.ok ? "#8BB292" : "#5A635C", flex: "none" }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: s.cli.ok ? "#9DC4A3" : "#8B948C" }}>
+                        {s.cli.ok ? "구독 계정 인증 감지됨" : s.cli.checked ? "구독 인증 미감지" : "구독 인증 확인 중…"}
+                      </span>
+                      {s.cli.ok && <span style={{ fontSize: 10, color: "#8B948C", fontFamily: MONO }}>{s.cli.version}</span>}
+                      <div style={{ flex: 1 }} />
+                      {!s.cli.ok && s.cli.checked && (
+                        <button className="obGhostTxt" onClick={() => void this.detectCli()}
+                          style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 5, lineHeight: 1.6 }}>
+                      {s.cli.ok
+                        ? "Claude Pro/Max 구독으로 사용합니다 — API 키가 필요 없고, 아래 키 입력은 선택사항입니다."
+                        : <>Claude 구독(Pro/Max)으로 쓰려면 Claude Code를 설치·로그인하세요: 터미널에서 <span style={{ fontFamily: MONO, color: "#8B948C" }}>npm i -g @anthropic-ai/claude-code</span> 후 <span style={{ fontFamily: MONO, color: "#8B948C" }}>claude</span> 실행 → 로그인 → [다시 감지]</>}
+                    </div>
+                  </div>
+                )}
                 {c.on && (
                   <div style={{ marginTop: 12 }}>
                     <div style={{ display: "flex", gap: 8 }}>

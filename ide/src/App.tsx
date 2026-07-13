@@ -422,7 +422,7 @@ export class App extends React.Component<{}, S> {
         input: "",
         messages: [...s.messages,
           { id: "u" + (this._uid++), role: "user" as const, text: t },
-          { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: "아직 연결된 AI가 없습니다. 좌측 하단 ⚙ 설정(또는 메뉴 파일 → 설정…)에서 API 키를 넣고 [테스트]로 연결을 확인한 뒤 다시 요청해 주세요." }],
+          { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: "아직 연결된 AI가 없습니다.\n\n① 구독으로 쓰기(권장·무료 키 불필요): 터미널에서 `npm i -g @anthropic-ai/claude-code` 설치 후 `claude` 실행해 로그인 → 설정(⚙)에서 [다시 감지]\n② API 키로 쓰기: 설정(⚙)에서 키 입력 후 [테스트]" }],
       }));
       return;
     }
@@ -1637,7 +1637,7 @@ export class App extends React.Component<{}, S> {
           {window.schutz && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: s.cliOk ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${s.cliOk ? "rgba(143,168,147,.35)" : "rgba(255,255,255,.08)"}` }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.cliOk ? "#8BB292" : "#5A635C", flex: "none" }} />
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: s.cliOk ? "#D5DAD5" : "#8B948C" }}>
                   Claude 구독 인증 {s.cliOk ? "· 연결됨" : "· 미감지"}
                 </div>
@@ -1647,6 +1647,10 @@ export class App extends React.Component<{}, S> {
                     : "Claude Code CLI를 설치하고 로그인하면 API 키 없이 구독으로 사용할 수 있습니다"}
                 </div>
               </div>
+              {!s.cliOk && (
+                <button className="hv05" onClick={() => void window.schutz!.cliCheck().then(r => this.setState({ cliOk: r.ok, cliVersion: r.version ?? "" }))}
+                  style={{ flex: "none", height: 26, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#8FA893", background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.3)" }}>다시 감지</button>
+              )}
             </div>
           )}
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C", marginBottom: 8 }}>AI 프로바이더 API 키 {window.schutz && s.cliOk ? "(선택 — 구독 인증이 우선)" : ""}</div>

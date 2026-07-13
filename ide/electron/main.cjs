@@ -126,15 +126,43 @@ ipcMain.on("schutz:newWindow", () => {
 // ── Claude Code CLI 연동 (구독 계정 인증 사용, API 키 불필요) ──────────────
 const cliProcs = new Map(); // webContents.id → child
 
-ipcMain.handle("schutz:cliCheck", async () => {
-  return await new Promise(resolve => {
-    const p = spawn("claude", ["--version"], { shell: true });
+let cliCmd = null; // 감지된 claude 실행 경로 (cliRun에서 재사용)
+
+function tryCli(cmd) {
+  return new Promise(resolve => {
+    let p;
+    try {
+      p = spawn(cmd, ["--version"], { shell: true });
+    } catch {
+      resolve(null);
+      return;
+    }
     let out = "";
     p.stdout.on("data", d => { out += d.toString(); });
-    p.on("error", () => resolve({ ok: false }));
-    p.on("exit", code => resolve(code === 0 ? { ok: true, version: out.trim() } : { ok: false }));
-    setTimeout(() => { try { p.kill(); } catch {} resolve({ ok: false }); }, 8000);
+    p.on("error", () => resolve(null));
+    p.on("exit", code => resolve(code === 0 && out.trim() ? out.trim() : null));
+    setTimeout(() => { try { p.kill(); } catch {} resolve(null); }, 8000);
   });
+}
+
+ipcMain.handle("schutz:cliCheck", async () => {
+  // GUI로 실행된 앱은 PATH가 좁을 수 있으므로 알려진 설치 경로도 직접 시도
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const candidates = [
+    "claude",
+    home ? `"${path.join(home, ".local", "bin", "claude.exe")}"` : null,
+    process.env.APPDATA ? `"${path.join(process.env.APPDATA, "npm", "claude.cmd")}"` : null,
+    home ? `"${path.join(home, ".local", "bin", "claude")}"` : null,
+  ].filter(Boolean);
+  for (const cmd of candidates) {
+    const v = await tryCli(cmd);
+    if (v) {
+      cliCmd = cmd;
+      return { ok: true, version: v };
+    }
+  }
+  cliCmd = null;
+  return { ok: false };
 });
 
 ipcMain.on("schutz:cliRun", (e, opts) => {
@@ -144,7 +172,7 @@ ipcMain.on("schutz:cliRun", (e, opts) => {
   if (opts.resume) args.push("--resume", opts.resume);
   let proc;
   try {
-    proc = spawn("claude", args, { cwd: opts.cwd || undefined, shell: true, env: process.env });
+    proc = spawn(cliCmd || "claude", args, { cwd: opts.cwd || undefined, shell: true, env: process.env });
   } catch (err) {
     e.sender.send("schutz:cliEvent", JSON.stringify({ type: "schutz_error", message: String(err.message) }));
     return;
