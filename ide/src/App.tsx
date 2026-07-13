@@ -13,7 +13,7 @@ import {
   WORKSPACE_TOOLS, DELEGATE_TOOL,
 } from "./ai/claude";
 import { PROVIDERS_MAP, testProvider, getManagerId } from "./ai/registry";
-import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth } from "./ai/provider";
+import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, getModelOverride, setModelOverride } from "./ai/provider";
 import { MonacoPane } from "./editor/MonacoPane";
 import { applyTheme, getThemeId } from "./theme";
 
@@ -238,18 +238,43 @@ export class App extends React.Component<{}, S> {
 
   agDef(id: string) { return AGDEF.find(a => a.id === id)!; }
 
+  /** 모델별 단가 (USD / 1M tokens, 입력·출력) — 추정 공시가 */
+  static PRICING: Record<string, [number, number]> = {
+    "claude-sonnet-5": [3, 15],
+    "claude-opus-4-8": [15, 75],
+    "claude-haiku-4-5": [0.8, 4],
+    "gpt-5.2": [1.75, 14],
+    "gpt-5.2-codex": [1.75, 14],
+    "grok-4": [3, 15],
+    "glm-4.6": [0.6, 2.2],
+  };
+
+  /** 구독 경로 여부 — 토큰 비용이 구독에 포함되어 $ 표시가 무의미 */
+  isSubscription(id: string): boolean {
+    if (!window.schutz) return false;
+    if (id === "claude") {
+      if (getStoredKey("claude").trim()) return false;
+      return !!getOAuth("claude") || !!this.state.cliAgents.claude?.ok;
+    }
+    if (id === "gpt") {
+      if (getStoredKey("gpt").trim()) return false;
+      return !!getOAuth("codex") || !!this.state.cliAgents.codex?.ok;
+    }
+    return false;
+  }
+
   /** 에이전트가 실제로 사용할 모델 라벨 (미연결이면 null) */
   modelOf(id: string): string | null {
     // 웹 프리뷰(데모)는 디자인 라벨 유지
     if (!window.schutz) return this.agDef(id).model;
     if (id === "claude") {
-      if (getOAuth("claude") || getStoredKey("claude").trim()) return "claude-sonnet-5";
+      if (getOAuth("claude") || getStoredKey("claude").trim()) return getModelOverride("claude") || "claude-sonnet-5";
       if (this.state.cliAgents.claude?.ok) return this.state.cliModel || "Claude Code";
       return null;
     }
     if (id === "gpt") {
-      if (getStoredKey("gpt").trim()) return "gpt-5.2";
-      if (getOAuth("codex")) return "gpt-5.2-codex";
+      if (getStoredKey("gpt").trim()) return getModelOverride("gpt") || "gpt-5.2";
+      if (getOAuth("codex")) return getModelOverride("codex") || "gpt-5.2-codex";
       if (this.state.cliAgents.codex?.ok) return "Codex CLI";
       return null;
     }
@@ -286,9 +311,12 @@ export class App extends React.Component<{}, S> {
     this.setState(s => ({ agents: { ...s.agents, [id]: { ...s.agents[id], ...patch } } }));
   }
   bumpAgent(id: string, tin: number, tout: number) {
+    const model = this.modelOf(id) ?? "";
+    const [pin, pout] = App.PRICING[model] ?? [3, 15];
+    const sub = this.isSubscription(id);
     this.setState(s => {
       const a = s.agents[id];
-      const cost = a.cost + (tin * 3 + tout * 15) / 1e6;
+      const cost = sub ? a.cost : a.cost + (tin * pin + tout * pout) / 1e6;
       return { agents: { ...s.agents, [id]: { ...a, tin: a.tin + tin, tout: a.tout + tout, cost } } };
     });
   }
@@ -468,7 +496,87 @@ export class App extends React.Component<{}, S> {
     });
   }
 
+  /** 로컬 슬래시 명령 — AI로 보내지 않고 Schutz가 직접 처리 */
+  private schutzSay(userText: string, reply: string) {
+    this.setState(s => ({
+      input: "",
+      messages: [...s.messages,
+        { id: "u" + (this._uid++), role: "user" as const, text: userText },
+        { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: reply }],
+    }));
+  }
+
+  handleSlash(raw: string): boolean {
+    const [cmd, ...rest] = raw.trim().split(/\s+/);
+    const connected = AGDEF.map(d => d.id).filter(id => this.modelOf(id) !== null);
+    switch (cmd) {
+      case "/help":
+        this.schutzSay(raw,
+          "사용 가능한 명령:\n" +
+          "/model — 에이전트별 현재 모델 확인\n" +
+          "/model <에이전트> <모델> — 모델 변경 (예: /model claude claude-opus-4-8)\n" +
+          "/usage — 세션 토큰·비용\n" +
+          "/agents — 연결된 에이전트 상태\n" +
+          "/clear — 대화 초기화");
+        return true;
+      case "/model": {
+        if (rest.length >= 2) {
+          const [ag, model] = rest;
+          if (!AGDEF.some(d => d.id === ag) && ag !== "codex") {
+            this.schutzSay(raw, "알 수 없는 에이전트: " + ag + " (claude/gpt/grok/glm)");
+            return true;
+          }
+          setModelOverride(ag, model);
+          this.schutzSay(raw, ag + " 모델을 `" + model + "` (으)로 변경했습니다. 다음 턴부터 적용됩니다.");
+          return true;
+        }
+        const lines = connected.length
+          ? connected.map(id => {
+              const m = this.modelOf(id) ?? "?";
+              const [pin, pout] = App.PRICING[m] ?? [3, 15];
+              const price = this.isSubscription(id) ? "구독 포함" : `$${pin}/${pout} per 1M`;
+              return `${this.agDef(id).name}: \`${m}\` (${price})`;
+            }).join("\n")
+          : "연결된 에이전트가 없습니다. 설정(⚙)에서 로그인하세요.";
+        this.schutzSay(raw, "현재 모델:\n" + lines + "\n\n변경: /model <에이전트> <모델>");
+        return true;
+      }
+      case "/usage": {
+        const lines = connected.length
+          ? connected.map(id => {
+              const a = this.state.agents[id];
+              const cost = this.isSubscription(id) ? "구독 포함" : "$" + a.cost.toFixed(4);
+              return `${this.agDef(id).name}: 입력 ${a.tin.toLocaleString()} · 출력 ${a.tout.toLocaleString()} 토큰 · ${cost}`;
+            }).join("\n")
+          : "연결된 에이전트가 없습니다.";
+        this.schutzSay(raw, "이번 세션 사용량:\n" + lines);
+        return true;
+      }
+      case "/agents": {
+        const lines = AGDEF.map(d => {
+          const m = this.modelOf(d.id);
+          return `${d.name}: ${m ? "연결됨 (" + m + ")" : "미연결"}`;
+        }).join("\n");
+        this.schutzSay(raw, lines + "\n\n연결 관리는 설정(⚙) 또는 메뉴 AI → 모델 관리…");
+        return true;
+      }
+      case "/clear":
+        this.history = [];
+        this._cliSession = null;
+        this.setState({ messages: [], input: "" });
+        return true;
+      default:
+        if (cmd.startsWith("/")) {
+          this.schutzSay(raw, "알 수 없는 명령입니다: " + cmd + "\n/help 로 명령 목록을 확인하세요.");
+          return true;
+        }
+        return false;
+    }
+  }
+
   send() {
+    const rawIn = this.state.input.trim();
+    if (rawIn.startsWith("/")) { if (this.handleSlash(rawIn)) return; }
     const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
     // 1순위: 앱 내 연결된 계정(OAuth) 또는 API 키 — Schutz 통합 에이전트 루프
     if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
@@ -996,6 +1104,8 @@ export class App extends React.Component<{}, S> {
                               if (it[0] === "프로젝트 열기…") { void this.openProject(); return; }
                               if (it[0] === "설정…") { this.setState({ openMenu: null, settingsOpen: true }); return; }
                               if (it[0] === "새 창") { window.schutz?.newWindow(); this.setState({ openMenu: null }); return; }
+                              if (it[0] === "모델 관리…") { this.setState({ openMenu: null, settingsOpen: true }); return; }
+                              if (it[0] === "사용량 대시보드") { this.setState({ openMenu: null }); this.handleSlash("/usage"); return; }
                               if (it[0] === "에디터 4분할") { this.setLayout(4); return; }
                               if (it[0] === "에디터 2분할") { this.setLayout(2); return; }
                               if (it[0] === "분할 해제") { this.setLayout(1); return; }
@@ -1452,7 +1562,12 @@ export class App extends React.Component<{}, S> {
         </div>
         {s.agentsOpen && (
           <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-            {AGDEF.map(d => {
+            {window.schutz && AGDEF.every(d => this.modelOf(d.id) === null) && (
+              <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "2px 2px 4px", lineHeight: 1.6 }}>
+                연결된 에이전트가 없습니다. 설정(⚙) 또는 메뉴 AI → 모델 관리…에서 로그인하세요.
+              </div>
+            )}
+            {AGDEF.filter(d => !window.schutz || this.modelOf(d.id) !== null).map(d => {
               const a = s.agents[d.id];
               const [stText, stColor] = astMap[a.status];
               return (
@@ -1470,7 +1585,7 @@ export class App extends React.Component<{}, S> {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: a.file ? d.color : "var(--fg-dim3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file ?? "—"}</span>
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>${a.cost.toFixed(3)}</span></span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>{this.isSubscription(d.id) ? "구독" : "$" + a.cost.toFixed(3)}</span></span>
                   </div>
                 </div>
               );

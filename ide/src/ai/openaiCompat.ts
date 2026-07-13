@@ -1,6 +1,6 @@
 import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
-  ProviderId, getStoredKey, getOAuth, freshOAuth,
+  ProviderId, getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
 
 export interface CompatConfig {
@@ -92,7 +92,7 @@ export class OpenAICompatProvider implements AgentProvider {
     window.schutz.oaiRun({
       id, access: tok.access, accountId: tok.accountId ?? null,
       body: {
-        model: "gpt-5.2-codex",
+        model: getModelOverride("codex") || "gpt-5.2-codex",
         instructions: req.system ?? "",
         input,
         stream: true,
@@ -153,7 +153,7 @@ export class OpenAICompatProvider implements AgentProvider {
           authorization: "Bearer " + apiKey,
         },
         body: JSON.stringify({
-          model: req.model || this.cfg.defaultModel,
+          model: req.model || getModelOverride(this.cfg.id) || this.cfg.defaultModel,
           stream: true,
           stream_options: { include_usage: true },
           messages: this.toNative(req.transcript, req.system),

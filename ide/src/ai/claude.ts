@@ -1,7 +1,7 @@
 import {
   AIProvider, ChatRequest, StreamEvent,
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
-  getStoredKey, getOAuth, freshOAuth,
+  getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
 
 export type { ToolCall } from "./provider";
@@ -82,7 +82,7 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: req.model || "claude-sonnet-5",
+          model: req.model || getModelOverride("claude") || "claude-sonnet-5",
           max_tokens: 8192,
           stream: true,
           ...(system ? { system } : {}),

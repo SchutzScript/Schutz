@@ -145,3 +145,15 @@ export async function freshOAuth(id: string): Promise<OAuthTokens | null> {
   setOAuth(id, nt);
   return nt;
 }
+
+
+// ── 모델 오버라이드 (/model 명령·설정) ────────────────────────────────────
+export function getModelOverride(id: string): string | null {
+  try { return localStorage.getItem("schutz.model." + id); } catch { return null; }
+}
+export function setModelOverride(id: string, model: string | null): void {
+  try {
+    if (model) localStorage.setItem("schutz.model." + id, model);
+    else localStorage.removeItem("schutz.model." + id);
+  } catch { /* ignore */ }
+}
