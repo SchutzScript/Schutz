@@ -8,9 +8,20 @@ import {
   GitBranchIcon, SearchIcon, PlayIcon, DebugIcon, BellIcon,
   FolderIcon, FlowIcon, VcsIcon, TermIcon, GearIcon, TermStatusIcon,
 } from "./icons";
-import { ClaudeProvider, SCHUTZ_SYSTEM_PROMPT } from "./ai/claude";
+import { ClaudeProvider, SCHUTZ_SYSTEM_PROMPT, WORKSPACE_TOOLS, ToolCall } from "./ai/claude";
 import { Message } from "./ai/provider";
 import { MonacoPane } from "./editor/MonacoPane";
+
+/** Claude가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
+interface Proposal {
+  id: string;
+  rel: string;
+  find: string;
+  replace: string;
+  rationale: string;
+  status: "pending" | "accepted" | "rejected" | "failed";
+  error?: string;
+}
 
 const MONO = "'IBM Plex Mono',monospace";
 const SUIT = "'SUIT Variable',sans-serif";
@@ -38,6 +49,10 @@ interface S {
   /** 실제로 연 프로젝트 폴더 (Electron 전용). null이면 데모 모드 */
   workspace: SchutzWorkspaceTree | null;
   paneDirty: Record<string, boolean>;
+  /** Claude의 실파일 편집 제안 */
+  proposals: Proposal[];
+  /** 수락 후 Monaco 페인 강제 리로드용 버전 */
+  paneVer: Record<string, number>;
 }
 
 const TYPING_SPEED = 1;
@@ -63,6 +78,7 @@ export class App extends React.Component<{}, S> {
     termOpen: false, termTab: "term",
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
+    proposals: [], paneVer: {},
   };
 
   /** 실제 프로젝트 폴더 열기 (Electron에서만 동작) */
@@ -85,8 +101,37 @@ export class App extends React.Component<{}, S> {
       workspace: tree, leftTab: "tree", panes: [],
       docs: freshDocs(), files: [], plan: [], tools: [], chips: {},
       expanded: null, paneDirty: {}, statusKey: "idle", running: false,
-      agents: this.freshAgents(),
+      agents: this.freshAgents(), proposals: [], paneVer: {},
     });
+  }
+
+  /** 제안 수락: find→replace를 실제 파일에 적용 */
+  async acceptProposal(id: string) {
+    const p = this.state.proposals.find(x => x.id === id);
+    const ws = this.state.workspace;
+    if (!p || !ws || !window.schutz || p.status !== "pending") return;
+    try {
+      const cur = await window.schutz.readFile(ws.root, p.rel);
+      const idx = cur.indexOf(p.find);
+      if (idx < 0) throw new Error("원문을 찾을 수 없습니다 (파일이 변경됨)");
+      if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error("원문이 여러 번 존재합니다");
+      await window.schutz.writeFile(ws.root, p.rel, cur.replace(p.find, p.replace));
+      this.setState(s => ({
+        proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
+        paneVer: { ...s.paneVer, [p.rel]: (s.paneVer[p.rel] ?? 0) + 1 },
+      }));
+      this.openFile(p.rel);
+    } catch (e) {
+      this.setState(s => ({
+        proposals: s.proposals.map(x => x.id === id ? { ...x, status: "failed" as const, error: e instanceof Error ? e.message : String(e) } : x),
+      }));
+    }
+  }
+
+  rejectProposal(id: string) {
+    this.setState(s => ({
+      proposals: s.proposals.map(x => x.id === id && x.status === "pending" ? { ...x, status: "rejected" as const } : x),
+    }));
   }
 
   freshAgents(): Record<string, AgentState> {
@@ -296,50 +341,132 @@ export class App extends React.Component<{}, S> {
     else this.startRun(t);
   }
 
-  /** 실제 Claude 스트리밍 턴 (텍스트 대화 — 편집 도구 연동은 후속) */
+  /** 도구 실행 (워크스페이스 모드) */
+  private async execTool(call: ToolCall): Promise<string> {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return "오류: 워크스페이스가 열려 있지 않습니다.";
+    const toolId = "rt" + (this._uid++);
+    try {
+      if (call.name === "list_files") {
+        this.addTool(toolId, "claude", "목록", ws.name);
+        const list = ws.entries.filter(e => !e.dir).map(e => e.rel).join("\n");
+        this.setTool(toolId, { st: "done", note: ws.entries.filter(e => !e.dir).length + "개" });
+        return list || "(빈 워크스페이스)";
+      }
+      if (call.name === "read_file") {
+        const rel = String(call.input?.path ?? "");
+        this.addTool(toolId, "claude", "읽기", rel);
+        const text = await window.schutz.readFile(ws.root, rel);
+        this.setTool(toolId, { st: "done", note: (text.length / 1024).toFixed(1) + " KB" });
+        return text;
+      }
+      if (call.name === "propose_edit") {
+        const rel = String(call.input?.path ?? "");
+        this.addTool(toolId, "claude", "편집", rel);
+        const p: Proposal = {
+          id: "pp" + (this._uid++),
+          rel,
+          find: String(call.input?.find ?? ""),
+          replace: String(call.input?.replace ?? ""),
+          rationale: String(call.input?.rationale ?? "수정 제안"),
+          status: "pending",
+        };
+        this.setState(s => ({ proposals: [...s.proposals, p] }));
+        this.setTool(toolId, { st: "done", note: "제안됨" });
+        this.openFile(rel);
+        return "편집 제안이 등록되었습니다. 사용자가 변경 검토 패널에서 수락/거절합니다.";
+      }
+      return "알 수 없는 도구: " + call.name;
+    } catch (e) {
+      this.setTool(toolId, { st: "done", note: "오류" });
+      return "오류: " + (e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** 실제 Claude 에이전트 턴 — 도구 루프 (읽기→편집 제안), 워크스페이스 없으면 순수 대화 */
   async runReal(text: string) {
     if (this.state.running) return;
     this.abortCtl = new AbortController();
     this.history.push({ role: "user", content: text });
-    const aiId = "a" + (this._uid++);
     this.setState(s => ({
       running: true, statusKey: "thinking", input: "",
       agents: { ...s.agents, claude: { ...s.agents.claude, status: "plan" } },
-      messages: [
-        ...s.messages,
-        { id: "u" + (this._uid++), role: "user" as const, text },
-        { id: aiId, role: "ai" as const, who: "Claude · 관리자", text: "", streaming: true },
-      ],
+      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
     }));
 
-    let full = "";
+    const useTools = !!(this.state.workspace && window.schutz);
+    // API 원형 메시지 (tool_use/tool_result 블록 유지를 위해 히스토리와 별도로 구성)
+    const apiMsgs: any[] = this.history.map(m => ({ role: m.role, content: m.content }));
+    let finalText = "";
+
     try {
-      const stream = this.claude.streamChat({
-        messages: [{ role: "system", content: SCHUTZ_SYSTEM_PROMPT }, ...this.history],
-        signal: this.abortCtl.signal,
-      });
-      for await (const ev of stream) {
-        if (ev.type === "text") {
-          full += ev.delta;
-          this.setMsg(aiId, { text: full });
-        } else if (ev.type === "usage") {
-          this.bumpAgent("claude", ev.inputTokens, ev.outputTokens);
-        } else if (ev.type === "error") {
-          full = full ? full + "\n\n⚠️ " + ev.message : "⚠️ " + ev.message;
-          this.setMsg(aiId, { text: full });
+      for (let round = 0; round < 8; round++) {
+        const aiId = "a" + (this._uid++);
+        this.setState(s => ({
+          messages: [...s.messages, { id: aiId, role: "ai" as const, who: "Claude · 관리자", text: "", streaming: true }],
+        }));
+
+        let turnText = "";
+        const calls: ToolCall[] = [];
+        let stopReason = "end_turn";
+
+        const stream = this.claude.streamTurn({
+          rawMessages: apiMsgs,
+          system: SCHUTZ_SYSTEM_PROMPT + (useTools ? "\n\n현재 워크스페이스: " + this.state.workspace!.name : ""),
+          tools: useTools ? WORKSPACE_TOOLS : undefined,
+          signal: this.abortCtl.signal,
+        });
+        for await (const ev of stream) {
+          if (ev.type === "text") {
+            turnText += ev.delta;
+            this.setMsg(aiId, { text: turnText });
+          } else if (ev.type === "tool_call") {
+            calls.push(ev.call);
+            this.setState({ statusKey: "tool" });
+          } else if (ev.type === "usage") {
+            this.bumpAgent("claude", ev.inputTokens, ev.outputTokens);
+          } else if (ev.type === "stop") {
+            stopReason = ev.reason;
+          } else if (ev.type === "error") {
+            turnText = turnText ? turnText + "\n\n⚠️ " + ev.message : "⚠️ " + ev.message;
+            this.setMsg(aiId, { text: turnText });
+            stopReason = "error";
+          }
         }
+        this.setMsg(aiId, { streaming: false });
+        if (!turnText) {
+          // 빈 텍스트 턴(도구만 호출)이면 말풍선 제거
+          this.setState(s => ({ messages: s.messages.filter(m => m.id !== aiId) }));
+        }
+        finalText = turnText || finalText;
+
+        if (stopReason !== "tool_use" || calls.length === 0) break;
+
+        // assistant 턴(텍스트+tool_use) → tool_result 를 원형 메시지에 반영하고 루프 계속
+        const assistantContent: any[] = [];
+        if (turnText) assistantContent.push({ type: "text", text: turnText });
+        for (const c of calls) assistantContent.push({ type: "tool_use", id: c.id, name: c.name, input: c.input });
+        apiMsgs.push({ role: "assistant", content: assistantContent });
+
+        const results: any[] = [];
+        for (const c of calls) {
+          const out = await this.execTool(c);
+          results.push({ type: "tool_result", tool_use_id: c.id, content: out.slice(0, 40_000) });
+        }
+        apiMsgs.push({ role: "user", content: results });
       }
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
-        full += "\n\n⚠️ " + (e instanceof Error ? e.message : String(e));
-        this.setMsg(aiId, { text: full });
+        this.setState(s => ({
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Claude · 관리자", text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
+        }));
       }
     } finally {
-      if (full) this.history.push({ role: "assistant", content: full });
+      if (finalText) this.history.push({ role: "assistant", content: finalText });
       this.abortCtl = null;
-      this.setMsg(aiId, { streaming: false });
       this.setState(s => ({
-        running: false, statusKey: "idle",
+        running: false,
+        statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
         agents: { ...s.agents, claude: { ...s.agents.claude, status: "idle" } },
       }));
     }
@@ -836,6 +963,7 @@ export class App extends React.Component<{}, S> {
               )}
             </div>
             <MonacoPane
+              key={path + ":" + (s.paneVer[path] ?? 0)}
               root={s.workspace.root}
               rel={path}
               onDirtyChange={(rel, d) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }))}
@@ -964,9 +1092,75 @@ export class App extends React.Component<{}, S> {
     );
   }
 
+  // ── 우 패널: 변경 검토 (워크스페이스 모드 — Claude 편집 제안) ──
+  renderProposals() {
+    const s = this.state;
+    const pstMap: Record<string, [string, string]> = {
+      pending: ["검토 대기", "#C4A882"], accepted: ["수락됨", "#8BB292"],
+      rejected: ["거절됨", "#C97B7B"], failed: ["적용 실패", "#C97B7B"],
+    };
+    const pending = s.proposals.filter(p => p.status === "pending").length;
+    return (
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "#5A635C" }}>변경 검토</span>
+          {s.proposals.length > 0 && <span style={{ fontSize: 10.5, color: "#8B948C", background: "rgba(255,255,255,.06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.proposals.length}</span>}
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "#4B534D", padding: "6px 2px" }}>Claude에게 작업을 요청하면 편집 제안이 여기에 표시됩니다.</div>}
+          {pending > 1 && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#0C0E0D", background: "#8FA893", border: "none" }}>모두 수락</button>
+              <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#9AA59C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>모두 거절</button>
+            </div>
+          )}
+          {s.proposals.map(p => {
+            const [sl, sc] = pstMap[p.status];
+            return (
+              <div key={p.id} style={{ position: "relative", background: "#151917", border: "1px solid rgba(255,255,255,.07)", borderRadius: 10, overflow: "hidden" }}>
+                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#8FA893", zIndex: 2 }} />
+                <div style={{ padding: "10px 13px 9px 16px" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: "#D5DAD5", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
+                    <div style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: sc }}>{sl}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8B948C", marginTop: 4 }}>{p.rationale}</div>
+                  {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
+                </div>
+                <div style={{ borderTop: "1px solid rgba(255,255,255,.06)", background: "#0E100F", maxHeight: 180, overflow: "auto", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
+                  {p.find.split("\n").map((l, i) => (
+                    <div key={"o" + i} style={{ display: "flex", background: "rgba(201,123,123,.1)" }}>
+                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "#C97B7B", userSelect: "none" }}>−</span>
+                      <span style={{ whiteSpace: "pre", color: "#C99A9A" }}>{l || " "}</span>
+                    </div>
+                  ))}
+                  {p.replace.split("\n").map((l, i) => (
+                    <div key={"n" + i} style={{ display: "flex", background: "rgba(139,178,146,.09)" }}>
+                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "#8BB292", userSelect: "none" }}>+</span>
+                      <span style={{ whiteSpace: "pre", color: "#B7CBBA" }}>{l || " "}</span>
+                    </div>
+                  ))}
+                  {p.status === "pending" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,.05)", fontFamily: SUIT }}>
+                      <div style={{ flex: 1 }} />
+                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>수락</button>
+                      <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>거절</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   // ── 우 패널: 변경 검토 ──
   renderReview() {
     const s = this.state;
+    if (s.workspace) return this.renderProposals();
     const fstMap: Record<string, [string, string]> = { pending: ["검토 대기", "#C4A882"], accepted: ["수락됨", "#8BB292"], rejected: ["거절됨", "#C97B7B"] };
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     return (
