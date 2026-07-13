@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:termData", h);
   },
 
+  /** 타이틀바 오버레이 테마 연동 */
+  setOverlay: (color, symbolColor) => ipcRenderer.send("schutz:setOverlay", color, symbolColor),
+  /** 파일/폴더 이름 변경 · 삭제 */
+  renameEntry: (root, relFrom, relTo) => ipcRenderer.invoke("schutz:renameEntry", root, relFrom, relTo),
+  deleteEntry: (root, rel) => ipcRenderer.invoke("schutz:deleteEntry", root, rel),
+
   /** 새 IDE 창 (기본 1분할) */
   newWindow: () => ipcRenderer.send("schutz:newWindow"),
 

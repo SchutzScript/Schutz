@@ -40,3 +40,7 @@ button { white-space: nowrap; flex: none; }
 .obBright:hover { filter: brightness(1.12); }
 .obDanger:hover { color: #CE9A9A !important; }
 .obMgrBtn:hover { border-color: #8FA893 !important; }
+
+/* 커스텀 타이틀바 — 헤더 전체 드래그, 컨트롤은 제외 */
+.titlebar { -webkit-app-region: drag; }
+.titlebar button, .titlebar input, .titlebar [data-nodrag] { -webkit-app-region: no-drag; }

@@ -6,13 +6,27 @@ interface Props {
   root: string;
   rel: string;
   onDirtyChange?: (rel: string, dirty: boolean) => void;
+  onStatus?: (info: { rel: string; lang: string; line: number; col: number }) => void;
 }
+
+/** 열린 페인 레지스트리 — 전역 저장/편집 액션 라우팅용 */
+export interface PaneApi {
+  rel: string;
+  editor: monaco.editor.IStandaloneCodeEditor;
+  save: () => Promise<void>;
+}
+export const paneRegistry: { panes: Map<string, PaneApi>; focused: PaneApi | null } = {
+  panes: new Map(),
+  focused: null,
+};
 
 type LoadState = "loading" | "ready" | "error";
 
 /** 실제 파일을 여는 Monaco 편집 페인 (Electron 전용 — window.schutz 필요) */
-export function MonacoPane({ root, rel, onDirtyChange }: Props) {
+export function MonacoPane({ root, rel, onDirtyChange, onStatus }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const savedRef = useRef<string>("");
   const [state, setState] = useState<LoadState>("loading");
@@ -56,6 +70,19 @@ export function MonacoPane({ root, rel, onDirtyChange }: Props) {
     };
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
 
+    // 레지스트리 등록 + 포커스/커서 상태 보고
+    const api: PaneApi = { rel, editor, save };
+    paneRegistry.panes.set(rel, api);
+    const lang = languageOf(rel);
+    editor.onDidFocusEditorWidget(() => {
+      paneRegistry.focused = api;
+      const p = editor.getPosition();
+      onStatusRef.current?.({ rel, lang, line: p?.lineNumber ?? 1, col: p?.column ?? 1 });
+    });
+    editor.onDidChangeCursorPosition(e => {
+      onStatusRef.current?.({ rel, lang, line: e.position.lineNumber, col: e.position.column });
+    });
+
     editor.onDidChangeModelContent(() => {
       const d = editor.getValue() !== savedRef.current;
       setDirty(prev => {
@@ -80,6 +107,8 @@ export function MonacoPane({ root, rel, onDirtyChange }: Props) {
 
     return () => {
       disposed = true;
+      paneRegistry.panes.delete(rel);
+      if (paneRegistry.focused?.rel === rel) paneRegistry.focused = null;
       editor.dispose();
       editorRef.current = null;
     };

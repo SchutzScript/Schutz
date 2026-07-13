@@ -25,6 +25,9 @@ function createWindow(layout) {
     title: "Schutz",
     icon: path.join(__dirname, "..", "public", "assets", "logo-t.png"),
     autoHideMenuBar: true, // 자체 메뉴바를 렌더러에 그리므로 OS 메뉴는 숨김
+    // 커스텀 타이틀바 — 렌더러 헤더가 타이틀바를 겸한다 (VS Code 방식)
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#101312", symbolColor: "#9AA59C", height: 45 },
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -121,6 +124,27 @@ ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
   const abs = safeJoin(root, rel);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content, "utf8");
+  return true;
+});
+
+// 타이틀바 오버레이 색을 테마에 맞춰 갱신
+ipcMain.on("schutz:setOverlay", (e, color, symbolColor) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try { win?.setTitleBarOverlay({ color, symbolColor, height: 45 }); } catch { /* 미지원 무시 */ }
+});
+
+// 파일/폴더 이름 변경 · 삭제
+ipcMain.handle("schutz:renameEntry", async (_e, root, relFrom, relTo) => {
+  const from = safeJoin(root, relFrom);
+  const to = safeJoin(root, relTo);
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  await fs.rename(from, to);
+  return true;
+});
+
+ipcMain.handle("schutz:deleteEntry", async (_e, root, rel) => {
+  const abs = safeJoin(root, rel);
+  await fs.rm(abs, { recursive: true, force: true });
   return true;
 });
 

@@ -23,6 +23,9 @@ interface SchutzApi {
   termInput(line: string): void;
   onTermData(cb: (data: string) => void): () => void;
   newWindow(): void;
+  setOverlay(color: string, symbolColor: string): void;
+  renameEntry(root: string, relFrom: string, relTo: string): Promise<boolean>;
+  deleteEntry(root: string, rel: string): Promise<boolean>;
   cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
   cliLogin(id: string): void;
   cliRun(opts: { agent?: string; cwd?: string; prompt: string; resume?: string; continue?: boolean }): void;

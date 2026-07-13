@@ -107,6 +107,8 @@ export function applyTheme(id: string): void {
   r.setProperty("--shadow-pop", t.shadowPop);
   r.setProperty("--shadow-soft", t.shadowSoft);
   r.setProperty("--accent-soft", t.accentSoft);
+  // 데스크톱: OS 타이틀바 버튼(최소화/닫기) 색도 테마 추종
+  try { (window as any).schutz?.setOverlay?.(t.bgPanel, t.fgSub); } catch { /* ignore */ }
 }
 
 export function monacoThemeOf(id: string): string {
