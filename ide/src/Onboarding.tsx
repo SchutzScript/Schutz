@@ -4,15 +4,16 @@ import { testProvider } from "./ai/registry";
 import { setThemeId, applyTheme, THEME_TOKENS } from "./theme";
 import { setEditorPrefs, setAutonomy, applyUiFont } from "./settings";
 import { LANGS, getLang, setLang, t } from "./i18n";
+import { Logo } from "./icons";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
 
 const MONO = "'IBM Plex Mono',monospace";
 
 const THEMES: Record<string, any> = {
-  feldgrau: { name: "Feldgrau", bg: "#0E100F", chrome: "#101312", line: "rgba(255,255,255,.06)", fg: "#D5DAD5", dim: "#5A635C", code: "#C4CBC4", num: "#3A403C", accent: "#8FA893", selBg: "rgba(143,168,147,.1)", badgeBg: "rgba(255,255,255,.05)", frameBd: "rgba(255,255,255,.1)", logoFilter: "none", kw: "#C4A882", str: "#8BB292", ty: "#9CB8B0", fn: "#8FA8C0", pendBg: "rgba(125,145,131,.07)", pendBar: "#8FA893", okFg: "#9DC4A3", okBg: "rgba(139,178,146,.1)", okBd: "rgba(139,178,146,.3)", noFg: "#CE9A9A", noBg: "rgba(201,123,123,.08)", noBd: "rgba(201,123,123,.28)" },
-  graphite: { name: "Graphite", bg: "#121316", chrome: "#17181C", line: "rgba(255,255,255,.07)", fg: "#DADCE2", dim: "#63666E", code: "#C8CBD2", num: "#41434A", accent: "#9AA3B2", selBg: "rgba(154,163,178,.12)", badgeBg: "rgba(255,255,255,.05)", frameBd: "rgba(255,255,255,.1)", logoFilter: "none", kw: "#C0A470", str: "#93B79A", ty: "#98B4C4", fn: "#A08FC0", pendBg: "rgba(154,163,178,.08)", pendBar: "#9AA3B2", okFg: "#9DC4A3", okBg: "rgba(139,178,146,.1)", okBd: "rgba(139,178,146,.3)", noFg: "#CE9A9A", noBg: "rgba(201,123,123,.08)", noBd: "rgba(201,123,123,.28)" },
-  paper: { name: "Paper", bg: "#FBFAF7", chrome: "#F2F0EA", line: "rgba(0,0,0,.08)", fg: "#2A2D2A", dim: "#8A8D86", code: "#333632", num: "#C0C2BA", accent: "#5F7565", selBg: "rgba(95,117,101,.12)", badgeBg: "rgba(0,0,0,.05)", frameBd: "rgba(0,0,0,.12)", logoFilter: "invert(.85)", kw: "#9A6A2E", str: "#3E7D4E", ty: "#3E6D7D", fn: "#5A4E9A", pendBg: "rgba(95,117,101,.08)", pendBar: "#5F7565", okFg: "#2E6B3E", okBg: "rgba(62,125,78,.1)", okBd: "rgba(62,125,78,.3)", noFg: "#9A4444", noBg: "rgba(154,68,68,.08)", noBd: "rgba(154,68,68,.25)" },
+  feldgrau: { name: "Feldgrau", bg: "#0E100F", chrome: "#101312", line: "rgba(255,255,255,.06)", fg: "#D5DAD5", dim: "#5A635C", code: "#C4CBC4", num: "#3A403C", accent: "#8FA893", selBg: "rgba(143,168,147,.1)", badgeBg: "rgba(255,255,255,.05)", frameBd: "rgba(255,255,255,.1)", kw: "#C4A882", str: "#8BB292", ty: "#9CB8B0", fn: "#8FA8C0", pendBg: "rgba(125,145,131,.07)", pendBar: "#8FA893", okFg: "#9DC4A3", okBg: "rgba(139,178,146,.1)", okBd: "rgba(139,178,146,.3)", noFg: "#CE9A9A", noBg: "rgba(201,123,123,.08)", noBd: "rgba(201,123,123,.28)" },
+  graphite: { name: "Graphite", bg: "#121316", chrome: "#17181C", line: "rgba(255,255,255,.07)", fg: "#DADCE2", dim: "#63666E", code: "#C8CBD2", num: "#41434A", accent: "#9AA3B2", selBg: "rgba(154,163,178,.12)", badgeBg: "rgba(255,255,255,.05)", frameBd: "rgba(255,255,255,.1)", kw: "#C0A470", str: "#93B79A", ty: "#98B4C4", fn: "#A08FC0", pendBg: "rgba(154,163,178,.08)", pendBar: "#9AA3B2", okFg: "#9DC4A3", okBg: "rgba(139,178,146,.1)", okBd: "rgba(139,178,146,.3)", noFg: "#CE9A9A", noBg: "rgba(201,123,123,.08)", noBd: "rgba(201,123,123,.28)" },
+  paper: { name: "Paper", bg: "#FBFAF7", chrome: "#F2F0EA", line: "rgba(0,0,0,.08)", fg: "#2A2D2A", dim: "#8A8D86", code: "#333632", num: "#C0C2BA", accent: "#5F7565", selBg: "rgba(95,117,101,.12)", badgeBg: "rgba(0,0,0,.05)", frameBd: "rgba(0,0,0,.12)", kw: "#9A6A2E", str: "#3E7D4E", ty: "#3E6D7D", fn: "#5A4E9A", pendBg: "rgba(95,117,101,.08)", pendBar: "#5F7565", okFg: "#2E6B3E", okBg: "rgba(62,125,78,.1)", okBd: "rgba(62,125,78,.3)", noFg: "#9A4444", noBg: "rgba(154,68,68,.08)", noBd: "rgba(154,68,68,.25)" },
 };
 const UIFONTS: Record<string, { name: string; stack: string }> = {
   suit: { name: "SUIT", stack: "'SUIT Variable',sans-serif" },
@@ -166,7 +167,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* top: logo + step dots + skip */}
         <div style={{ flex: "none", height: 60, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, position: "relative" }}>
           <div style={{ position: "absolute", left: 24, display: "flex", alignItems: "center", gap: 9 }}>
-            <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 22, height: 22, display: "block", filter: "var(--logo-filter)" }} />
+            <Logo size={22} />
             <span style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: .5, color: "#8B948C" }}>Schutz</span>
           </div>
           {labels.map((_, i) => (
@@ -200,7 +201,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     ];
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "safe center" as any, padding: "20px 0", animation: "szFadeUp .5s ease both" }}>
-        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 84, height: 84, display: "block", marginBottom: 26, filter: "var(--logo-filter)" }} />
+        <Logo size={84} style={{ marginBottom: 26 }} />
         <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -.5 }}>{t("ob.welcomeTitle")}</div>
         <div style={{ fontSize: 14.5, color: "#8B948C", marginTop: 14, lineHeight: 1.8, textAlign: "center", maxWidth: 520 }}>
           {t("ob.welcomeDesc1")}<br />
@@ -357,7 +358,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* live preview */}
         <div style={{ flex: 1, maxWidth: 640, minWidth: 0, borderRadius: 14, overflow: "hidden", border: `1px solid ${th.frameBd}`, boxShadow: "0 20px 60px rgba(0,0,0,.5)", background: th.bg, transition: "background .3s ease" }}>
           <div style={{ height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 14px", background: th.chrome, borderBottom: `1px solid ${th.line}`, transition: "background .3s ease" }}>
-            <img src="./assets/logo-t.png" alt="" style={{ width: 16, height: 16, filter: th.logoFilter }} />
+            <Logo size={16} color={th.accent} />
             <span style={{ fontSize: 11.5, fontWeight: 700, color: th.fg, fontFamily: uiStack }}>schutz-core</span>
             <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: th.dim, fontFamily: codeStack, background: th.badgeBg, borderRadius: 4, padding: "1px 6px" }}>
               <svg width="9" height="9" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><circle cx="4.5" cy="12.5" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><circle cx="11.5" cy="6" r="1.8" fill="none" stroke={th.accent} strokeWidth="1.6" /><path d="M4.5 5.3 V10.7 M11.5 7.8 C11.5 10 8.5 10.8 6.4 11.4" fill="none" stroke={th.accent} strokeWidth="1.6" strokeLinecap="round" /></svg>

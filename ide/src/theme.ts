@@ -17,8 +17,8 @@ export interface ThemeTokens {
   /** 팝업/캡슐 그림자, 은은한 액센트 배경 */
   shadowPop: string; shadowSoft: string; accentSoft: string;
   monaco: string;
-  /** 로고(밝은 PNG) 필터 — 라이트 테마에선 반전해 보이게 */
-  logoFilter: string;
+  /** 라이트 계열인가 — Monaco/TextMate 테마의 명암 선택에 쓰인다 */
+  light?: boolean;
 }
 
 export const THEME_TOKENS: Record<string, ThemeTokens> = {
@@ -37,7 +37,6 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
     accentSoft: "rgba(143,168,147,.14)",
     monaco: "feldgrau",
-    logoFilter: "none",
   },
   graphite: {
     name: "Graphite",
@@ -54,7 +53,6 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
     accentSoft: "rgba(154,163,178,.16)",
     monaco: "feldgrau",
-    logoFilter: "none",
   },
   paper: {
     name: "Paper",
@@ -73,7 +71,7 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     shadowPop: "0 10px 28px rgba(40,50,35,.16)", shadowSoft: "0 4px 14px rgba(40,50,35,.12)",
     accentSoft: "rgba(63,107,78,.12)",
     monaco: "schutz-paper",
-    logoFilter: "invert(0.82) sepia(0.1) saturate(0.6) brightness(0.92)",
+    light: true,
   },
 };
 
@@ -121,7 +119,6 @@ export function applyTheme(id: string): void {
   r.setProperty("--shadow-pop", t.shadowPop);
   r.setProperty("--shadow-soft", t.shadowSoft);
   r.setProperty("--accent-soft", t.accentSoft);
-  r.setProperty("--logo-filter", t.logoFilter);
   // 데스크톱: OS 타이틀바 버튼(최소화/닫기) 색도 테마 추종
   try { (window as any).schutz?.setOverlay?.(t.bgPanel, t.fgSub); } catch { /* ignore */ }
 }

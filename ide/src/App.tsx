@@ -6,7 +6,7 @@ import {
 } from "./ide/data";
 import {
   GitBranchIcon, SearchIcon,
-  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon, DebugIcon, McpIcon,
+  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon, DebugIcon, McpIcon, Logo,
 } from "./icons";
 import { FileIcon } from "./fileIcons";
 import {
@@ -3044,7 +3044,7 @@ export class App extends React.Component<{}, S> {
 
         {/* ══ Header ══ */}
         <div className="titlebar" style={{ flex: "none", height: 54, display: "flex", alignItems: "center", gap: 10, padding: window.schutz ? "2px 150px 0 14px" : "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)", position: "relative", zIndex: 50 }}>
-          <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block", filter: "var(--logo-filter)" }} />
+          <Logo size={24} />
 
           {/* project switcher */}
           <div style={{ position: "relative" }}>
@@ -3772,7 +3772,7 @@ export class App extends React.Component<{}, S> {
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--fg-dim3)" }}>
               {window.schutz && !s.workspace ? (
                 <>
-                  <img src="./assets/logo-t.png" alt="" style={{ width: 40, height: 40, opacity: .3, filter: "var(--logo-filter)" }} />
+                  <Logo size={40} opacity={.3} />
                   <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>{t("misc.openProjectToStart")}</span>
                   <button className="hvAccent" onClick={() => void this.openProject()}
                     style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("misc.openFolder")}</button>
@@ -4742,7 +4742,7 @@ export class App extends React.Component<{}, S> {
     if (window.schutz) env.push(t("modal.envDesktop")); else env.push(t("modal.envWebPreview"));
     return this.modalShell("about", t("modal.aboutTitle"), () => this.closeOverlay("about", { aboutOpen: false }), (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center", padding: "8px 0" }}>
-        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 44, height: 44, filter: "var(--logo-filter)" }} onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+        <Logo size={44} />
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)", letterSpacing: -0.5 }}>Schutz</div>
           <div style={{ fontSize: 12, color: "var(--fg-sub)", marginTop: 3 }}>{t("modal.aboutTagline", { version: APP_VERSION })}</div>

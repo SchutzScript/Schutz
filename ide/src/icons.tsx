@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 /** 인라인 SVG 아이콘 (프로토타입 소스 그대로, stroke 1.2–1.6) */
 
 export const GitBranchIcon = ({ size = 11, color = "#8FA893", sw = 1.4 }: { size?: number; color?: string; sw?: number }) => (
@@ -91,3 +92,28 @@ export const TermStatusIcon = () => (
     <path d="M4 6 L6.5 8 L4 10 M8 10.5 H12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+
+/** 브랜드 마크 — PNG 알파를 마스크로 쓰고 색은 테마에서 받는다.
+ *  로고가 세이지 단색이 된 뒤로는 라이트 테마용 filter 반전(자주색으로 뒤집힘)이 성립하지 않아,
+ *  이미지를 물들이는 대신 마스크로 칠한다. Paper 에선 --accent 가 포레스트라 자동으로 어두워진다.
+ *  url() 은 Vite 가 재작성하지 않도록 인라인 스타일로 둔다(자산은 public/ 에서 dist/ 로 복사됨). */
+export const Logo = ({ size, color, opacity, style }: {
+  size: number; color?: string; opacity?: number; style?: CSSProperties;
+}) => {
+  const url = "url(./assets/logo-t.png)";
+  return (
+    <span
+      role="img"
+      aria-label="Schutz"
+      style={{
+        display: "block", width: size, height: size, opacity,
+        background: color ?? "var(--accent)",
+        WebkitMaskImage: url, maskImage: url,
+        WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center", maskPosition: "center",
+        WebkitMaskSize: "contain", maskSize: "contain",
+        ...style,
+      }}
+    />
+  );
+};
