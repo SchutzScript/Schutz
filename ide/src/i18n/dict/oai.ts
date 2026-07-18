@@ -12,6 +12,13 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
     de: "Antwort fehlgeschlagen: {detail}",
     ja: "応答に失敗しました: {detail}",
   },
+  // 도구 인자 JSON 이 깨진 경우 — 조용히 빈 입력으로 넘기면 빈 경로 제안이 만들어진다
+  "oai.badToolArgs": {
+    ko: "도구 '{name}' 의 인자를 해석하지 못해 건너뛰었습니다.",
+    en: "Skipped tool '{name}' — its arguments could not be parsed.",
+    de: "Werkzeug '{name}' übersprungen — Argumente nicht lesbar.",
+    ja: "ツール '{name}' の引数を解釈できずスキップしました。",
+  },
   "oai.unknown": {
     ko: "알 수 없음",
     en: "Unknown",

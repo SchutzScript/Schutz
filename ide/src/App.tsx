@@ -1710,7 +1710,9 @@ export class App extends React.Component<{}, S> {
       }
       case "/logout": {
         const id = rest[0] === "codex" ? "codex" : "claude";
-        setOAuth(id === "codex" ? "gpt" : id, null);
+        // 토큰은 "codex" 키로 저장된다(main.cjs 가 provider:"codex" 로 내려줌).
+        // 예전엔 "gpt" 를 지워서 /logout codex 후에도 연결된 것처럼 남았다.
+        setOAuth(id, null);
         this.setState(st => ({ oauthTick: st.oauthTick + 1, input: "" }));
         this.schutzSay(raw, t("sc2.loggedOut", { provider: id === "codex" ? "Codex/ChatGPT" : "Claude" }));
         return true;
@@ -2096,7 +2098,8 @@ export class App extends React.Component<{}, S> {
           const file = b.input?.file_path ?? b.input?.path ?? b.input?.pattern ?? b.input?.command ?? "";
           const verb = /edit|write/i.test(b.name) ? t("sc3.verbEdit") : /read|glob|grep|ls/i.test(b.name) ? t("sc3.verbRead") : t("sc3.verbTool");
           const tid = "cli" + (this._uid++);
-          this.addTool(tid, "claude", verb, String(file).split(/[\/]/).slice(-2).join("/") || b.name);
+          // 어떤 CLI 든 자기 에이전트에 귀속시킨다 — "claude" 하드코딩은 오귀속
+          this.addTool(tid, this._cliAgentKey, verb, String(file).split(/[\/]/).slice(-2).join("/") || b.name);
           this.setTool(tid, { st: "done", note: b.name });
         }
       }

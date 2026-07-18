@@ -59,7 +59,10 @@ export class OpenAICompatProvider implements AgentProvider {
     }));
   }
 
-  /** ChatGPT 구독(codex 백엔드) 스트리밍 — 텍스트 전용 (도구는 API 키 경로에서 지원) */
+  /** ChatGPT 구독(codex 백엔드) 스트리밍 — Responses API.
+   *  예전엔 텍스트 전용이라 이 경로에서는 편집 도구가 전혀 전달되지 않았고, 모델이 산문으로만
+   *  답해 "작업하기는 뜨는데 아무것도 안 되어 있는" 증상이 났다. 이제 도구를 실어 보내고
+   *  function_call 이벤트를 파싱한다. 백엔드가 도구를 거부하면 조용히 넘기지 말고 그대로 알린다. */
   private async *streamCodexBackend(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
     const tok = await freshOAuth("codex");
     if (!tok || !window.schutz?.oaiRun) {
@@ -71,8 +74,12 @@ export class OpenAICompatProvider implements AgentProvider {
     for (const m of req.transcript) {
       if (m.role === "assistant") {
         if (m.text) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: m.text }] });
+        // 도구 호출도 기록에 남겨야 다음 턴에서 결과와 짝이 맞는다 (call_id 로 연결)
+        for (const c of m.calls ?? []) {
+          input.push({ type: "function_call", call_id: c.id, name: c.name, arguments: JSON.stringify(c.input ?? {}) });
+        }
       } else if (m.results && m.results.length) {
-        input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "[도구 결과]\n" + m.results.map(r => r.content).join("\n---\n") }] });
+        for (const r of m.results) input.push({ type: "function_call_output", call_id: r.id, output: r.content });
       } else {
         input.push({ type: "message", role: "user", content: [{ type: "input_text", text: m.text ?? "" }] });
       }
@@ -98,8 +105,16 @@ export class OpenAICompatProvider implements AgentProvider {
         input,
         stream: true,
         store: false,
+        // Responses API 의 도구 형식은 chat-completions 와 달리 평평하다
+        // ({type,name,description,parameters}) — function 아래에 중첩하지 않는다.
+        ...(req.tools && req.tools.length
+          ? { tools: req.tools.map(t2 => ({ type: "function", name: t2.name, description: t2.description, parameters: t2.input_schema })) }
+          : {}),
       },
     });
+    // item_id → 조립 중인 함수 호출. Responses API 는 인자를 델타로 흘려보낸다.
+    const fnBuf = new Map<string, { callId: string; name: string; args: string }>();
+    let sawCall = false;
     try {
       let doneFlag = false;
       while (!doneFlag) {
@@ -117,6 +132,25 @@ export class OpenAICompatProvider implements AgentProvider {
           try { d = JSON.parse(ev.data); } catch { continue; }
           if (d.type === "response.output_text.delta" && d.delta) {
             yield { type: "text", delta: d.delta };
+          } else if (d.type === "response.output_item.added" && d.item?.type === "function_call") {
+            fnBuf.set(String(d.item.id ?? d.output_index), { callId: String(d.item.call_id ?? d.item.id ?? ""), name: String(d.item.name ?? ""), args: "" });
+          } else if (d.type === "response.function_call_arguments.delta") {
+            const b2 = fnBuf.get(String(d.item_id ?? d.output_index));
+            if (b2) b2.args += d.delta ?? "";
+          } else if (d.type === "response.output_item.done" && d.item?.type === "function_call") {
+            // 완성본이 오면 그것을 신뢰한다(델타 유실 대비)
+            const key = String(d.item.id ?? d.output_index);
+            const b2 = fnBuf.get(key) ?? { callId: "", name: "", args: "" };
+            const callId = String(d.item.call_id ?? b2.callId ?? key);
+            const name = String(d.item.name ?? b2.name);
+            const argsRaw = typeof d.item.arguments === "string" && d.item.arguments ? d.item.arguments : b2.args;
+            fnBuf.delete(key);
+            // 호출별 개별 파싱 — 하나가 깨져도 나머지 호출은 살린다
+            let parsed: any = {};
+            try { parsed = argsRaw ? JSON.parse(argsRaw) : {}; }
+            catch { yield { type: "error", message: t("oai.badToolArgs", { name }) }; continue; }
+            sawCall = true;
+            yield { type: "tool_call", call: { id: callId, name, input: parsed } };
           } else if (d.type === "response.completed" && d.response?.usage) {
             yield { type: "usage", inputTokens: d.response.usage.input_tokens ?? 0, outputTokens: d.response.usage.output_tokens ?? 0 };
           } else if (d.type === "response.failed") {
@@ -128,7 +162,8 @@ export class OpenAICompatProvider implements AgentProvider {
       off();
       req.signal?.removeEventListener("abort", onAbort);
     }
-    yield { type: "stop", reason: "end" };
+    // 도구를 하나라도 불렀으면 루프가 계속되어야 한다 — end 로 끊으면 실행 전에 버려진다
+    yield { type: "stop", reason: sawCall ? "tool_use" : "end" };
     yield { type: "done" };
   }
 
@@ -215,7 +250,9 @@ export class OpenAICompatProvider implements AgentProvider {
             const idx = tc.index ?? 0;
             const buf = toolBuf[idx] || (toolBuf[idx] = { id: "", name: "", args: "" });
             if (tc.id) buf.id = tc.id;
-            if (tc.function?.name) buf.name += tc.function.name;
+            // 이름은 대입 — 누적하면 델타마다 전체 이름을 보내는 백엔드에서
+            // "propose_editpropose_edit" 이 되어 알 수 없는 도구로 떨어진다
+            if (tc.function?.name) buf.name = tc.function.name;
             if (tc.function?.arguments) buf.args += tc.function.arguments;
           }
         }
@@ -223,15 +260,20 @@ export class OpenAICompatProvider implements AgentProvider {
     }
 
     // 스트림 종료 후 누적된 tool_call 방출
+    let emitted = 0;
     for (const k of Object.keys(toolBuf)) {
       const b = toolBuf[+k];
       if (!b.name) continue;
       let input: any = {};
-      try { input = b.args ? JSON.parse(b.args) : {}; } catch { /* 빈 입력 */ }
+      // 인자 파싱 실패를 {} 로 삼키면 빈 경로 제안이 만들어진다 — 그 호출만 건너뛰고 알린다
+      try { input = b.args ? JSON.parse(b.args) : {}; }
+      catch { yield { type: "error", message: t("oai.badToolArgs", { name: b.name }) }; continue; }
+      emitted++;
       yield { type: "tool_call", call: { id: b.id || "tc" + k, name: b.name, input } };
     }
     if (inTok || outTok) yield { type: "usage", inputTokens: inTok, outputTokens: outTok };
-    yield { type: "stop", reason: finish === "tool_calls" ? "tool_use" : "end" };
+    // finish_reason 만 믿으면, 도구 호출을 파싱해놓고도 실행 전에 버리는 백엔드가 있다
+    yield { type: "stop", reason: (finish === "tool_calls" || emitted > 0) ? "tool_use" : "end" };
     yield { type: "done" };
   }
 }
