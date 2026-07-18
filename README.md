@@ -50,4 +50,5 @@ npm test                # 스모크 테스트 (vscode 없이)
 
 ## 라이선스
 
-MIT (예정) — [LICENSE](LICENSE) 참고.
+**FSL-1.1-Apache-2.0** (Functional Source License) — [LICENSE](LICENSE) 참고.
+소스는 공개되며 자유롭게 사용·수정·기여할 수 있습니다. 다만 Schutz와 경쟁하는 상업 제품/서비스로의 사용은 2년간 제한되며, 공개 후 2년이 지나면 각 버전은 Apache 2.0으로 자동 전환됩니다.
