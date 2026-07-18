@@ -14,15 +14,17 @@ export interface ThemeTokens {
   /** 팝업/캡슐 그림자, 은은한 액센트 배경 */
   shadowPop: string; shadowSoft: string; accentSoft: string;
   monaco: string;
+  /** 로고(밝은 PNG) 필터 — 라이트 테마에선 반전해 보이게 */
+  logoFilter: string;
 }
 
 export const THEME_TOKENS: Record<string, ThemeTokens> = {
   feldgrau: {
     name: "Feldgrau",
-    bgRoot: "#0C0E0D", bgPanel: "#101312", bgEditor: "#0E100F", bgCard: "#151917", bgDock: "#0A0C0B",
-    bgPopup: "#181C1A", bdPopup: "#2A302C",
-    fg: "#D5DAD5", fgCode: "#C4CBC4", fgSub: "#9AA59C", fgSub2: "#8B948C",
-    fgDim: "#5A635C", fgDim2: "#4B534D", fgDim3: "#3A403C",
+    bgRoot: "#0D100E", bgPanel: "#121615", bgEditor: "#0F1211", bgCard: "#171B19", bgDock: "#0A0D0B",
+    bgPopup: "#1A1F1C", bdPopup: "#2E342F",
+    fg: "#E4E8E3", fgCode: "#D2D8D1", fgSub: "#B4BEB5", fgSub2: "#A3ADA4",
+    fgDim: "#88918A", fgDim2: "#727B74", fgDim3: "#5C645E",
     accent: "#8FA893", accentHi: "#A9BCA9",
     onAccent: "#0C0E0D",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
@@ -31,13 +33,14 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
     accentSoft: "rgba(143,168,147,.14)",
     monaco: "feldgrau",
+    logoFilter: "none",
   },
   graphite: {
     name: "Graphite",
     bgRoot: "#0F1013", bgPanel: "#14151A", bgEditor: "#121316", bgCard: "#191B21", bgDock: "#0C0D10",
     bgPopup: "#1C1E24", bdPopup: "#2E3138",
-    fg: "#DADCE2", fgCode: "#C8CBD2", fgSub: "#A2A6B0", fgSub2: "#8F939E",
-    fgDim: "#63666E", fgDim2: "#53565E", fgDim3: "#41434A",
+    fg: "#E0E2E8", fgCode: "#CCCFD6", fgSub: "#AEB2BC", fgSub2: "#9DA1AC",
+    fgDim: "#868A93", fgDim2: "#71757D", fgDim3: "#5A5D65",
     accent: "#9AA3B2", accentHi: "#B4BCC9",
     onAccent: "#0F1013",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
@@ -46,22 +49,24 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     shadowPop: "0 12px 32px rgba(0,0,0,.55)", shadowSoft: "0 5px 16px rgba(0,0,0,.5)",
     accentSoft: "rgba(154,163,178,.16)",
     monaco: "feldgrau",
+    logoFilter: "none",
   },
   paper: {
     name: "Paper",
-    // 따뜻한 종이 톤 — 순백 대신 미색, 패널은 한 단계 어둡게 층 분리
-    bgRoot: "#F3F1EA", bgPanel: "#EAE7DE", bgEditor: "#FAF8F2", bgCard: "#FFFFFF", bgDock: "#E4E1D7",
-    bgPopup: "#FFFFFF", bdPopup: "#CFCABD",
-    fg: "#20241F", fgCode: "#2E332C", fgSub: "#4E5449", fgSub2: "#646A5E",
-    fgDim: "#83887B", fgDim2: "#9BA090", fgDim3: "#BBBFB1",
-    accent: "#4E6A55", accentHi: "#3D5745",
+    // 깔끔한 화이트 — 에디터는 순백, 패널은 옅은 뉴트럴 그레이로 층 분리
+    bgRoot: "#F4F5F3", bgPanel: "#ECEEEA", bgEditor: "#FFFFFF", bgCard: "#FFFFFF", bgDock: "#E7E9E4",
+    bgPopup: "#FFFFFF", bdPopup: "#D3D7CD",
+    fg: "#161A15", fgCode: "#1F241F", fgSub: "#3E443B", fgSub2: "#525849",
+    fgDim: "#6A7166", fgDim2: "#828978", fgDim3: "#9AA091",
+    accent: "#3F6B4E", accentHi: "#2E5A3D",
     onAccent: "#FFFFFF",
-    w03: "rgba(40,45,35,.04)", w04: "rgba(40,45,35,.055)", w05: "rgba(40,45,35,.07)",
-    w06: "rgba(40,45,35,.09)", w07: "rgba(40,45,35,.105)", w08: "rgba(40,45,35,.12)",
-    w10: "rgba(40,45,35,.14)", w12: "rgba(40,45,35,.17)", w14: "rgba(40,45,35,.2)",
-    shadowPop: "0 10px 28px rgba(60,60,45,.18)", shadowSoft: "0 4px 14px rgba(60,60,45,.14)",
-    accentSoft: "rgba(78,106,85,.13)",
+    w03: "rgba(30,40,25,.035)", w04: "rgba(30,40,25,.05)", w05: "rgba(30,40,25,.065)",
+    w06: "rgba(30,40,25,.085)", w07: "rgba(30,40,25,.1)", w08: "rgba(30,40,25,.12)",
+    w10: "rgba(30,40,25,.145)", w12: "rgba(30,40,25,.17)", w14: "rgba(30,40,25,.2)",
+    shadowPop: "0 10px 28px rgba(40,50,35,.16)", shadowSoft: "0 4px 14px rgba(40,50,35,.12)",
+    accentSoft: "rgba(63,107,78,.12)",
     monaco: "schutz-paper",
+    logoFilter: "invert(0.82) sepia(0.1) saturate(0.6) brightness(0.92)",
   },
 };
 
@@ -107,6 +112,7 @@ export function applyTheme(id: string): void {
   r.setProperty("--shadow-pop", t.shadowPop);
   r.setProperty("--shadow-soft", t.shadowSoft);
   r.setProperty("--accent-soft", t.accentSoft);
+  r.setProperty("--logo-filter", t.logoFilter);
   // 데스크톱: OS 타이틀바 버튼(최소화/닫기) 색도 테마 추종
   try { (window as any).schutz?.setOverlay?.(t.bgPanel, t.fgSub); } catch { /* ignore */ }
 }

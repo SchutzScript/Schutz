@@ -73,6 +73,18 @@ export const GearIcon = () => (
   </svg>
 );
 
+export const McpIcon = ({ size = 15, color = "#6E776F" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16">
+    {/* 허브 — MCP 호스트가 도구 서버들과 연결 */}
+    <circle cx="8" cy="8" r="1.9" fill="none" stroke={color} strokeWidth="1.3" />
+    <circle cx="3" cy="3.5" r="1.35" fill="none" stroke={color} strokeWidth="1.2" />
+    <circle cx="13" cy="3.5" r="1.35" fill="none" stroke={color} strokeWidth="1.2" />
+    <circle cx="3" cy="12.5" r="1.35" fill="none" stroke={color} strokeWidth="1.2" />
+    <circle cx="13" cy="12.5" r="1.35" fill="none" stroke={color} strokeWidth="1.2" />
+    <path d="M6.6 6.6 L4 4.6 M9.4 6.6 L12 4.6 M6.6 9.4 L4 11.4 M9.4 9.4 L12 11.4" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
+  </svg>
+);
+
 export const TermStatusIcon = () => (
   <svg width="10" height="10" viewBox="0 0 16 16">
     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
