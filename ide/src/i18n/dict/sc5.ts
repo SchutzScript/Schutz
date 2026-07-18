@@ -1,0 +1,40 @@
+export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
+  // ── 변경 검토 패널 (renderReview) ──
+  "sc5.reviewPending": { ko: "검토 대기", en: "Pending review", de: "Prüfung ausstehend", ja: "レビュー待ち" },
+  "sc5.reviewAccepted": { ko: "수락됨", en: "Accepted", de: "Angenommen", ja: "承認済み" },
+  "sc5.reviewRejected": { ko: "거절됨", en: "Rejected", de: "Abgelehnt", ja: "却下済み" },
+  "sc5.reviewEmpty": { ko: "검토할 변경이 없습니다.", en: "No changes to review.", de: "Keine Änderungen zu prüfen.", ja: "レビューする変更はありません。" },
+  "sc5.acceptAll": { ko: "모두 수락", en: "Accept All", de: "Alle annehmen", ja: "すべて承認" },
+  "sc5.rejectAll": { ko: "모두 거절", en: "Reject All", de: "Alle ablehnen", ja: "すべて却下" },
+  "sc5.openInEditor": { ko: "에디터에서 열기", en: "Open in editor", de: "Im Editor öffnen", ja: "エディタで開く" },
+  "sc5.accept": { ko: "수락", en: "Accept", de: "Annehmen", ja: "承認" },
+  "sc5.reject": { ko: "거절", en: "Reject", de: "Ablehnen", ja: "却下" },
+
+  // ── 확장: 기능 제한 안내 ──
+  "sc5.extLimitedRuntime": { ko: "기여 기능은 정상 · 일부 런타임 기능은 이 호스트에서 제한됨", en: "Contributions work · some runtime features are limited on this host", de: "Beiträge funktionieren · einige Laufzeitfunktionen sind auf diesem Host eingeschränkt", ja: "コントリビューションは正常・一部のランタイム機能はこのホストでは制限されます" },
+
+  // ── MCP 관리 (토스트 · 상태) ──
+  "sc5.mcpStartFail": { ko: "{name} 시작 실패: {reason}", en: "{name} failed to start: {reason}", de: "{name} konnte nicht gestartet werden: {reason}", ja: "{name} の起動に失敗: {reason}" },
+  "sc5.mcpStarted": { ko: "{name} 시작됨", en: "{name} started", de: "{name} gestartet", ja: "{name} を起動しました" },
+  "sc5.mcpAddFail": { ko: "추가 실패: {error}", en: "Failed to add: {error}", de: "Hinzufügen fehlgeschlagen: {error}", ja: "追加に失敗: {error}" },
+  "sc5.mcpImportedStarted": { ko: "{name} 가져옴 · 시작됨", en: "{name} imported · started", de: "{name} importiert · gestartet", ja: "{name} をインポート・起動しました" },
+  "sc5.mcpAddedStartFail": { ko: "{name} 추가됨(시작 실패)", en: "{name} added (failed to start)", de: "{name} hinzugefügt (Start fehlgeschlagen)", ja: "{name} を追加(起動失敗)" },
+  "sc5.mcpJsonParseFail": { ko: "JSON 파싱 실패", en: "Failed to parse JSON", de: "JSON konnte nicht geparst werden", ja: "JSONの解析に失敗" },
+  "sc5.mcpNoServerDef": { ko: "서버 정의를 찾을 수 없습니다", en: "No server definition found", de: "Keine Serverdefinition gefunden", ja: "サーバー定義が見つかりません" },
+  "sc5.mcpServersAdded": { ko: "{n}개 서버 추가됨", en: "{n} servers added", de: "{n} Server hinzugefügt", ja: "{n}個のサーバーを追加しました" },
+  "sc5.mcpNeedAi": { ko: "생성하려면 연결된 AI가 필요합니다. 설정(⚙)에서 연결하세요.", en: "You need a connected AI to generate. Connect one in Settings (⚙).", de: "Zum Generieren ist eine verbundene KI erforderlich. Verbinden Sie eine in den Einstellungen (⚙).", ja: "生成には接続済みのAIが必要です。設定(⚙)で接続してください。" },
+  "sc5.mcpAnalyzing": { ko: "분석 중…", en: "Analyzing…", de: "Analysiere…", ja: "分析中…" },
+  "sc5.mcpCliAnalyzeFail": { ko: "CLI 분석 실패: {error}", en: "CLI analysis failed: {error}", de: "CLI-Analyse fehlgeschlagen: {error}", ja: "CLI分析に失敗: {error}" },
+  "sc5.mcpNeedProject": { ko: "프로젝트 폴더를 지정하거나 워크스페이스를 여세요.", en: "Specify a project folder or open a workspace.", de: "Geben Sie einen Projektordner an oder öffnen Sie einen Arbeitsbereich.", ja: "プロジェクトフォルダを指定するか、ワークスペースを開いてください。" },
+  "sc5.mcpSpecFetchFail": { ko: "스펙 가져오기 실패: {error}", en: "Failed to fetch spec: {error}", de: "Spezifikation konnte nicht abgerufen werden: {error}", ja: "仕様の取得に失敗: {error}" },
+  "sc5.mcpLocalSpecFail": { ko: "로컬 스펙 읽기 실패", en: "Failed to read local spec", de: "Lokale Spezifikation konnte nicht gelesen werden", ja: "ローカル仕様の読み込みに失敗" },
+  "sc5.mcpGenerating": { ko: "AI가 \"{name}\" 서버를 생성 중…", en: "AI is generating the \"{name}\" server…", de: "KI generiert den Server „{name}“…", ja: "AIが「{name}」サーバーを生成中…" },
+  "sc5.mcpGenError": { ko: "생성 오류: {message}", en: "Generation error: {message}", de: "Generierungsfehler: {message}", ja: "生成エラー: {message}" },
+  "sc5.mcpEmptyCode": { ko: "생성된 코드가 비어 있습니다.", en: "The generated code is empty.", de: "Der generierte Code ist leer.", ja: "生成されたコードが空です。" },
+  "sc5.mcpWritingStarting": { ko: "서버 기록·시작 중…", en: "Writing and starting server…", de: "Server wird geschrieben und gestartet…", ja: "サーバーの書き込み・起動中…" },
+  "sc5.mcpWriteFail": { ko: "기록 실패: {error}", en: "Failed to write: {error}", de: "Schreiben fehlgeschlagen: {error}", ja: "書き込みに失敗: {error}" },
+  "sc5.mcpCreatedStarted": { ko: "MCP 서버 \"{name}\" 생성·시작됨 (도구 {count})", en: "MCP server \"{name}\" created and started ({count} tools)", de: "MCP-Server „{name}“ erstellt und gestartet ({count} Tools)", ja: "MCPサーバー「{name}」を生成・起動しました(ツール {count})" },
+  "sc5.mcpCreatedStartFail": { ko: "\"{name}\" 생성됐지만 시작 실패: {reason} — 코드는 userData/mcp-servers/{name}/server.cjs", en: "\"{name}\" created but failed to start: {reason} — code is at userData/mcp-servers/{name}/server.cjs", de: "„{name}“ erstellt, aber Start fehlgeschlagen: {reason} — Code liegt unter userData/mcp-servers/{name}/server.cjs", ja: "「{name}」を生成しましたが起動に失敗: {reason} — コードは userData/mcp-servers/{name}/server.cjs" },
+  "sc5.mcpGenCancelled": { ko: "생성을 취소했습니다.", en: "Generation cancelled.", de: "Generierung abgebrochen.", ja: "生成をキャンセルしました。" },
+  "sc5.mcpGenFail": { ko: "생성 실패: {error}", en: "Generation failed: {error}", de: "Generierung fehlgeschlagen: {error}", ja: "生成に失敗: {error}" },
+};
