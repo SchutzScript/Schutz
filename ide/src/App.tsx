@@ -2013,6 +2013,7 @@ export class App extends React.Component<{}, S> {
 
     const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
+    let delegated = false; // 이번 실행에서 delegate_task 가 실제로 불렸는가
 
     try {
       for (let round = 0; round < 8; round++) {
@@ -2056,6 +2057,7 @@ export class App extends React.Component<{}, S> {
         const results: { id: string; content: string }[] = [];
         for (const c of calls) {
           if (abort.signal.aborted) break; // 중지 시 남은 도구 실행/파일쓰기 중단
+          if (c.name === "delegate_task") delegated = true;
           const out = await this.execTool(agentId, c);
           results.push({ id: c.id, content: out.slice(0, 40_000) });
         }
@@ -2068,6 +2070,16 @@ export class App extends React.Component<{}, S> {
         }));
       }
     } finally {
+      // 관리자가 "위임했다"고 말만 하고 delegate_task 를 부르지 않으면, 사용자는 오지 않을 결과를
+      // 기다리게 된다. 앱이 그 거짓 주장을 조용히 통과시키지 않는다.
+      if (opts.isManager && !delegated && /위임|delegat|맡겼|시켰/i.test(finalText)) {
+        this.setState(s => ({
+          messages: [...s.messages, {
+            id: "a" + (this._uid++), role: "ai" as const, who: t("sc2.systemNote"),
+            text: t("sc2.delegateClaimedButNotDone"),
+          }],
+        }));
+      }
       // 이 에이전트의 파일 락 해제
       for (const [rel, holder] of [...this.fileLocks.entries()]) {
         if (holder === agentId) this.fileLocks.delete(rel);

@@ -51,6 +51,14 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc2.verbDelegate": { ko: "위임", en: "Delegate", de: "Delegieren", ja: "委任" },
   "sc2.noteTargetError": { ko: "대상 오류", en: "Target error", de: "Zielfehler", ja: "対象エラー" },
   "sc2.noteDelegated": { ko: "위임됨", en: "Delegated", de: "Delegiert", ja: "委任済み" },
+  "sc2.systemNote": { ko: "Schutz", en: "Schutz", de: "Schutz", ja: "Schutz" },
+  // 관리자가 도구를 부르지 않고 위임했다고 말만 한 경우 — 기다려도 결과가 오지 않는다
+  "sc2.delegateClaimedButNotDone": {
+    ko: "⚠️ 위임했다고 했지만 실제로 다른 에이전트에게 전달되지 않았습니다. 결과가 오지 않으니 다시 요청해 주세요 — 어떤 에이전트에게 무엇을 맡길지 구체적으로 적으면 잘 전달됩니다.",
+    en: "⚠️ The manager said it delegated, but no task was actually handed off. Nothing will arrive — please ask again, naming the agent and the task explicitly.",
+    de: "⚠️ Der Manager meldete eine Delegation, es wurde aber nichts übergeben. Es kommt kein Ergebnis — bitte erneut anfragen und Agent und Aufgabe ausdrücklich nennen.",
+    ja: "⚠️ 委任したと言いましたが、実際には引き渡されていません。結果は届きません — エージェントと作業内容を明示してもう一度依頼してください。",
+  },
   "sc2.noteError": { ko: "오류", en: "Error", de: "Fehler", ja: "エラー" },
   "sc2.managerSuffix": { ko: " · 관리자", en: " · Manager", de: " · Manager", ja: " · マネージャー" },
 };
