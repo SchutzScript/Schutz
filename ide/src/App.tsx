@@ -766,7 +766,7 @@ export class App extends React.Component<{}, S> {
   applyEditorTheme(themes: vscodeExt.ImportedTheme[] = this.state.extThemes) {
     const vsx = getActiveVsxTheme();
     if (vsx && themes.some(t => t.id === vsx)) { monaco.editor.setTheme(vsx); return; }
-    if (textmate.isTextMateWired()) monaco.editor.setTheme("schutz-tm-dark");
+    if (textmate.isTextMateWired()) monaco.editor.setTheme(textmate.tmThemeId());
     else monaco.editor.setTheme(monacoThemeOf(getThemeId()));
   }
   /** 가져온 VS Code 에디터 테마 선택 + 영속화 */

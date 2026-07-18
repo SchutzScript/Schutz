@@ -123,6 +123,10 @@ export function applyTheme(id: string): void {
   try { (window as any).schutz?.setOverlay?.(t.bgPanel, t.fgSub); } catch { /* ignore */ }
 }
 
+export function isLightTheme(id: string): boolean {
+  return !!(THEME_TOKENS[id] ?? THEME_TOKENS.feldgrau).light;
+}
+
 export function monacoThemeOf(id: string): string {
   return (THEME_TOKENS[id] ?? THEME_TOKENS.feldgrau).monaco;
 }

@@ -5,6 +5,7 @@ import { loadWASM } from "onigasm";
 import { wireTmGrammars } from "monaco-editor-textmate";
 import monaco from "../editor/monacoSetup";
 import onigasmWasmUrl from "onigasm/lib/onigasm.wasm?url";
+import { getThemeId, isLightTheme } from "../theme";
 
 let wasmReady: Promise<void> | null = null;
 function ensureWasm(): Promise<void> {
@@ -16,26 +17,63 @@ function ensureWasm(): Promise<void> {
 const grammarByScope = new Map<string, { extId: string; path: string }>();
 let wired = false;
 
-/** TextMate 토큰 스코프까지 색을 입히는 테마 (deepest scope → 접두 매칭) */
-function defineTmTheme() {
-  const rules: monaco.editor.ITokenThemeRule[] = [
-    { token: "", foreground: "D8DFD8" },
-    { token: "comment", foreground: "72806F", fontStyle: "italic" },
-    { token: "string", foreground: "9DD3A6" },
-    { token: "constant.numeric", foreground: "D8A9C8" }, { token: "constant.language", foreground: "D8A9C8" }, { token: "constant.character", foreground: "9DD3A6" }, { token: "constant.other", foreground: "D8A9C8" },
-    { token: "keyword", foreground: "E4B67E" }, { token: "keyword.operator", foreground: "AEB9AF" },
-    { token: "storage", foreground: "E4B67E" }, { token: "storage.type", foreground: "A6D6C8" },
-    { token: "entity.name.function", foreground: "E9E2AC" }, { token: "support.function", foreground: "E9E2AC" },
-    { token: "entity.name.type", foreground: "A6D6C8" }, { token: "entity.name.class", foreground: "A6D6C8" }, { token: "support.type", foreground: "A6D6C8" }, { token: "support.class", foreground: "A6D6C8" },
-    { token: "entity.name.tag", foreground: "E4B67E" }, { token: "entity.other.attribute-name", foreground: "A6D6C8" },
-    { token: "variable", foreground: "D8DFD8" }, { token: "variable.parameter", foreground: "D6C6A6" },
-    { token: "punctuation", foreground: "AEB9AF" },
-    { token: "number", foreground: "D8A9C8" }, { token: "type", foreground: "A6D6C8" }, { token: "function", foreground: "E9E2AC" }, { token: "delimiter", foreground: "AEB9AF" },
+/** TextMate 토큰 스코프까지 색을 입히는 테마 (deepest scope → 접두 매칭).
+ *  다크/라이트 둘 다 정의한다 — 예전엔 다크만 있어 Paper 테마를 골라도
+ *  에디터만 검게 남았다(TextMate 연결 시 무조건 tm-dark 로 가는 분기). */
+type TmPalette = {
+  base: "vs" | "vs-dark"; fg: string; comment: string; str: string; num: string;
+  kw: string; type: string; fn: string; punct: string; param: string;
+  bg: string; editorFg: string; lineNum: string; lineNumActive: string;
+};
+
+const TM_DARK: TmPalette = {
+  base: "vs-dark", fg: "D8DFD8", comment: "72806F", str: "9DD3A6", num: "D8A9C8",
+  kw: "E4B67E", type: "A6D6C8", fn: "E9E2AC", punct: "AEB9AF", param: "D6C6A6",
+  bg: "#0F1211", editorFg: "#D8DFD8", lineNum: "#606A62", lineNumActive: "#B4BEB5",
+};
+
+// 라이트는 schutz-paper 팔레트와 같은 계열로 맞추되, 흰 배경에서 읽힐 만큼 어둡게.
+const TM_LIGHT: TmPalette = {
+  base: "vs", fg: "333632", comment: "8A8D86", str: "3E7D4E", num: "8A4A7A",
+  kw: "9A6A2E", type: "2E6A7A", fn: "7A6320", punct: "5C6258", param: "6A5A38",
+  bg: "#FFFFFF", editorFg: "#232823", lineNum: "#BEC3B6", lineNumActive: "#5C6258",
+};
+
+function tmRules(p: TmPalette): monaco.editor.ITokenThemeRule[] {
+  return [
+    { token: "", foreground: p.fg },
+    { token: "comment", foreground: p.comment, fontStyle: "italic" },
+    { token: "string", foreground: p.str },
+    { token: "constant.numeric", foreground: p.num }, { token: "constant.language", foreground: p.num },
+    { token: "constant.character", foreground: p.str }, { token: "constant.other", foreground: p.num },
+    { token: "keyword", foreground: p.kw }, { token: "keyword.operator", foreground: p.punct },
+    { token: "storage", foreground: p.kw }, { token: "storage.type", foreground: p.type },
+    { token: "entity.name.function", foreground: p.fn }, { token: "support.function", foreground: p.fn },
+    { token: "entity.name.type", foreground: p.type }, { token: "entity.name.class", foreground: p.type },
+    { token: "support.type", foreground: p.type }, { token: "support.class", foreground: p.type },
+    { token: "entity.name.tag", foreground: p.kw }, { token: "entity.other.attribute-name", foreground: p.type },
+    { token: "variable", foreground: p.fg }, { token: "variable.parameter", foreground: p.param },
+    { token: "punctuation", foreground: p.punct },
+    { token: "number", foreground: p.num }, { token: "type", foreground: p.type },
+    { token: "function", foreground: p.fn }, { token: "delimiter", foreground: p.punct },
   ];
-  monaco.editor.defineTheme("schutz-tm-dark", {
-    base: "vs-dark", inherit: true, rules,
-    colors: { "editor.background": "#0F1211", "editor.foreground": "#D8DFD8", "editorLineNumber.foreground": "#606A62", "editorLineNumber.activeForeground": "#B4BEB5" },
-  });
+}
+
+function defineTmTheme() {
+  for (const [id, p] of [["schutz-tm-dark", TM_DARK], ["schutz-tm-light", TM_LIGHT]] as [string, TmPalette][]) {
+    monaco.editor.defineTheme(id, {
+      base: p.base, inherit: true, rules: tmRules(p),
+      colors: {
+        "editor.background": p.bg, "editor.foreground": p.editorFg,
+        "editorLineNumber.foreground": p.lineNum, "editorLineNumber.activeForeground": p.lineNumActive,
+      },
+    });
+  }
+}
+
+/** 현재 선택 테마의 명암에 맞는 TextMate 테마 id */
+export function tmThemeId(): string {
+  return isLightTheme(getThemeId()) ? "schutz-tm-light" : "schutz-tm-dark";
 }
 
 /** 활성 VS Code 확장의 grammars 를 수집·연결. 반환: 연결된 언어 수 */
