@@ -1,7 +1,7 @@
 {
   "name": "schutz-ide",
   "productName": "Schutz",
-  "description": "AI가 코드를 고치는 과정을 실시간으로 보여주는 AI 네이티브 IDE",
+  "description": "An AI-native IDE that shows you the AI editing your code, live",
   "author": "SchutzScript",
   "repository": {
     "type": "git",
