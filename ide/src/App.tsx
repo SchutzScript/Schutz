@@ -22,6 +22,7 @@ import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
+import { typeEdit } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
 import * as lspConv from "./editor/lspConverters";
 import * as dap from "./debug/dapClient";
@@ -337,7 +338,7 @@ export class App extends React.Component<{}, S> {
 
   state: S = {
     statusKey: "idle", running: false, messages: [], input: "",
-    plan: [], tools: [], files: [], docs: freshDocs(), chips: {},
+    plan: [], tools: [], files: [], docs: window.schutz ? {} : freshDocs(), chips: {}, // 데스크톱엔 데모 문서를 심지 않는다(실제 파일을 가림)
     tabs: [[TM]], active: [TM], leftTab: "flow", expanded: null,
     breakpoints: {}, debug: null, debugConsole: [],
     extCommands: [], extList: [], extErrors: [], extLimited: [], extPanel: null, extThemes: [], extIconThemes: [], iconVer: 0, extSearch: "", extResults: [], extBusy: false, extInstalling: [], extDetail: null, extDetailBusy: false,
@@ -637,7 +638,7 @@ export class App extends React.Component<{}, S> {
       this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active;
       this.setState(s => ({
         workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
-        docs: freshDocs(), files: [], plan: [], tools: [], chips: {},
+        docs: window.schutz ? {} : freshDocs(), files: [], plan: [], tools: [], chips: {},
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
         git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
@@ -982,6 +983,7 @@ export class App extends React.Component<{}, S> {
     if (!p || !ws || !window.schutz || p.status !== "pending") return;
     try {
       let newContent: string;
+      let editStart = -1, editEnd = -1; // 애니메이션 대상 범위
       if (p.find === "") {
         // 새 파일 생성 — 기존 파일 덮어쓰기 방지
         const exists = await window.schutz.readFile(ws.root, p.rel).then(() => true, () => false);
@@ -990,6 +992,8 @@ export class App extends React.Component<{}, S> {
         await window.schutz.writeFile(ws.root, p.rel, newContent);
         const tree = await window.schutz.readTree(ws.root);
         this.setState({ workspace: tree });
+        // 빈 파일 → 전체 내용. 파일이 열리며 코드가 타이핑되는 장면이 여기서 나온다
+        editStart = 0; editEnd = 0;
       } else {
         const cur = await window.schutz.readFile(ws.root, p.rel);
         let start = -1, end = -1;
@@ -1010,21 +1014,51 @@ export class App extends React.Component<{}, S> {
           newContent = cur.replace(p.find, () => p.replace);
         }
         await window.schutz.writeFile(ws.root, p.rel, newContent);
+        editStart = start >= 0 ? start : cur.indexOf(p.find);
+        editEnd = editStart + p.find.length;
       }
-      // 공유 모델도 갱신 (인텔리전스·진단 반영)
-      projectModels.reload(ws.root, p.rel, newContent, false);
       this._proposalsById.set(id, { ...p, status: "accepted" }); // 동기 레지스트리도 갱신 — 자동수락 호출측이 결과를 즉시 읽는다
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
-        paneVer: { ...s.paneVer, [p.rel]: (s.paneVer[p.rel] ?? 0) + 1 },
       }));
+      // 파일을 먼저 열어야 애니메이터가 붙일 에디터가 생긴다
       this.openFile(p.rel);
+      // 모델에 애니메이션으로 반영. setValue + paneVer 리마운트를 쓰던 자리 —
+      // 그건 코드를 한 프레임에 갈아끼우고 에디터를 깜빡이게 하며 스크롤을 날렸다.
+      await this.animateEditIntoModel(ws.root, p.rel, newContent, editStart, editEnd, p.find, p.replace);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this._proposalsById.set(id, { ...p, status: "failed", error: msg });
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "failed" as const, error: msg } : x),
       }));
+    }
+  }
+
+  /** 수락된 편집을 열린 모델에 애니메이션으로 반영한다.
+   *  파일은 이미 디스크에 쓰인 뒤이므로, 여기서 실패해도 데이터는 안전하다 —
+   *  최악의 경우 모델을 최종 내용으로 맞추기만 하면 된다. */
+  private async animateEditIntoModel(root: string, rel: string, finalText: string, start: number, end: number, find: string, replacement: string) {
+    // openFile 직후엔 페인이 아직 마운트 전이라 모델이 없다(특히 새 파일) — 잠깐 기다린다
+    let m = projectModels.getByRel(rel);
+    for (let i = 0; !m && i < 25; i++) {
+      await new Promise<void>(r => setTimeout(r, 40));
+      m = projectModels.getByRel(rel);
+    }
+    if (!m) { projectModels.reload(root, rel, finalText, false); return; }
+    // 디스크 기준선을 먼저 최종본으로 — 애니메이션 도중 잠깐 dirty 로 보이지만 끝나면 맞는다
+    projectModels.markSaved(root, rel, finalText);
+    try {
+      // 모델의 그 범위가 정말 바꾸려던 텍스트인지 확인한다. 외부 편집 등으로 어긋나 있으면
+      // 범위를 믿을 수 없으므로 애니메이션 없이 최종본으로 맞춘다.
+      const canAnimate = start >= 0 && end >= start && m.getValueLength() >= end
+        && m.getValue().slice(start, end) === find;
+      if (!canAnimate) { if (m.getValue() !== finalText) m.setValue(finalText); return; }
+      await typeEdit(m, start, end, replacement, { reveal: true });
+      // 애니메이션 중 다른 편집이 끼어들었을 수 있다 — 최종본과 다르면 맞춘다
+      if (m.getValue() !== finalText) m.setValue(finalText);
+    } catch {
+      if (!m.isDisposed() && m.getValue() !== finalText) m.setValue(finalText);
     }
   }
 
