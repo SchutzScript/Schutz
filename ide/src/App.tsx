@@ -3071,7 +3071,7 @@ export class App extends React.Component<{}, S> {
         {s.ctxMenu && (
           <div onClick={() => this.setState({ ctxMenu: null })} onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: null }); }}
             style={{ position: "fixed", inset: 0, zIndex: 190 }}>
-            <div onClick={e => e.stopPropagation()}
+            <div className="sz-drop" onClick={e => e.stopPropagation()}
               style={{ position: "fixed", left: s.ctxMenu.x, top: s.ctxMenu.y, minWidth: 160, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 191 }}>
               {s.ctxMenu.isDir && (
                 <>
@@ -3108,7 +3108,7 @@ export class App extends React.Component<{}, S> {
               <span style={{ fontSize: 8, color: "var(--fg-dim)" }}>▾</span>
             </button>
             {s.projOpen && (
-              <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 6, zIndex: 100 }}>
+              <div className="sz-drop" style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 6, zIndex: 100 }}>
                 <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("sc4.projHeader")}</div>
                 {s.workspace ? (
                   <div className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}>
@@ -3264,7 +3264,8 @@ export class App extends React.Component<{}, S> {
           <div style={{ flex: "none", width: s.leftW, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
             <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
-            <div key={s.leftTab} className="sz-in" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
+            <div key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
             </div>
             {this.renderChat()}
