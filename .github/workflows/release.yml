@@ -50,6 +50,8 @@ jobs:
 
       - name: Build renderer
         run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       # ── macOS / Linux: electron-builder가 빌드 + 릴리스 업로드 ──
       - name: Build & publish (mac/linux)
