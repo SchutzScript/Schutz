@@ -134,16 +134,29 @@ export function setOAuth(id: string, tokens: OAuthTokens | null): void {
 }
 
 /** 만료 임박 시 자동 갱신 후 액세스 토큰 반환 (실패 시 null) */
+// 진행 중 리프레시 공유 — 동시 호출이 단발성 refresh 토큰을 두 번 소모해 두 번째가 실패하는 것 방지
+const refreshingOAuth: Record<string, Promise<OAuthTokens | null>> = {};
 export async function freshOAuth(id: string): Promise<OAuthTokens | null> {
   const t = getOAuth(id);
   if (!t) return null;
   if (Date.now() < t.exp - 60_000) return t;
-  if (!t.refresh || !window.schutz?.oauthRefresh) return null;
-  const r = await window.schutz.oauthRefresh(id, t.refresh);
-  if (!r.ok || !r.access) { return null; }
-  const nt = { ...t, access: r.access, refresh: r.refresh ?? t.refresh, exp: r.exp ?? Date.now() + 3600_000 };
-  setOAuth(id, nt);
-  return nt;
+  if (!t.refresh) { setOAuth(id, null); return null; } // 만료 + 리프레시 토큰 없음 → 죽은 토큰 제거(영구 stuck-connected 방지)
+  if (!window.schutz?.oauthRefresh) return null;        // 리프레시 API 없음(웹) → 갱신만 불가, 토큰 유지
+  if (refreshingOAuth[id]) return refreshingOAuth[id];
+  const p = (async (): Promise<OAuthTokens | null> => {
+    const r = await window.schutz!.oauthRefresh(id, t.refresh!);
+    if (!r.ok || !r.access) {
+      // 4xx(리프레시 토큰 폐기/회전) 는 죽은 토큰 → 제거해 재로그인 유도. 네트워크(무 status) 는 일시적일 수 있어 유지.
+      const st = (r as { status?: number }).status;
+      if (typeof st === "number" && st >= 400 && st < 500) setOAuth(id, null);
+      return null;
+    }
+    const nt = { ...t, access: r.access, refresh: r.refresh ?? t.refresh, exp: r.exp ?? Date.now() + 3600_000 };
+    setOAuth(id, nt);
+    return nt;
+  })();
+  refreshingOAuth[id] = p;
+  try { return await p; } finally { delete refreshingOAuth[id]; }
 }
 
 

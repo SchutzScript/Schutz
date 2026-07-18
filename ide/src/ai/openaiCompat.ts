@@ -2,6 +2,7 @@ import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
   ProviderId, getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
+import { t } from "../i18n";
 
 export interface CompatConfig {
   id: ProviderId;
@@ -62,7 +63,7 @@ export class OpenAICompatProvider implements AgentProvider {
   private async *streamCodexBackend(req: AgentTurnRequest): AsyncIterable<AgentEvent> {
     const tok = await freshOAuth("codex");
     if (!tok || !window.schutz?.oaiRun) {
-      yield { type: "error", message: "ChatGPT 계정 토큰이 만료되었습니다. 설정에서 다시 로그인해주세요." };
+      yield { type: "error", message: t("oai.chatgptTokenExpired") };
       yield { type: "done" };
       return;
     }
@@ -92,7 +93,7 @@ export class OpenAICompatProvider implements AgentProvider {
     window.schutz.oaiRun({
       id, access: tok.access, accountId: tok.accountId ?? null,
       body: {
-        model: getModelOverride("codex") || "gpt-5.2-codex",
+        model: getModelOverride("codex") || "gpt-5.6-terra",
         instructions: req.system ?? "",
         input,
         stream: true,
@@ -119,7 +120,7 @@ export class OpenAICompatProvider implements AgentProvider {
           } else if (d.type === "response.completed" && d.response?.usage) {
             yield { type: "usage", inputTokens: d.response.usage.input_tokens ?? 0, outputTokens: d.response.usage.output_tokens ?? 0 };
           } else if (d.type === "response.failed") {
-            yield { type: "error", message: "응답 실패: " + (d.response?.error?.message ?? "알 수 없음") };
+            yield { type: "error", message: t("oai.responseFailed", { detail: d.response?.error?.message ?? t("oai.unknown") }) };
           }
         }
       }
@@ -139,7 +140,7 @@ export class OpenAICompatProvider implements AgentProvider {
       return;
     }
     if (!apiKey) {
-      yield { type: "error", message: `${this.label} API 키가 설정되지 않았습니다.` };
+      yield { type: "error", message: t("oai.apiKeyNotSet", { label: this.label }) };
       yield { type: "done" };
       return;
     }
@@ -162,7 +163,7 @@ export class OpenAICompatProvider implements AgentProvider {
         signal: req.signal,
       });
     } catch (e) {
-      yield { type: "error", message: "네트워크 오류: " + (e instanceof Error ? e.message : String(e)) };
+      yield { type: "error", message: t("oai.networkError", { detail: e instanceof Error ? e.message : String(e) }) };
       yield { type: "done" };
       return;
     }
@@ -170,7 +171,7 @@ export class OpenAICompatProvider implements AgentProvider {
     if (!res.ok || !res.body) {
       let detail = res.statusText;
       try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
-      yield { type: "error", message: `${this.label} API 오류 (${res.status}): ${detail}` };
+      yield { type: "error", message: t("oai.apiError", { label: this.label, status: res.status, detail }) };
       yield { type: "done" };
       return;
     }

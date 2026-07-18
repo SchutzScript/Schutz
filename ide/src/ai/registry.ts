@@ -1,6 +1,7 @@
 import { AgentProvider } from "./provider";
 import { ClaudeProvider } from "./claude";
 import { GPT_PROVIDER, GROK_PROVIDER, GLM_PROVIDER } from "./openaiCompat";
+import { t } from "../i18n";
 
 /** 앱 전역 프로바이더 레지스트리 */
 export const PROVIDERS_MAP: Record<string, AgentProvider> = {
@@ -16,8 +17,8 @@ export const PROVIDERS_MAP: Record<string, AgentProvider> = {
  */
 export async function testProvider(id: string): Promise<{ ok: boolean; message: string }> {
   const p = PROVIDERS_MAP[id];
-  if (!p) return { ok: false, message: "알 수 없는 프로바이더" };
-  if (!p.isConfigured()) return { ok: false, message: "API 키가 비어 있습니다" };
+  if (!p) return { ok: false, message: t("reg.unknownProvider") };
+  if (!p.isConfigured()) return { ok: false, message: t("reg.apiKeyEmpty") };
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 15_000);
   try {
@@ -29,23 +30,26 @@ export async function testProvider(id: string): Promise<{ ok: boolean; message: 
       if (ev.type === "error") return { ok: false, message: ev.message };
       if (ev.type === "text" || ev.type === "usage") {
         abort.abort(); // 응답이 시작됐으면 성공 — 나머지는 버림
-        return { ok: true, message: "연결 확인됨" };
+        return { ok: true, message: t("reg.connectionOk") };
       }
     }
-    return { ok: true, message: "연결 확인됨" };
+    return { ok: true, message: t("reg.connectionOk") };
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") return { ok: true, message: "연결 확인됨" };
+    if (e instanceof DOMException && e.name === "AbortError") return { ok: true, message: t("reg.connectionOk") };
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** 저장된 관리자 에이전트 (온보딩에서 선택) */
+/** 저장된 관리자 에이전트 (온보딩에서 선택 · 이후 AI 패널에서 변경 가능) */
 export function getManagerId(): string {
   try {
     return localStorage.getItem("schutz.manager") ?? "claude";
   } catch {
     return "claude";
   }
+}
+export function setManagerId(id: string): void {
+  try { localStorage.setItem("schutz.manager", id); } catch { /* ignore */ }
 }

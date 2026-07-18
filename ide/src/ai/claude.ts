@@ -3,6 +3,7 @@ import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
   getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
+import { getLang } from "../i18n";
 
 export type { ToolCall } from "./provider";
 
@@ -76,90 +77,130 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
       headers["x-api-key"] = apiKey;
     }
 
-    let res: Response;
-    try {
-      res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: req.model || getModelOverride("claude") || "claude-sonnet-5",
-          max_tokens: 8192,
-          stream: true,
-          ...(system ? { system } : {}),
-          ...(req.tools && req.tools.length ? { tools: req.tools } : {}),
-          messages: this.toNative(req.transcript),
-        }),
-        signal: req.signal,
-      });
-    } catch (e) {
-      yield { type: "error", message: "네트워크 오류: " + (e instanceof Error ? e.message : String(e)) };
-      yield { type: "done" };
-      return;
-    }
+    const body = {
+      model: req.model || getModelOverride("claude") || "claude-sonnet-5",
+      max_tokens: 8192,
+      stream: true,
+      ...(system ? { system } : {}),
+      ...(req.tools && req.tools.length ? { tools: req.tools } : {}),
+      messages: this.toNative(req.transcript),
+    };
 
-    if (!res.ok || !res.body) {
-      let detail = res.statusText;
-      try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
-      yield { type: "error", message: `Claude API 오류 (${res.status}): ${detail}` };
-      yield { type: "done" };
-      return;
-    }
+    // Electron: 메인 프로세스 릴레이로 CORS 우회 (조직이 브라우저 직접 호출을 차단하는 경우 대응)
+    const dataLines: AsyncIterable<string> = (window as any).schutz?.anthropicRun
+      ? this.relayDataLines(headers, body, req.signal)
+      : await this.directDataLines(headers, body, req.signal);
+    yield* this.parseAnthropicStream(dataLines);
+  }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+  /** SSE `data:` JSON 문자열 스트림을 AgentEvent로 변환 (직접/릴레이 공용) */
+  private async *parseAnthropicStream(dataLines: AsyncIterable<string>): AsyncIterable<AgentEvent> {
     let inTok = 0, outTok = 0;
     let stop: "end" | "tool_use" | "error" = "end";
     const toolBuf: Record<number, { id: string; name: string; json: string }> = {};
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop() ?? "";
-      for (const part of parts) {
-        const dataLine = part.split("\n").find(l => l.startsWith("data:"));
-        if (!dataLine) continue;
-        let evt: any;
-        try { evt = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
-
-        switch (evt.type) {
-          case "message_start":
-            inTok = evt.message?.usage?.input_tokens ?? 0;
-            break;
-          case "content_block_start":
-            if (evt.content_block?.type === "tool_use") {
-              toolBuf[evt.index] = { id: evt.content_block.id, name: evt.content_block.name, json: "" };
-            }
-            break;
-          case "content_block_delta":
-            if (evt.delta?.type === "text_delta") {
-              yield { type: "text", delta: evt.delta.text ?? "" };
-            } else if (evt.delta?.type === "input_json_delta" && toolBuf[evt.index]) {
-              toolBuf[evt.index].json += evt.delta.partial_json ?? "";
-            }
-            break;
-          case "content_block_stop": {
-            const tb = toolBuf[evt.index];
-            if (tb) {
-              let input: any = {};
-              try { input = tb.json ? JSON.parse(tb.json) : {}; } catch { /* 빈 입력 */ }
-              yield { type: "tool_call", call: { id: tb.id, name: tb.name, input } };
-              delete toolBuf[evt.index];
-            }
-            break;
+    for await (const json of dataLines) {
+      if (json === "__ERROR__") { stop = "error"; continue; }
+      if (json.startsWith("__ERRMSG__")) { yield { type: "error", message: json.slice(10) }; stop = "error"; continue; }
+      let evt: any;
+      try { evt = JSON.parse(json); } catch { continue; }
+      switch (evt.type) {
+        case "error":
+          // 스트림 중간 오류 이벤트 — 조용히 빈 응답으로 끝나지 않도록 표면화
+          yield { type: "error", message: evt.error?.message || evt.error?.type || "Anthropic stream error" };
+          stop = "error";
+          break;
+        case "message_start":
+          inTok = evt.message?.usage?.input_tokens ?? 0;
+          break;
+        case "content_block_start":
+          if (evt.content_block?.type === "tool_use") {
+            toolBuf[evt.index] = { id: evt.content_block.id, name: evt.content_block.name, json: "" };
           }
-          case "message_delta":
-            if (evt.usage) outTok = evt.usage.output_tokens ?? outTok;
-            if (evt.delta?.stop_reason === "tool_use") stop = "tool_use";
-            break;
+          break;
+        case "content_block_delta":
+          if (evt.delta?.type === "text_delta") {
+            yield { type: "text", delta: evt.delta.text ?? "" };
+          } else if (evt.delta?.type === "input_json_delta" && toolBuf[evt.index]) {
+            toolBuf[evt.index].json += evt.delta.partial_json ?? "";
+          }
+          break;
+        case "content_block_stop": {
+          const tb = toolBuf[evt.index];
+          if (tb) {
+            let input: any = {};
+            try { input = tb.json ? JSON.parse(tb.json) : {}; } catch { /* 빈 입력 */ }
+            yield { type: "tool_call", call: { id: tb.id, name: tb.name, input } };
+            delete toolBuf[evt.index];
+          }
+          break;
         }
+        case "message_delta":
+          if (evt.usage) outTok = evt.usage.output_tokens ?? outTok;
+          if (evt.delta?.stop_reason === "tool_use") stop = "tool_use";
+          break;
       }
     }
     if (inTok || outTok) yield { type: "usage", inputTokens: inTok, outputTokens: outTok };
     yield { type: "stop", reason: stop };
     yield { type: "done" };
+  }
+
+  /** 웹/직접 fetch 경로 → `data:` JSON 문자열 스트림 */
+  private async directDataLines(headers: Record<string, string>, body: any, signal?: AbortSignal): Promise<AsyncIterable<string>> {
+    let res: Response;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal });
+    } catch (e) {
+      return (async function* () { yield "__ERRMSG__네트워크 오류: " + (e instanceof Error ? e.message : String(e)); })();
+    }
+    if (!res.ok || !res.body) {
+      let detail = res.statusText;
+      try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
+      const status = res.status;
+      return (async function* () { yield "__ERRMSG__Claude API 오류 (" + status + "): " + detail; })();
+    }
+    const reader = res.body.getReader();
+    return (async function* () {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const dataLine = part.split("\n").find(l => l.startsWith("data:"));
+          if (dataLine) yield dataLine.slice(5).trim();
+        }
+      }
+    })();
+  }
+
+  /** Electron 릴레이 경로 → `data:` JSON 문자열 스트림 (async 큐) */
+  private async *relayDataLines(headers: Record<string, string>, body: any, signal?: AbortSignal): AsyncIterable<string> {
+    const sx = (window as any).schutz;
+    const id = "anth" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+    const queue: any[] = [];
+    let notify: (() => void) | null = null;
+    const off = sx.onAnthropicEvent((line: string) => {
+      try { const ev = JSON.parse(line); if (ev.id !== id) return; queue.push(ev); notify?.(); } catch { /* */ }
+    });
+    const onAbort = () => sx.anthropicStop(id);
+    signal?.addEventListener("abort", onAbort);
+    sx.anthropicRun({ id, headers, body });
+    try {
+      while (true) {
+        while (queue.length === 0) { await new Promise<void>(r => { notify = r; }); notify = null; }
+        const ev = queue.shift();
+        if (ev.error) { yield "__ERRMSG__" + String(ev.error); }
+        else if (ev.done) break;
+        else if (ev.data) yield ev.data;
+      }
+    } finally {
+      off();
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
 }
 
@@ -226,14 +267,20 @@ export const DELEGATE_TOOL: ToolDef = {
   },
 };
 
-export const SCHUTZ_SYSTEM_PROMPT = `당신은 Schutz IDE에 내장된 코딩 에이전트입니다.
-사용자는 당신의 작업 과정을 실시간으로 지켜봅니다. 한국어로 간결하게, 계획을 먼저 밝히고 진행하세요.
+/** 응답 언어 이름 — UI 언어(getLang)에 맞춰 에이전트가 그 언어로 답하도록 지시 */
+const RESP_LANG: Record<string, string> = { ko: "한국어", en: "English", de: "Deutsch (German)", ja: "日本語 (Japanese)" };
+/** 언어 인식 시스템 프롬프트 — 호출 시점의 UI 언어로 응답하도록 동적 생성 */
+export function schutzSystemPrompt(): string {
+  const lang = RESP_LANG[getLang()] || "한국어";
+  return `당신은 Schutz IDE에 내장된 코딩 에이전트입니다.
+사용자는 당신의 작업 과정을 실시간으로 지켜봅니다. 반드시 ${lang}(으)로, 간결하게 응답하고 계획을 먼저 밝히고 진행하세요.
 
 도구가 제공된 경우(워크스페이스 열림):
 - 파일을 고치기 전에 반드시 read_file로 현재 내용을 확인하세요.
 - 모든 편집은 propose_edit로 제안하세요. 직접 쓸 수 없으며, 사용자가 수락해야 반영됩니다.
 - find는 파일에 정확히 한 번 존재하는 텍스트여야 합니다. 여러 곳을 고치려면 제안을 나누세요.
 - 변경은 최소한으로, rationale은 한 문장으로.`;
+}
 
 export const MANAGER_SYSTEM_EXTRA = `
 
