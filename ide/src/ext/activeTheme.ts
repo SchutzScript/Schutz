@@ -3,13 +3,13 @@
 // 에디터/디프 생성 시 이 값을 theme 옵션으로 주면 새 창을 열어도 활성 테마가 유지된다.
 import { getActiveVsxTheme } from "../settings";
 import { getThemeId, monacoThemeOf } from "../theme";
-import { isTextMateWired } from "./textmate";
+import { isTextMateWired, tmThemeId } from "./textmate";
 import { getImportedThemes } from "./vscodeExt";
 
 export function activeMonacoTheme(): string {
   const vsx = getActiveVsxTheme();
   // 가져온 테마가 실제로 정의되어 있을 때만 사용 — 미정의 상태에서 setTheme 하면 기본 라이트로 폴백됨
   if (vsx && getImportedThemes().some(t => t.id === vsx)) return vsx;
-  if (isTextMateWired()) return "schutz-tm-dark";
+  if (isTextMateWired()) return tmThemeId();
   return monacoThemeOf(getThemeId());
 }

@@ -280,7 +280,7 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
         <div style={{
           position: "absolute", right: 12, bottom: 10, zIndex: 5,
           fontSize: 10.5, fontFamily: "var(--font-ui, 'SUIT Variable', sans-serif)",
-          color: flash && !dirty ? "#9DC4A3" : "#CCB491",
+          color: flash && !dirty ? "var(--ok-hi)" : "#CCB491",
           background: "var(--bg-popup)", border: "1px solid var(--bd-popup)",
           borderRadius: 6, padding: "3px 9px",
         }}>
