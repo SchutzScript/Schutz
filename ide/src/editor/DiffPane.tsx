@@ -37,15 +37,20 @@ export function DiffPane({ root, rel, staged, untracked }: Props) {
     (async () => {
       try {
         // 원본 = HEAD 버전(미추적이 아니면), 수정본 = staged면 인덱스(git show :path), 아니면 워킹트리
-        const headP = untracked ? Promise.resolve({ content: "" }) : window.schutz!.git(root, "headFile", { path: rel });
-        const modP = staged
-          ? window.schutz!.git(root, "stagedFile", { path: rel }).then((r: any) => r?.content ?? "").catch(() => "")
-          : window.schutz!.readFile(root, rel).catch(() => "");
+        // 읽기 실패를 ""로 접으면 diff 가 "파일 전체 삭제/추가"처럼 보인다 — 오류는 오류로 띄운다
+        const headP: Promise<any> = untracked
+          ? Promise.resolve({ ok: true, content: "" })
+          : window.schutz!.git(root, "headFile", { path: rel });
+        const modP: Promise<any> = staged
+          ? window.schutz!.git(root, "stagedFile", { path: rel })
+          : window.schutz!.readFile(root, rel).then(text => ({ ok: true, content: text }));
         const [head, mod] = await Promise.all([headP, modP]);
         if (disposed) return;
+        if (head && head.ok === false) throw new Error(head.error || "HEAD 버전을 읽지 못했습니다");
+        if (mod && mod.ok === false) throw new Error(mod.error || "수정본을 읽지 못했습니다");
         const lang = languageOf(rel);
         const original = monaco.editor.createModel(head?.content ?? "", lang);
-        const modified = monaco.editor.createModel(typeof mod === "string" ? mod : "", lang);
+        const modified = monaco.editor.createModel(mod?.content ?? "", lang);
         diff.setModel({ original, modified });
         setState("ready");
       } catch (e) {

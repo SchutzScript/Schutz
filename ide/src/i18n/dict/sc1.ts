@@ -1,6 +1,10 @@
 // sc1 도메인 번역 사전 (App.tsx 1-1000)
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
   "sc1.n_files_saved": { ko: "{n}개 파일 저장", en: "{n} files saved", de: "{n} Dateien gespeichert", ja: "{n}件のファイルを保存" },
+  "sc1.save_failed_files": { ko: "{n}개 파일을 저장하지 못했습니다: {files}", en: "Failed to save {n} file(s): {files}", de: "{n} Datei(en) konnten nicht gespeichert werden: {files}", ja: "{n}件のファイルを保存できませんでした: {files}" },
+  // 편집 중에 디스크가 바뀐 경우 — 그냥 저장하면 외부 편집이 사라진다
+  "sc1.externalChangedOverwrite": { ko: "'{rel}' 이(가) 편집하는 사이 디스크에서 변경되었습니다.\n내 편집으로 덮어쓸까요? (취소하면 저장하지 않습니다)", en: "'{rel}' changed on disk while you were editing.\nOverwrite it with your version? (Cancel leaves it unsaved)", de: "'{rel}' wurde während der Bearbeitung auf der Festplatte geändert.\nMit Ihrer Version überschreiben? (Abbrechen speichert nicht)", ja: "編集中に '{rel}' がディスク上で変更されました。\n自分の内容で上書きしますか？(キャンセルすると保存しません)" },
+  "sc1.externalChangedSkipped": { ko: "디스크에서 변경됨 — 저장 안 함", en: "changed on disk — not saved", de: "auf der Festplatte geändert — nicht gespeichert", ja: "ディスク上で変更 — 未保存" },
   "sc1.put_cursor_on_symbol": { ko: "먼저 편집기에서 심볼에 커서를 두세요.", en: "First place the cursor on a symbol in the editor.", de: "Setzen Sie zuerst den Cursor im Editor auf ein Symbol.", ja: "まずエディターでシンボルにカーソルを置いてください。" },
   "sc1.new_file_name": { ko: "새 파일 이름", en: "New file name", de: "Neuer Dateiname", ja: "新しいファイル名" },
   "sc1.file_created": { ko: "파일 생성: ", en: "File created: ", de: "Datei erstellt: ", ja: "ファイル作成: " },
@@ -10,8 +14,10 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc1.folder_create_failed": { ko: "폴더 생성 실패: ", en: "Folder create failed: ", de: "Ordnererstellung fehlgeschlagen: ", ja: "フォルダー作成に失敗: " },
   "sc1.new_name": { ko: "새 이름", en: "New name", de: "Neuer Name", ja: "新しい名前" },
   "sc1.rename_failed": { ko: "이름 변경 실패: ", en: "Rename failed: ", de: "Umbenennen fehlgeschlagen: ", ja: "名前の変更に失敗: " },
-  "sc1.confirm_delete": { ko: "'{rel}' 을(를) 삭제할까요? 되돌릴 수 없습니다.", en: "Delete '{rel}'? This cannot be undone.", de: "'{rel}' löschen? Dies kann nicht rückgängig gemacht werden.", ja: "'{rel}' を削除しますか？ 元に戻せません。" },
+  // 삭제는 휴지통 경유라 되돌릴 수 있다 — 문구도 그에 맞춘다
+  "sc1.confirm_delete": { ko: "'{rel}' 을(를) 휴지통으로 옮길까요?", en: "Move '{rel}' to the trash?", de: "'{rel}' in den Papierkorb verschieben?", ja: "'{rel}' をごみ箱に移動しますか？" },
   "sc1.delete_failed": { ko: "삭제 실패: ", en: "Delete failed: ", de: "Löschen fehlgeschlagen: ", ja: "削除に失敗: " },
+  "sc1.deleted_permanently": { ko: "휴지통을 쓸 수 없어 '{rel}' 을(를) 영구 삭제했습니다.", en: "Trash was unavailable — '{rel}' was deleted permanently.", de: "Papierkorb nicht verfügbar — '{rel}' wurde endgültig gelöscht.", ja: "ごみ箱を使えないため '{rel}' を完全に削除しました。" },
   "sc1.cannot_open_folder": { ko: "폴더를 열 수 없습니다: ", en: "Cannot open folder: ", de: "Ordner kann nicht geöffnet werden: ", ja: "フォルダーを開けません: " },
   "sc1.cmd_new_file": { ko: "새 파일", en: "New File", de: "Neue Datei", ja: "新しいファイル" },
   "sc1.cmd_save": { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },

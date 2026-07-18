@@ -422,18 +422,28 @@ export class App extends React.Component<{}, S> {
     if (!ws || !window.schutz) return 0;
     const rels = projectModels.dirtyRels();
     let n = 0;
+    const failed: string[] = [];
     for (const rel of rels) {
       const m = projectModels.getByRel(rel);
       if (!m) continue;
       const content = m.getValue();
+      // 외부에서 바뀐 파일은 모두 저장에서 조용히 덮어쓰지 않는다
+      const ext = projectModels.externalChangeOf(rel);
+      if (ext !== null && ext !== content) {
+        if (silent || !window.confirm(t("sc1.externalChangedOverwrite", { rel }))) { failed.push(rel + " (" + t("sc1.externalChangedSkipped") + ")"); continue; }
+      }
       try {
         await window.schutz.writeFile(ws.root, rel, content);
         projectModels.markSaved(ws.root, rel, content);
         this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
         n++;
-      } catch { /* */ }
+      } catch (e) {
+        // 저장 실패를 삼키면 "N개 저장" 이 그냥 작은 N 이 되어 사용자가 유실을 눈치채지 못한다
+        failed.push(rel + (e instanceof Error ? ` (${e.message})` : ""));
+      }
     }
     if (n > 0) { await this.refreshWorkspace(); if (!silent) this.toast("ok", t("sc1.n_files_saved", { n })); }
+    if (failed.length) this.toast("error", t("sc1.save_failed_files", { n: failed.length, files: failed.join(", ") }));
     return n;
   }
 
@@ -559,8 +569,10 @@ export class App extends React.Component<{}, S> {
     if (!ws || !window.schutz) return;
     if (!window.confirm(t("sc1.confirm_delete", { rel }))) return;
     try {
-      await window.schutz.deleteEntry(ws.root, rel);
+      const del = await window.schutz.deleteEntry(ws.root, rel);
       projectModels.dropUnder(ws.root, rel); // 하위 파일 모델까지 dispose(옛 dirty 모델 잔존→Save All 이 삭제 파일 재생성하는 버그 방지)
+      // 휴지통이 안 되는 환경에선 영구 삭제됐다는 사실을 반드시 알린다 — 되돌릴 방법이 없다
+      if (del && del.trashed === false) this.toast("info", t("sc1.deleted_permanently", { rel }));
       await this.refreshWorkspace();
       const gone = (p: string) => p !== rel && !p.startsWith(rel + "/");
       this.setState(s => {
@@ -1001,16 +1013,29 @@ export class App extends React.Component<{}, S> {
       }
       // 공유 모델도 갱신 (인텔리전스·진단 반영)
       projectModels.reload(ws.root, p.rel, newContent, false);
+      this._proposalsById.set(id, { ...p, status: "accepted" }); // 동기 레지스트리도 갱신 — 자동수락 호출측이 결과를 즉시 읽는다
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
         paneVer: { ...s.paneVer, [p.rel]: (s.paneVer[p.rel] ?? 0) + 1 },
       }));
       this.openFile(p.rel);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this._proposalsById.set(id, { ...p, status: "failed", error: msg });
       this.setState(s => ({
-        proposals: s.proposals.map(x => x.id === id ? { ...x, status: "failed" as const, error: e instanceof Error ? e.message : String(e) } : x),
+        proposals: s.proposals.map(x => x.id === id ? { ...x, status: "failed" as const, error: msg } : x),
       }));
     }
+  }
+
+  /** 자동 수락 결과를 도구 반환 문자열로 — 실패를 성공으로 보고하지 않기 위해 호출측이 반드시 이걸 쓴다 */
+  private autoAcceptResult(id: string, okMsg: string): string {
+    const done = this._proposalsById.get(id);
+    if (done && done.status === "failed") {
+      // 모델이 적용되지 않은 변경 위에 다음 편집을 쌓지 않도록, 실패 사유를 그대로 돌려준다
+      return `오류: 자동 수락이 실패해 파일이 변경되지 않았습니다 — ${done.error ?? "알 수 없는 오류"}`;
+    }
+    return okMsg;
   }
 
   rejectProposal(id: string) {
@@ -1027,16 +1052,31 @@ export class App extends React.Component<{}, S> {
 
   agDef(id: string) { return AGDEF.find(a => a.id === id)!; }
 
-  /** 모델별 단가 (USD / 1M tokens, 입력·출력) — 추정 공시가 */
+  /** 모델별 단가 (USD / 1M tokens, 입력·출력) — 추정 공시가.
+   *  키는 models.ts 의 실제 id 와 맞춰야 한다. 예전엔 "claude-haiku-4-5" 로 적혀 있어
+   *  실제 id "claude-haiku-4-5-20251001" 이 폴백([3,15] = Sonnet 단가)에 걸려 잘못 청구 표시됐다. */
   static PRICING: Record<string, [number, number]> = {
     "claude-sonnet-5": [3, 15],
     "claude-opus-4-8": [15, 75],
     "claude-haiku-4-5": [0.8, 4],
+    "claude-fable-5": [3, 15],
     "gpt-5.2": [1.75, 14],
     "gpt-5.2-codex": [1.75, 14],
     "grok-4": [3, 15],
     "glm-4.6": [0.6, 2.2],
   };
+
+  /** 단가 조회 — 날짜 접미사(-20251001)가 붙은 id 는 접두 일치로 찾는다.
+   *  못 찾으면 null. 임의 단가로 계산하면 조용히 틀린 금액이 쌓이므로 "요금 미상"으로 표시할 것. */
+  static priceOf(model: string): [number, number] | null {
+    const exact = App.PRICING[model];
+    if (exact) return exact;
+    let best: [number, number] | null = null, bestLen = 0;
+    for (const [k, v] of Object.entries(App.PRICING)) {
+      if (model.startsWith(k) && k.length > bestLen) { best = v; bestLen = k.length; }
+    }
+    return best;
+  }
 
   /** 구독 경로 여부 — 토큰 비용이 구독에 포함되어 $ 표시가 무의미 */
   isSubscription(id: string): boolean {
@@ -1187,11 +1227,12 @@ export class App extends React.Component<{}, S> {
   }
   bumpAgent(id: string, tin: number, tout: number) {
     const model = this.modelOf(id) ?? "";
-    const [pin, pout] = App.PRICING[model] ?? [3, 15];
+    const price = App.priceOf(model);
     const sub = this.isSubscription(id);
     this.setState(s => {
       const a = s.agents[id];
-      const cost = sub ? a.cost : a.cost + (tin * pin + tout * pout) / 1e6;
+      // 단가를 모르는 모델은 비용을 올리지 않는다 — 토큰 수는 그대로 쌓이고 금액만 미상으로 둔다
+      const cost = sub || !price ? a.cost : a.cost + (tin * price[0] + tout * price[1]) / 1e6;
       return { agents: { ...s.agents, [id]: { ...a, tin: a.tin + tin, tout: a.tout + tout, cost } } };
     });
   }
@@ -1575,7 +1616,7 @@ export class App extends React.Component<{}, S> {
         const blocks = connected.map(id => {
           const m = this.modelOf(id) ?? "?";
           const ch = this.modelChannel(id);
-          const price = this.isSubscription(id) ? t("sc2.subscriptionIncluded") : (() => { const [pin, pout] = App.PRICING[m] ?? [3, 15]; return `$${pin}/${pout} per 1M`; })();
+          const price = this.isSubscription(id) ? t("sc2.subscriptionIncluded") : (() => { const pr = App.priceOf(m); return pr ? `$${pr[0]}/${pr[1]} per 1M` : t("modal.priceUnknown"); })();
           const head = `${this.agDef(id).name}: \`${m}\` (${price})`;
           if (!ch) return head;
           const alts = ch.options.filter(o => o.id !== ch.current).map(o => o.id).join(", ");
@@ -1843,7 +1884,8 @@ export class App extends React.Component<{}, S> {
         };
         this._proposalsById.set(p.id, p); this.setState(s => ({ proposals: [...s.proposals, p] }));
         this.setTool(toolId, { st: "done", note: auto ? t("sc2.noteAutoAccept") : t("sc2.noteProposed") });
-        if (auto) { void this.acceptProposal(p.id); return "파일이 자동 수락 정책에 따라 생성되었습니다."; }
+        // await — 쓰기가 끝나기 전에 성공을 보고하면 모델이 없는 파일 위에 작업을 쌓는다
+        if (auto) { await this.acceptProposal(p.id); return this.autoAcceptResult(p.id, "파일이 자동 수락 정책에 따라 생성되었습니다."); }
         return "파일 생성 제안이 등록되었습니다. 사용자가 수락하면 생성됩니다.";
       }
       if (call.name === "propose_edit") {
@@ -1876,7 +1918,8 @@ export class App extends React.Component<{}, S> {
         this._proposalsById.set(p.id, p); this.setState(s => ({ proposals: [...s.proposals, p] }));
         this.setTool(toolId, { st: "done", note: autoE ? t("sc2.noteAutoAccept") : t("sc2.noteProposed") });
         this.openFile(rel);
-        if (autoE) { void this.acceptProposal(p.id); return "편집이 자동 수락 정책에 따라 적용되었습니다."; }
+        // await — find 중복/부재로 실패해도 성공을 보고하던 자리. 실패는 실패로 돌려줘야 모델이 자가 수정한다
+        if (autoE) { await this.acceptProposal(p.id); return this.autoAcceptResult(p.id, "편집이 자동 수락 정책에 따라 적용되었습니다."); }
         return "편집 제안이 등록되었습니다. 사용자가 변경 검토 패널에서 수락/거절합니다.";
       }
       if (call.name === "delegate_task") {
@@ -2214,12 +2257,15 @@ export class App extends React.Component<{}, S> {
     if (opts?.bulk) void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
     // 열린 파일: dirty 아니면 모델 내용을 디스크와 맞춤 (공유 모델 setValue → 라이브 반영, 리마운트 없음)
     for (const rel of this.allOpen()) {
-      if (this.state.paneDirty[rel]) continue; // 편집 중 보호
+      // 편집 중(dirty)인 파일도 '읽기는' 한다 — 건너뛰면 외부 변경을 감지할 기회 자체가 없어
+      // 다음 저장이 조용히 덮어쓴다. 버퍼 보호는 reload 가 isDirty 로 판단한다.
       if (this.parseDiffKey(rel)) continue;    // diff 뷰는 별도
       if (!projectModels.getByRel(rel)) continue; // 모델 없는 탭(이미지 등) 건너뜀
       window.schutz.readFile(ws.root, rel)
         // 비동기 readFile 사이 워크스페이스 전환 또는 편집 시작 가능 → 재확인해 사용자 편집/새 repo 클로버 방지
-        .then(text => { if (this.state.workspace !== ws) return; projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]); })
+        // 워크스페이스 '전환' 만 걸러야 한다. 객체 동일성으로 비교하면 이 함수가 위에서 setState(workspace: tree) 로
+        // 교체한 새 객체와 항상 달라져 가드가 매번 걸리고, 결과적으로 외부 변경이 열린 에디터에 반영되지 않았다.
+        .then(text => { if (this.state.workspace?.root !== ws.root) return; projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]); })
         .catch(() => { /* 삭제됨 등 */ });
     }
     void this.loadGit();
@@ -2639,7 +2685,10 @@ export class App extends React.Component<{}, S> {
     if (!window.confirm(t("sc3.replaceAllConfirm", { q, rep: this.state.replaceVal }))) return;
     try {
       const r = await window.schutz.replaceInFiles(ws.root, q, this.state.replaceVal, this.state.searchOpts);
-      this.toast("ok", t("sc3.replaceResult", { files: r.files, changed: r.changed }));
+      // r.error 를 안 읽어서, 정규식이 거부돼도 "0개 파일 · 0곳 변경" 이 성공 토스트로 나가던 자리
+      if (r.error) { this.toast("error", t("sc3.replaceFailed") + r.error); return; }
+      if (r.partial) this.toast("error", t("sc3.replacePartial", { files: r.files, changed: r.changed }));
+      else this.toast("ok", t("sc3.replaceResult", { files: r.files, changed: r.changed }));
       // 모든 non-dirty owned 모델 재로드 — 열린 탭뿐 아니라 preload(닫힌) 모델도 디스크 반영(#8: 나중에 열면 stale 방지). dirty 는 위에서 차단됨.
       void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
       this.setState(st => { const pv = { ...st.paneVer }; for (const p of this.allOpen(st)) pv[p] = (pv[p] ?? 0) + 1; return { paneVer: pv }; });
@@ -4782,7 +4831,7 @@ export class App extends React.Component<{}, S> {
           const a = this.state.agents[d.id];
           const sub = this.isSubscription(d.id);
           const m = this.modelOf(d.id) ?? "?";
-          const price = sub ? t("modal.subscriptionIncluded") : (() => { const [pin, pout] = App.PRICING[m] ?? [3, 15]; return `$${pin}/${pout} /1M`; })();
+          const price = sub ? t("modal.subscriptionIncluded") : (() => { const pr = App.priceOf(m); return pr ? `$${pr[0]}/${pr[1]} /1M` : t("modal.priceUnknown"); })();
           return (
             <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "var(--bg-root)", borderRadius: 9, border: "1px solid var(--w06)" }}>
               <span style={{ width: 8, height: 8, borderRadius: 4, background: d.color, flex: "none" }} />

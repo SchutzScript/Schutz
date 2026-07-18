@@ -180,7 +180,16 @@ ipcMain.handle("schutz:readFile", async (_e, root, rel) => {
 ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
   const abs = safeJoin(root, rel);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, content, "utf8");
+  // 원자적 쓰기 — 같은 디렉터리에 임시 파일로 쓴 뒤 rename.
+  // 도중에 프로세스가 죽어도 반쪽짜리 파일이 남지 않는다(mcp.cjs 의 설정 저장과 같은 방식).
+  const tmp = abs + ".schutz-tmp";
+  try {
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, abs);
+  } catch (e) {
+    try { await fs.rm(tmp, { force: true }); } catch { /* 임시 파일 정리 실패는 무시 */ }
+    throw e;
+  }
   return true;
 });
 
@@ -354,14 +363,22 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
       if (lr.ok) { const m = /(\d+)\s+(\d+)/.exec(lr.stdout.trim()); if (m) { behind = +m[1]; ahead = +m[2]; upstream = true; } }
       return { ok: true, branch, ahead, behind, upstream, ...parseStatus(st.stdout) };
     }
+    // show 실패를 무조건 빈 문자열로 접으면 diff 가 파일 전체를 신규 추가로 그린다.
+    // "HEAD/인덱스에 없는 새 파일"(빈 원본이 정답) 과 진짜 오류를 갈라서 돌려준다.
     if (action === "headFile") {
       const r = await git(root, ["show", "HEAD:" + payload.path]);
-      return { ok: true, content: r.ok ? r.stdout : "" }; // 새 파일이면 빈 문자열
+      if (r.ok) return { ok: true, content: r.stdout };
+      const ls = await git(root, ["ls-tree", "HEAD", "--", payload.path]);
+      if (ls.ok && !ls.stdout.trim()) return { ok: true, content: "", missing: true }; // HEAD 에 없음 = 새 파일
+      return { ok: false, error: (r.stderr || "").trim() || "HEAD 버전을 읽지 못했습니다" };
     }
     if (action === "stagedFile") {
       // 인덱스(스테이지된) 버전 — 스테이지 diff의 '수정본' 쪽
       const r = await git(root, ["show", ":" + payload.path]);
-      return { ok: true, content: r.ok ? r.stdout : "" };
+      if (r.ok) return { ok: true, content: r.stdout };
+      const ls = await git(root, ["ls-files", "--stage", "--", payload.path]);
+      if (ls.ok && !ls.stdout.trim()) return { ok: true, content: "", missing: true }; // 인덱스에 없음
+      return { ok: false, error: (r.stderr || "").trim() || "스테이지된 버전을 읽지 못했습니다" };
     }
     if (action === "diffLines") {
       // --unified=0 으로 변경 라인 범위만 추출 (워킹트리 기준)
@@ -383,7 +400,13 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
     if (action === "unstage") { const r = await git(root, ["reset", "-q", "HEAD", "--", payload.path]); return { ok: r.ok, error: r.stderr }; }
     if (action === "discard") {
       // 미추적이면 삭제, 추적 파일이면 checkout 복원
-      if (payload.untracked) { try { await fs.rm(safeJoin(root, payload.path), { force: true, recursive: true }); } catch { /* */ } return { ok: true }; }
+      // 미추적 파일 버리기는 git 이 되돌려줄 수 없으므로 휴지통 경유. 실패를 삼키지 않는다.
+      if (payload.untracked) {
+        const abs = safeJoin(root, payload.path);
+        try { await shell.trashItem(abs); return { ok: true, trashed: true }; } catch { /* 폴백 */ }
+        try { await fs.rm(abs, { force: true, recursive: true }); return { ok: true, trashed: false }; }
+        catch (e) { return { ok: false, error: e && e.message ? e.message : String(e) }; }
+      }
       const r = await git(root, ["checkout", "--", payload.path]);
       return { ok: r.ok, error: r.stderr };
     }
@@ -491,10 +514,17 @@ ipcMain.handle("schutz:renameEntry", async (_e, root, relFrom, relTo) => {
   return true;
 });
 
+// 삭제는 휴지통 경유 — 되돌릴 수 있어야 한다. trashItem 이 안 되는 환경(일부 리눅스,
+// 네트워크 드라이브)에서만 영구 삭제로 폴백하고, 어느 쪽이었는지 호출측에 알린다.
 ipcMain.handle("schutz:deleteEntry", async (_e, root, rel) => {
   const abs = safeJoin(root, rel);
-  await fs.rm(abs, { recursive: true, force: true });
-  return true;
+  try {
+    await shell.trashItem(abs);
+    return { ok: true, trashed: true };
+  } catch (e) {
+    await fs.rm(abs, { recursive: true, force: true });
+    return { ok: true, trashed: false, reason: e && e.message ? e.message : String(e) };
+  }
 });
 
 // 이미지 등 바이너리를 base64로 (미리보기용)
@@ -561,7 +591,10 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
       changed += matches.length; files++;
     }
   }
-  try { await walk(root, "", 0); } catch { /* */ }
+  // walk 가 중간에 죽으면 부분 결과가 남는다 — 성공인 척하지 말고 어디까지 됐는지 알린다
+  try { await walk(root, "", 0); } catch (e) {
+    return { changed, files, partial: true, error: e && e.message ? e.message : String(e) };
+  }
   return { changed, files };
 });
 

@@ -132,6 +132,9 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
         if (!window.schutz || !editorRef.current) return;
         if (prefs.formatOnSave) { try { await editorRef.current.getAction("editor.action.formatDocument")?.run(); } catch { /* 포매터 없음 */ } }
         const text = editorRef.current.getValue();
+        // 내가 편집하는 사이 디스크가 바뀌었으면 그냥 덮어쓰지 않는다 — 외부 편집이 조용히 사라지던 자리
+        const ext = projectModels.externalChangeOf(rel);
+        if (ext !== null && ext !== text && !window.confirm(t("sc1.externalChangedOverwrite", { rel }))) return;
         try {
           await window.schutz.writeFile(root, rel, text);
           projectModels.markSaved(root, rel, text);

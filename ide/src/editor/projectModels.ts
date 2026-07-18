@@ -70,6 +70,7 @@ export function dirtyRels(): string[] {
 /** 디스크에 저장했음을 기록 */
 export function markSaved(root: string, rel: string, content: string): void {
   savedContent.set(uriFor(root, rel).toString(), content);
+  externalChanged.delete(rel); // 방금 우리가 썼으니 기준선은 우리 것 — 충돌 해소
 }
 
 /** 이 파일의 마지막 디스크(저장) 기준 내용 — 외부 리로드로 갱신될 수 있음. 없으면 undefined */
@@ -113,13 +114,29 @@ export async function preload(
   return { loaded, skipped: false };
 }
 
+/** 외부에서 디스크가 바뀌었는데 버퍼가 미저장이라 자동 반영할 수 없었던 파일 — rel → 그때의 디스크 내용.
+ *  이걸 기록해 두지 않으면 다음 저장이 외부 편집을 조용히 덮어쓴다(사용자는 끝까지 모른다). */
+const externalChanged = new Map<string, string>();
+
 /** 디스크 내용으로 모델 갱신 — 미저장(dirty) 아닐 때만 (버퍼 보호) */
 export function reload(root: string, rel: string, content: string, isDirty: boolean): void {
   const m = getByRel(rel);
   if (!m) { if (isTsLike(rel)) ensure(root, rel, content); return; }
-  savedContent.set(uriFor(root, rel).toString(), content); // 디스크 기준 갱신
-  if (!isDirty && m.getValue() !== content) m.setValue(content);
+  const key = uriFor(root, rel).toString();
+  const prevSaved = savedContent.get(key);
+  // 디스크가 실제로 바뀌었고(이전 기준선과 다름) 버퍼와도 다르면 충돌 — 저장 전에 사용자에게 물어야 한다
+  if (isDirty && m.getValue() !== content && prevSaved !== undefined && prevSaved !== content) {
+    externalChanged.set(rel, content);
+  }
+  savedContent.set(key, content); // 디스크 기준 갱신
+  if (!isDirty && m.getValue() !== content) { m.setValue(content); externalChanged.delete(rel); }
 }
+
+/** 저장 전 확인용 — 외부 변경이 감지된 파일이면 감지 당시의 디스크 내용, 아니면 null */
+export function externalChangeOf(rel: string): string | null {
+  return externalChanged.get(rel) ?? null;
+}
+export function clearExternalChange(rel: string): void { externalChanged.delete(rel); }
 
 export function drop(root: string, rel: string): void {
   const uri = uriFor(root, rel);
@@ -129,6 +146,7 @@ export function drop(root: string, rel: string): void {
   owned.delete(key);
   relIndex.delete(rel);
   savedContent.delete(key);
+  externalChanged.delete(rel);
 }
 
 /** rel 및 모든 하위 경로(rel + "/...") 모델을 정리 — 디렉터리 삭제/이름변경용.

@@ -63,14 +63,16 @@ interface SchutzApi {
   newWindow(): void;
   setOverlay(color: string, symbolColor: string): void;
   renameEntry(root: string, relFrom: string, relTo: string): Promise<boolean>;
-  deleteEntry(root: string, rel: string): Promise<boolean>;
+  /** trashed=false 면 휴지통을 못 써서 영구 삭제된 것 — 호출측이 사용자에게 구분해 알린다 */
+  deleteEntry(root: string, rel: string): Promise<{ ok: boolean; trashed: boolean; reason?: string }>;
   readBinary(root: string, rel: string): Promise<string>;
   watchStart(root: string): void;
   watchStop(): void;
   onFsChange(cb: () => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
   reveal(root: string, rel: string): Promise<boolean>;
-  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number }>;
+  /** error=정규식 거부 등으로 아무것도 안 함 · partial=도중 실패해 일부만 적용됨 */
+  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number; error?: string; partial?: boolean }>;
   cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
   agentCommands(root: string | null): Promise<{ commands: { name: string; origin: "claude" | "codex"; scope: "user" | "project"; description: string; argHint: string; body: string }[] }>;
   mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number }[]>;
