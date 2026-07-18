@@ -2,6 +2,8 @@ import React from "react";
 import { setStoredKey, getOAuth, setOAuth } from "./ai/provider";
 import { testProvider } from "./ai/registry";
 import { setThemeId, applyTheme, THEME_TOKENS } from "./theme";
+import { setEditorPrefs, setAutonomy, applyUiFont } from "./settings";
+import { LANGS, getLang, setLang, t } from "./i18n";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
 
@@ -21,21 +23,21 @@ const CODEFONTS: Record<string, { name: string; stack: string }> = {
   jb: { name: "JetBrains Mono", stack: "'JetBrains Mono',monospace" },
 };
 const PROVIDERS = [
-  { id: "claude", name: "Claude", model: "Opus 4.5", init: "C", hue: "#8FA893", role: "계획·구현·검토에 두루 강한 범용 에이전트", ph: "sk-ant-…" },
-  { id: "gpt", name: "GPT", model: "5.2", init: "G", hue: "#8FA8C0", role: "타입·리팩터링 등 구조 작업에 특화", ph: "sk-…" },
-  { id: "grok", name: "Grok", model: "4.1", init: "X", hue: "#C4A882", role: "문서·탐색 등 보조 작업 담당", ph: "xai-…" },
-  { id: "glm", name: "GLM", model: "4.6", init: "Z", hue: "#A99BC0", role: "대량 컨텍스트 처리 · 비용 효율 보조", ph: "…" },
+  { id: "claude", name: "Claude", model: "Opus 4.5", init: "C", hue: "#8FA893", role: "ob.roleClaude", ph: "sk-ant-…" },
+  { id: "gpt", name: "GPT", model: "5.2", init: "G", hue: "#8FA8C0", role: "ob.roleGpt", ph: "sk-…" },
+  { id: "grok", name: "Grok", model: "4.1", init: "X", hue: "#C4A882", role: "ob.roleGrok", ph: "xai-…" },
+  { id: "glm", name: "GLM", model: "4.6", init: "Z", hue: "#A99BC0", role: "ob.roleGlm", ph: "…" },
 ];
 const IMPORTS = [
-  { k: "vscode", name: "VS Code에서", badge: true, icon: "{}", iconBg: "rgba(143,168,192,.15)", iconFg: "#8FA8C0", desc: "설정 · 키바인딩에 더해 설치된 확장을 그대로 가져와 활성화합니다" },
-  { k: "jetbrains", name: "JetBrains에서", badge: false, icon: "IJ", iconBg: "rgba(196,168,130,.15)", iconFg: "#C4A882", desc: "설정과 단축키를 가져옵니다 · 확장은 VS Code 호환 마켓에서 다시 설치" },
-  { k: "fresh", name: "새로 시작", badge: false, icon: "＋", iconBg: "rgba(143,168,147,.15)", iconFg: "#8FA893", desc: "Schutz 기본 구성으로 깨끗하게 시작합니다" },
+  { k: "vscode", name: "ob.importVscodeName", badge: true, icon: "{}", iconBg: "rgba(143,168,192,.15)", iconFg: "#8FA8C0", desc: "ob.importVscodeDesc" },
+  { k: "jetbrains", name: "ob.importJetbrainsName", badge: false, icon: "IJ", iconBg: "rgba(196,168,130,.15)", iconFg: "#C4A882", desc: "ob.importJetbrainsDesc" },
+  { k: "fresh", name: "ob.importFresh", badge: false, icon: "＋", iconBg: "rgba(143,168,147,.15)", iconFg: "#8FA893", desc: "ob.importFreshDesc" },
 ];
 const KEYMAPS: [string, string][] = [["intellij", "IntelliJ"], ["vscode", "VS Code"], ["vim", "Vim"]];
 const RULES: [string, string, string][] = [
-  ["docs", "문서 · 주석 변경 자동 수락", "*.md, /** */"],
-  ["tests", "테스트 파일 자동 수락", "*.test.ts"],
-  ["deps", "의존성 변경 자동 수락", "package.json"],
+  ["docs", "ob.ruleDocs", "*.md, /** */"],
+  ["tests", "ob.ruleTests", "*.test.ts"],
+  ["deps", "ob.ruleDeps", "package.json"],
 ];
 
 interface ConnState { on: boolean; key: string; st: "idle" | "checking" | "ok" | "fail"; err?: string; auth: "none" | "pending" | "ok"; mode: "auth" | "key" }
@@ -59,6 +61,7 @@ interface S {
   pasteVal: string;
   oauthWait: boolean;
   oauthMsg: string;
+  oauthMsgFor: string | null; // 오류 메시지가 속한 프로바이더(oid) — 잘못된 카드에 표시 방지
   oauthTick: number;
 }
 
@@ -78,17 +81,17 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     },
     manager: "claude",
     cli: {}, cliChecked: false,
-    pasteFor: null, pasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
+    pasteFor: null, pasteVal: "", oauthWait: false, oauthMsg: "", oauthMsgFor: null, oauthTick: 0,
   };
 
   private _oauthOff: (() => void) | null = null;
 
   /** [계정으로 로그인] — 브라우저 OAuth 승인 플로우 시작 */
   async startOauth(id: string) {
-    if (!window.schutz) { this.setState({ oauthMsg: "데스크톱 앱에서만 로그인할 수 있습니다." }); return; }
-    this.setState({ oauthMsg: "", pasteFor: null, oauthWait: id === "codex" });
+    if (!window.schutz) { this.setState({ oauthMsg: t("ob.oauthDesktopOnly"), oauthMsgFor: id }); return; }
+    this.setState({ oauthMsg: "", oauthMsgFor: null, pasteFor: null, oauthWait: id === "codex" });
     const r = await window.schutz.oauthStart(id);
-    if (!r.ok) { this.setState({ oauthMsg: r.message ?? "로그인 시작 실패", oauthWait: false }); return; }
+    if (!r.ok) { this.setState({ oauthMsg: r.message ?? t("ob.oauthStartFail"), oauthMsgFor: id, oauthWait: false }); return; }
     if (r.mode === "paste") this.setState({ pasteFor: id, pasteVal: "" });
   }
 
@@ -99,9 +102,9 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const r = await window.schutz.oauthExchange(id, this.state.pasteVal);
     if (r.ok && r.access) {
       setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: (r as any).accountId ?? null });
-      this.setState(st => ({ pasteFor: null, pasteVal: "", oauthMsg: "", oauthTick: st.oauthTick + 1 }));
+      this.setState(st => ({ pasteFor: null, pasteVal: "", oauthMsg: "", oauthMsgFor: null, oauthTick: st.oauthTick + 1 }));
     } else {
-      this.setState({ oauthMsg: r.message ?? "코드 교환 실패" });
+      this.setState({ oauthMsg: r.message ?? t("ob.oauthExchangeFail"), oauthMsgFor: id });
     }
   }
 
@@ -114,9 +117,9 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           const r = JSON.parse(line);
           if (r.provider && r.ok && r.access) {
             setOAuth(r.provider, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: r.accountId ?? null });
-            this.setState(st => ({ oauthWait: false, oauthMsg: "", oauthTick: st.oauthTick + 1 }));
+            this.setState(st => ({ oauthWait: false, oauthMsg: "", oauthMsgFor: null, oauthTick: st.oauthTick + 1 }));
           } else if (r.provider) {
-            this.setState({ oauthWait: false, oauthMsg: r.message ?? "로그인 실패" });
+            this.setState({ oauthWait: false, oauthMsg: r.message ?? t("ob.oauthLoginFail"), oauthMsgFor: r.provider });
           }
         } catch { /* ignore */ }
       });
@@ -163,7 +166,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* top: logo + step dots + skip */}
         <div style={{ flex: "none", height: 60, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, position: "relative" }}>
           <div style={{ position: "absolute", left: 24, display: "flex", alignItems: "center", gap: 9 }}>
-            <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 22, height: 22, display: "block" }} />
+            <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 22, height: 22, display: "block", filter: "var(--logo-filter)" }} />
             <span style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: .5, color: "#8B948C" }}>Schutz</span>
           </div>
           {labels.map((_, i) => (
@@ -173,7 +176,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           <div style={{ position: "absolute", right: 24 }}>
             {s.step < 6 && (
               <button className="obGhostTxt" onClick={() => { this.setState({ step: 6, theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13, importFrom: "fresh", keymap: "intellij", policy: "manual" }); setThemeId("feldgrau"); applyTheme("feldgrau"); }}
-                style={{ height: 26, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>기본값으로 건너뛰기</button>
+                style={{ height: 26, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#5A635C", background: "transparent", border: "none" }}>{t("ob.skipToDefaults")}</button>
             )}
           </div>
         </div>
@@ -191,17 +194,17 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   // ══ STEP 1 ══
   renderWelcome() {
     const values = [
-      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5 L13.5 3.5 V7.5 C13.5 11 11.2 13.6 8 14.5 C4.8 13.6 2.5 11 2.5 7.5 V3.5 Z" fill="none" stroke="#8FA893" strokeWidth="1.4" strokeLinejoin="round" /></svg>, title: "통제된 자율성", desc: <>모든 편집은 수락 전까지<br />확정되지 않습니다</> },
-      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="3.5" cy="3.5" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><circle cx="3.5" cy="12.5" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><circle cx="12" cy="8" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><path d="M3.5 5.2 V10.8 M5.2 3.7 C9 4 10.4 5.4 10.6 7" fill="none" stroke="#8FA893" strokeWidth="1.2" /></svg>, title: "멀티 에이전트", desc: <>여러 AI가 파일 락으로 격리되어<br />충돌 없이 동시에 일합니다</> },
-      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="#8FA893" strokeWidth="1.3" /><path d="M5 6 L7 8 L5 10 M8.5 10 H11" fill="none" stroke="#8FA893" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>, title: "프로 개발 환경", desc: <>챗봇 장난감이 아니라<br />매일 쓰는 메인 IDE</> },
+      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5 L13.5 3.5 V7.5 C13.5 11 11.2 13.6 8 14.5 C4.8 13.6 2.5 11 2.5 7.5 V3.5 Z" fill="none" stroke="#8FA893" strokeWidth="1.4" strokeLinejoin="round" /></svg>, title: t("ob.value1Title"), desc: <>{t("ob.value1Desc1")}<br />{t("ob.value1Desc2")}</> },
+      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="3.5" cy="3.5" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><circle cx="3.5" cy="12.5" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><circle cx="12" cy="8" r="1.6" fill="none" stroke="#8FA893" strokeWidth="1.3" /><path d="M3.5 5.2 V10.8 M5.2 3.7 C9 4 10.4 5.4 10.6 7" fill="none" stroke="#8FA893" strokeWidth="1.2" /></svg>, title: t("ob.value2Title"), desc: <>{t("ob.value2Desc1")}<br />{t("ob.value2Desc2")}</> },
+      { icon: <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="#8FA893" strokeWidth="1.3" /><path d="M5 6 L7 8 L5 10 M8.5 10 H11" fill="none" stroke="#8FA893" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>, title: t("ob.value3Title"), desc: <>{t("ob.value3Desc1")}<br />{t("ob.value3Desc2")}</> },
     ];
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "safe center" as any, padding: "20px 0", animation: "szFadeUp .5s ease both" }}>
-        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 84, height: 84, display: "block", marginBottom: 26 }} />
-        <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -.5 }}>Schutz에 오신 것을 환영합니다</div>
+        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 84, height: 84, display: "block", marginBottom: 26, filter: "var(--logo-filter)" }} />
+        <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -.5 }}>{t("ob.welcomeTitle")}</div>
         <div style={{ fontSize: 14.5, color: "#8B948C", marginTop: 14, lineHeight: 1.8, textAlign: "center", maxWidth: 520 }}>
-          AI가 코드를 쓰는 시대의 본격 IDE.<br />
-          모든 변경은 당신의 눈앞에서 일어나고, 당신의 승인으로 완성됩니다.
+          {t("ob.welcomeDesc1")}<br />
+          {t("ob.welcomeDesc2")}
         </div>
         <div style={{ display: "flex", gap: 26, marginTop: 38 }}>
           {values.map((v, i) => (
@@ -212,8 +215,17 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             </div>
           ))}
         </div>
-        <button className="hvAccent" onClick={() => this.go(2)} style={{ marginTop: 44, height: 40, padding: "0 34px", fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 10, color: "#0C0E0D", background: "#8FA893", border: "none" }}>시작하기</button>
-        <span style={{ fontSize: 11, color: "#3A403C", marginTop: 12 }}>약 1분 · 언제든 설정에서 변경 가능</span>
+        <div style={{ display: "flex", gap: 6, marginTop: 40, alignItems: "center" }}>
+          {LANGS.map(([code, name]) => {
+            const on = getLang() === code;
+            return (
+              <button key={code} onClick={() => { setLang(code); this.forceUpdate(); }}
+                style={{ height: 30, padding: "0 13px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, border: on ? "1px solid #8FA893" : "1px solid rgba(255,255,255,.12)", background: on ? "rgba(143,168,147,.14)" : "transparent", color: on ? "#A9BCA9" : "#8B948C" }}>{name}</button>
+            );
+          })}
+        </div>
+        <button className="hvAccent" onClick={() => this.go(2)} style={{ marginTop: 22, height: 40, padding: "0 34px", fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 10, color: "#0C0E0D", background: "#8FA893", border: "none" }}>{t("ob.getStarted")}</button>
+        <span style={{ fontSize: 11, color: "#3A403C", marginTop: 12 }}>{t("ob.welcomeFootnote")}</span>
       </div>
     );
   }
@@ -223,28 +235,28 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const s = this.state;
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "safe center" as any, padding: "20px 0", animation: "szFadeUp .5s ease both" }}>
-        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>쓰던 환경 그대로 가져오세요</div>
-        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>설정·키바인딩·확장을 가져와 바로 손에 익은 상태로 시작합니다.</div>
+        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>{t("ob.importTitle")}</div>
+        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>{t("ob.importSubPre")}<b style={{ color: "#9AA59C", fontWeight: 700 }}>{t("ob.keymap")}</b>{t("ob.importSubPost")}</div>
         <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
           {IMPORTS.map(im => {
             const sel = s.importFrom === im.k;
             return (
               <div key={im.k} className="obCard" onClick={() => this.setState({ importFrom: im.k })}
                 style={{ width: 180, cursor: "pointer", borderRadius: 12, border: `1.5px solid ${sel ? "#8FA893" : "rgba(255,255,255,.08)"}`, background: sel ? "rgba(143,168,147,.07)" : "#151917", padding: "16px 16px 14px", display: "flex", flexDirection: "column", gap: 9, position: "relative" }}>
-                {im.badge && <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 700, color: "#0C0E0D", background: "#8FA893", borderRadius: 4, padding: "2px 7px" }}>권장</span>}
+                {im.badge && <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 700, color: "#0C0E0D", background: "#8FA893", borderRadius: 4, padding: "2px 7px" }}>{t("ob.recommended")}</span>}
                 <span style={{ width: 30, height: 30, borderRadius: 8, background: im.iconBg, color: im.iconFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800 }}>{im.icon}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: sel ? "#D5DAD5" : "#9AA59C" }}>{im.name}</span>
-                <span style={{ fontSize: 11, color: "#5A635C", lineHeight: 1.6 }}>{im.desc}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: sel ? "#D5DAD5" : "#9AA59C" }}>{t(im.name)}</span>
+                <span style={{ fontSize: 11, color: "#5A635C", lineHeight: 1.6 }}>{t(im.desc)}</span>
               </div>
             );
           })}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 16, fontSize: 11, color: "#5A635C" }}>
           <svg width="12" height="12" viewBox="0 0 16 16"><path d="M6.5 2 H12 L14 4 V14 H6.5 Z M2 5.5 H6.5 M2 8 H6.5 M2 10.5 H6.5" fill="none" stroke="#8FA893" strokeWidth="1.3" strokeLinejoin="round" /></svg>
-          Schutz는 VS Code 확장 생태계와 호환됩니다 — 어떤 선택을 해도 쓰던 확장을 그대로 설치할 수 있습니다.
+          {t("ob.compatNote")}
         </div>
         <div style={{ width: 560, maxWidth: "90%", display: "flex", flexDirection: "column", gap: 8, marginTop: 22 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>키맵</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.keymap")}</span>
           <div style={{ display: "flex", gap: 8 }}>
             {KEYMAPS.map(([k, name]) => {
               const sel = s.keymap === k;
@@ -289,11 +301,11 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         {/* controls */}
         <div style={{ flex: "none", width: 320, display: "flex", flexDirection: "column", gap: 20 }}>
           <div>
-            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>작업 공간을 꾸며보세요</div>
-            <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7 }}>선택하는 즉시 오른쪽 미리보기에 반영됩니다.<br />그대로 두면 기본값으로 시작합니다.</div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>{t("ob.appearanceTitle")}</div>
+            <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7 }}>{t("ob.appearanceDesc1")}<br />{t("ob.appearanceDesc2")}</div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>테마</span>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.theme")}</span>
             <div style={{ display: "flex", gap: 8 }}>
               {Object.entries(THEMES).map(([k, t]) => {
                 const sel = s.theme === k;
@@ -312,7 +324,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>UI 폰트</span>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.uiFont")}</span>
             <div style={{ display: "flex", gap: 8 }}>
               {Object.entries(UIFONTS).map(([k, f]) => {
                 const c = selStyle(s.uiFont === k);
@@ -321,7 +333,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>코드 폰트</span>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.codeFont")}</span>
             <div style={{ display: "flex", gap: 8 }}>
               {Object.entries(CODEFONTS).map(([k, f]) => {
                 const c = selStyle(s.codeFont === k);
@@ -330,16 +342,16 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>코드 크기 <span style={{ fontWeight: 400, color: "#8B948C", fontFamily: MONO }}>{s.fontSize}px</span></span>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.codeSize")} <span style={{ fontWeight: 400, color: "#8B948C", fontFamily: MONO }}>{s.fontSize}px</span></span>
             <input type="range" min={11} max={16} step={1} value={s.fontSize}
               onChange={e => this.setState({ fontSize: +e.target.value })}
               style={{ width: "100%", accentColor: "#8FA893", background: "transparent" }} />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
-            <button className="hv05" onClick={() => this.go(2)} style={backBtn}>이전</button>
-            <button className="hvAccent" onClick={() => this.go(4)} style={nextBtn}>다음</button>
+            <button className="hv05" onClick={() => this.go(2)} style={backBtn}>{t("ob.prev")}</button>
+            <button className="hvAccent" onClick={() => this.go(4)} style={nextBtn}>{t("ob.next")}</button>
             <button className="obGhostTxt" onClick={() => { this.setState({ theme: "feldgrau", uiFont: "suit", codeFont: "plex", fontSize: 13 }); setThemeId("feldgrau"); applyTheme("feldgrau"); }}
-              style={{ height: 36, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "#5A635C", background: "transparent", border: "none" }}>기본값으로</button>
+              style={{ height: 36, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "#5A635C", background: "transparent", border: "none" }}>{t("ob.defaultsBtn")}</button>
           </div>
         </div>
         {/* live preview */}
@@ -352,11 +364,11 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
               feature/token-refresh
             </span>
             <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 10.5, color: th.dim, fontFamily: uiStack }}>검토 대기</span>
+            <span style={{ fontSize: 10.5, color: th.dim, fontFamily: uiStack }}>{t("ob.reviewPending")}</span>
           </div>
           <div style={{ display: "flex" }}>
             <div style={{ flex: "none", width: 150, borderRight: `1px solid ${th.line}`, padding: "10px 0", background: th.chrome, transition: "background .3s ease" }}>
-              <div style={{ padding: "0 12px 6px", fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: th.dim, fontFamily: uiStack }}>프로젝트</div>
+              <div style={{ padding: "0 12px 6px", fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: th.dim, fontFamily: uiStack }}>{t("ob.previewProject")}</div>
               <div style={{ padding: "3px 12px", fontSize: 11, color: th.dim, fontFamily: uiStack }}>▾ src / auth</div>
               <div style={{ padding: "3px 12px 3px 24px", fontSize: 11, color: th.fg, background: th.selBg, fontFamily: codeStack }}>token-manager.ts</div>
               <div style={{ padding: "3px 12px 3px 24px", fontSize: 11, color: th.dim, fontFamily: codeStack }}>types.ts</div>
@@ -372,8 +384,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                 </div>
               ))}
               <div style={{ display: "flex", gap: 6, padding: "8px 0 0 56px" }}>
-                <span style={{ flex: "none", whiteSpace: "nowrap", height: 22, display: "flex", alignItems: "center", padding: "0 10px", borderRadius: 5, fontSize: 10.5, fontFamily: uiStack, color: th.okFg, background: th.okBg, border: `1px solid ${th.okBd}` }}>✓ 수락</span>
-                <span style={{ flex: "none", whiteSpace: "nowrap", height: 22, display: "flex", alignItems: "center", padding: "0 10px", borderRadius: 5, fontSize: 10.5, fontFamily: uiStack, color: th.noFg, background: th.noBg, border: `1px solid ${th.noBd}` }}>✕ 거절</span>
+                <span style={{ flex: "none", whiteSpace: "nowrap", height: 22, display: "flex", alignItems: "center", padding: "0 10px", borderRadius: 5, fontSize: 10.5, fontFamily: uiStack, color: th.okFg, background: th.okBg, border: `1px solid ${th.okBd}` }}>{t("ob.previewAccept")}</span>
+                <span style={{ flex: "none", whiteSpace: "nowrap", height: 22, display: "flex", alignItems: "center", padding: "0 10px", borderRadius: 5, fontSize: 10.5, fontFamily: uiStack, color: th.noFg, background: th.noBg, border: `1px solid ${th.noBd}` }}>{t("ob.previewReject")}</span>
               </div>
             </div>
           </div>
@@ -387,17 +399,17 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const s = this.state;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", animation: "szFadeUp .5s ease both" }}>
-        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>에이전트 팀을 구성하세요</div>
-        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>사용할 AI를 켜고 API 키를 넣으면 실제 API 호출로 연결을 검증합니다.<br />언제든 설정(⚙)에서 바꿀 수 있습니다.</div>
+        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>{t("ob.connectTitle")}</div>
+        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>{t("ob.connectDesc1")}<br />{t("ob.connectDesc2")}</div>
         <div style={{ width: 560, maxWidth: "90%", display: "flex", flexDirection: "column", gap: 10, marginTop: 30 }}>
           {PROVIDERS.map(p => {
             const c = s.conn[p.id];
             const isMgr = s.manager === p.id;
             const vMap: Record<string, [string, string, string, string]> = {
-              idle: ["연결", "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
-              checking: ["확인 중…", "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
-              ok: ["✓ 연결됨", "#0C0E0D", "#8FA893", "#8FA893"],
-              fail: ["다시 시도", "#CE9A9A", "rgba(201,123,123,.08)", "rgba(201,123,123,.4)"],
+              idle: [t("ob.connect"), "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
+              checking: [t("ob.connChecking"), "#9AA59C", "transparent", "rgba(255,255,255,.14)"],
+              ok: [t("ob.connConnected"), "#0C0E0D", "#8FA893", "#8FA893"],
+              fail: [t("ob.connRetry"), "#CE9A9A", "rgba(201,123,123,.08)", "rgba(201,123,123,.4)"],
             };
             const [vLabel, vFg, vBg, vBd] = vMap[c.st];
             return (
@@ -408,13 +420,13 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                     <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                       <span style={{ fontSize: 13.5, fontWeight: 700 }}>{p.name}</span>
                     </div>
-                    <div style={{ fontSize: 11, color: "#5A635C", marginTop: 1 }}>{p.role}</div>
+                    <div style={{ fontSize: 11, color: "#5A635C", marginTop: 1 }}>{t(p.role)}</div>
                   </div>
                   <div style={{ flex: 1 }} />
                   {c.on && (
-                    <button className="obMgrBtn" title="관리자로 지정" onClick={() => this.setState({ manager: p.id })}
+                    <button className="obMgrBtn" title={t("ob.setAsManager")} onClick={() => this.setState({ manager: p.id })}
                       style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: isMgr ? "#0C0E0D" : "#8B948C", background: isMgr ? "#8FA893" : "transparent", border: `1px solid ${isMgr ? "#8FA893" : "rgba(255,255,255,.14)"}` }}>
-                      {isMgr ? "★ 관리자" : "관리자로"}
+                      {isMgr ? t("ob.managerBadge") : t("ob.makeManager")}
                     </button>
                   )}
                   <button onClick={() => this.setState(st2 => {
@@ -434,67 +446,67 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                 </div>
                 {c.on && (p.id === "claude" || p.id === "gpt") && (() => {
                   const oid = p.id === "claude" ? "claude" : "codex";
-                  const subName = p.id === "claude" ? "Claude Pro/Max 구독" : "ChatGPT Plus/Pro 구독";
+                  const subName = p.id === "claude" ? t("ob.claudeSub") : t("ob.gptSub");
                   const connected = !!getOAuth(oid);
                   return (
                     <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: connected ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${connected ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#8BB292" : "#5A635C", flex: "none" }} />
                         <span style={{ fontSize: 12, fontWeight: 700, color: connected ? "#9DC4A3" : "#8B948C" }}>
-                          {subName} {connected ? "· 계정 연결됨" : "· 미연결"}
+                          {subName} {connected ? t("ob.accountConnected") : t("ob.accountNotConnected")}
                         </span>
                         <div style={{ flex: 1 }} />
                         {connected ? (
                           <button className="obGhostTxt" onClick={() => { setOAuth(oid, null); this.setState(st => ({ oauthTick: st.oauthTick + 1 })); }}
-                            style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>연결 해제</button>
+                            style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#5A635C", background: "transparent", border: "1px solid rgba(255,255,255,.14)" }}>{t("ob.disconnect")}</button>
                         ) : (
                           <button className="obBright" onClick={() => void this.startOauth(oid)}
                             style={{ height: 26, padding: "0 14px", fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#0C0E0D", background: "#8FA893", border: "none" }}>
-                            {p.name} 계정으로 로그인
+                            {t("ob.loginWithAccount", { name: p.name })}
                           </button>
                         )}
                       </div>
                       {!connected && s.pasteFor === oid && (
                         <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
-                          <input value={s.pasteVal} placeholder="브라우저 승인 후 표시된 코드를 붙여넣으세요"
+                          <input value={s.pasteVal} placeholder={t("ob.pastePlaceholder")}
                             onChange={e => this.setState({ pasteVal: e.target.value })}
                             onKeyDown={e => { if (e.key === "Enter") void this.submitPaste(); }}
                             style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid rgba(143,168,147,.35)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
                           <button className="obBright" onClick={() => void this.submitPaste()}
-                            style={{ height: 30, padding: "0 13px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#0C0E0D", background: "#8FA893", border: "none" }}>연결</button>
+                            style={{ height: 30, padding: "0 13px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "#0C0E0D", background: "#8FA893", border: "none" }}>{t("ob.connect")}</button>
                         </div>
                       )}
                       {!connected && oid === "codex" && s.oauthWait && (
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 9, fontSize: 11, color: "#8B948C" }}>
                           <span style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid rgba(143,168,147,.25)", borderTopColor: "#8FA893", animation: "szSpin .9s linear infinite" }} />
-                          브라우저에서 승인하면 자동으로 연결됩니다…
+                          {t("ob.oauthWaiting")}
                         </div>
                       )}
-                      {s.oauthMsg && s.pasteFor !== "done" && (
+                      {s.oauthMsg && s.oauthMsgFor === oid && s.pasteFor !== "done" && (
                         <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6 }}>⚠️ {s.oauthMsg}</div>
                       )}
                       <div style={{ fontSize: 10.5, color: "#5A635C", marginTop: 6, lineHeight: 1.6 }}>
                         {connected
-                          ? "구독 계정으로 사용합니다 — API 키가 필요 없고, 아래 키 입력은 선택사항입니다."
-                          : "버튼을 누르면 브라우저에서 공식 로그인 페이지가 열립니다. 승인하면 이 앱이 구독 계정으로 연결됩니다."}
+                          ? t("ob.subUsingNote")
+                          : t("ob.subLoginNote")}
                       </div>
                     </div>
                   );
                 })()}
                 {c.on && (p.id === "grok" || p.id === "glm") && (
-                  <div style={{ marginTop: 10, fontSize: 10.5, color: "#5A635C" }}>구독 CLI 미제공 — API 키 방식만 지원됩니다.</div>
+                  <div style={{ marginTop: 10, fontSize: 10.5, color: "#5A635C" }}>{t("ob.noSubCli")}</div>
                 )}
                 {c.on && (
                   <div style={{ marginTop: 12 }}>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <input value={c.key} placeholder={p.ph + " (API 키)"}
+                      <input value={c.key} placeholder={p.ph + t("ob.apiKeyPlaceholderSuffix")}
                         onChange={e => { const v = e.target.value; this.setState(st2 => ({ conn: { ...st2.conn, [p.id]: { ...st2.conn[p.id], key: v, st: "idle" as const } } })); }}
                         style={{ flex: 1, minWidth: 0, background: "#0C0E0D", border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, height: 32, padding: "0 12px", color: "#D5DAD5", fontSize: 11.5, fontFamily: MONO, outline: "none" }} />
                       <button className="obBright" onClick={() => this.verify(p.id)}
                         style={{ height: 32, padding: "0 14px", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: vFg, background: vBg, border: `1px solid ${vBd}` }}>{vLabel}</button>
                     </div>
                     {c.st === "fail" && c.err && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6 }}>⚠️ {c.err}</div>}
-                    <div style={{ fontSize: 10, color: "#4B534D", marginTop: 6 }}>계정 로그인(OAuth)은 준비 중 — 지금은 API 키로 연결됩니다. [연결]을 누르면 실제 API 호출로 검증해요.</div>
+                    <div style={{ fontSize: 10, color: "#4B534D", marginTop: 6 }}>{t("ob.oauthPending")}</div>
                   </div>
                 )}
               </div>
@@ -502,12 +514,12 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           })}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 28 }}>
-          <button className="hv05" onClick={() => this.go(3)} style={backBtn}>이전</button>
+          <button className="hv05" onClick={() => this.go(3)} style={backBtn}>{t("ob.prev")}</button>
           <button className="obBright" onClick={() => this.go(5)}
             style={{ ...nextBtn, color: onCnt > 0 ? "#0C0E0D" : "#9AA59C", background: onCnt > 0 ? "#8FA893" : "rgba(255,255,255,.1)" }}>
-            {onCnt > 0 ? "다음" : "AI 없이 계속"}
+            {onCnt > 0 ? t("ob.next") : t("ob.continueWithoutAi")}
           </button>
-          <span style={{ fontSize: 11, color: "#5A635C" }}>{onCnt > 0 ? onCnt + "개 연결 · 관리자 " + mgrName : "나중에 설정에서 연결할 수 있습니다"}</span>
+          <span style={{ fontSize: 11, color: "#5A635C" }}>{onCnt > 0 ? t("ob.connSummary", { n: onCnt, mgr: mgrName }) : t("ob.connLater")}</span>
         </div>
       </div>
     );
@@ -518,21 +530,21 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     const s = this.state;
     const sh = (d: string) => <svg width="15" height="15" viewBox="0 0 16 16"><path d={d} fill="none" stroke="#8FA893" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
     const POLICIES = [
-      { k: "manual", name: "수동 검토", badge: true, desc: "모든 변경을 직접 수락합니다. 라인 단위로 통제하는 기본 모드.", icon: sh("M8 1.5 L13.5 3.5 V7.5 C13.5 11 11.2 13.6 8 14.5 C4.8 13.6 2.5 11 2.5 7.5 V3.5 Z") },
-      { k: "balanced", name: "균형", badge: false, desc: "문서·주석 같은 저위험 변경은 자동 수락, 로직 변경은 수동 검토.", icon: sh("M2.5 8 H13.5 M8 2.5 V13.5") },
-      { k: "auto", name: "자율", badge: false, desc: "변경을 즉시 적용하고 사후에 검토합니다. 숙련 사용자용.", icon: sh("M3 8.5 L7 12 L13.5 4") },
+      { k: "manual", name: t("ob.policyManualName"), badge: true, desc: t("ob.policyManualDesc"), icon: sh("M8 1.5 L13.5 3.5 V7.5 C13.5 11 11.2 13.6 8 14.5 C4.8 13.6 2.5 11 2.5 7.5 V3.5 Z") },
+      { k: "balanced", name: t("ob.policyBalancedName"), badge: false, desc: t("ob.policyBalancedDesc"), icon: sh("M2.5 8 H13.5 M8 2.5 V13.5") },
+      { k: "auto", name: t("ob.policyAutoName"), badge: false, desc: t("ob.policyAutoDesc"), icon: sh("M3 8.5 L7 12 L13.5 4") },
     ];
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "safe center" as any, padding: "20px 0", animation: "szFadeUp .5s ease both" }}>
-        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>AI에게 얼마나 맡길까요</div>
-        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>어느 쪽이든 모든 변경은 기록되고 되돌릴 수 있습니다.<br />파일·경로 단위 세부 규칙은 설정에서 조정합니다.</div>
+        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -.3 }}>{t("ob.policyTitle")}</div>
+        <div style={{ fontSize: 12.5, color: "#8B948C", marginTop: 7, lineHeight: 1.7, textAlign: "center" }}>{t("ob.policyDesc1")}<br />{t("ob.policyDesc2")}</div>
         <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
           {POLICIES.map(po => {
             const sel = s.policy === po.k;
             return (
               <div key={po.k} className="obCard" onClick={() => this.setState({ policy: po.k })}
                 style={{ width: 196, cursor: "pointer", borderRadius: 12, border: `1.5px solid ${sel ? "#8FA893" : "rgba(255,255,255,.08)"}`, background: sel ? "rgba(143,168,147,.07)" : "#151917", padding: "16px 16px 14px", display: "flex", flexDirection: "column", gap: 9, position: "relative" }}>
-                {po.badge && <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 700, color: "#0C0E0D", background: "#8FA893", borderRadius: 4, padding: "2px 7px" }}>권장</span>}
+                {po.badge && <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 700, color: "#0C0E0D", background: "#8FA893", borderRadius: 4, padding: "2px 7px" }}>{t("ob.recommended")}</span>}
                 <span style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(143,168,147,.1)", border: "1px solid rgba(143,168,147,.22)", display: "flex", alignItems: "center", justifyContent: "center" }}>{po.icon}</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: sel ? "#D5DAD5" : "#9AA59C" }}>{po.name}</span>
                 <span style={{ fontSize: 11, color: "#5A635C", lineHeight: 1.65 }}>{po.desc}</span>
@@ -542,10 +554,10 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
         </div>
         {s.policy === "balanced" && (
           <div style={{ width: 600, maxWidth: "90%", background: "#151917", border: "1px solid rgba(255,255,255,.07)", borderRadius: 12, padding: "13px 16px", marginTop: 20, display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>자동 수락 규칙</span>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#5A635C" }}>{t("ob.autoAcceptRules")}</span>
             {RULES.map(([k, label, hint]) => (
               <div key={k} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 12, color: "#C4CBC4" }}>{label}</span>
+                <span style={{ fontSize: 12, color: "#C4CBC4" }}>{t(label)}</span>
                 <span style={{ fontSize: 10.5, color: "#4B534D", fontFamily: MONO }}>{hint}</span>
                 <div style={{ flex: 1 }} />
                 <button onClick={() => this.setState(st2 => ({ rules: { ...st2.rules, [k]: !st2.rules[k] } }))}
@@ -565,21 +577,21 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   renderDone(th: any, onCnt: number, mgrName: string) {
     const s = this.state;
     const rows: [string, React.ReactNode, boolean?][] = [
-      ["가져오기", IMPORTS.find(i => i.k === s.importFrom)!.name.replace("에서", "") + (s.importFrom === "fresh" ? "" : " 설정")],
-      ["키맵", KEYMAPS.find(k => k[0] === s.keymap)![1]],
-      ["테마", th.name],
-      ["폰트", UIFONTS[s.uiFont].name + " + " + CODEFONTS[s.codeFont].name + " " + s.fontSize + "px"],
-      ["자율성", (s.policy === "manual" ? "수동 검토" : s.policy === "balanced" ? "균형 · 규칙 " + Object.values(s.rules).filter(Boolean).length + "개" : "자율")],
-      ["에이전트", onCnt > 0 ? PROVIDERS.filter(p => s.conn[p.id].on).map(p => p.name).join(", ") : "없음"],
-      ["관리자", mgrName, true],
+      [t("ob.summaryImport"), (s.importFrom === "fresh" ? t("ob.importFresh") : s.importFrom === "vscode" ? "VS Code" : "JetBrains") + (s.importFrom === "fresh" ? "" : t("ob.summaryKeymapSuffix"))],
+      [t("ob.keymap"), KEYMAPS.find(k => k[0] === s.keymap)![1]],
+      [t("ob.theme"), th.name],
+      [t("ob.font"), UIFONTS[s.uiFont].name + " + " + CODEFONTS[s.codeFont].name + " " + s.fontSize + "px"],
+      [t("ob.autonomy"), (s.policy === "manual" ? t("ob.policyManualName") : s.policy === "balanced" ? t("ob.summaryBalanced", { n: Object.values(s.rules).filter(Boolean).length }) : t("ob.policyAutoName"))],
+      [t("ob.summaryAgent"), onCnt > 0 ? PROVIDERS.filter(p => s.conn[p.id].on).map(p => p.name).join(", ") : t("ob.none")],
+      [t("ob.summaryManager"), mgrName, true],
     ];
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", animation: "szFadeUp .5s ease both" }}>
         <span style={{ width: 64, height: 64, borderRadius: 18, background: "rgba(143,168,147,.12)", border: "1px solid rgba(143,168,147,.3)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
           <svg width="28" height="28" viewBox="0 0 24 24"><path d="M5 12.5 L10 17.5 L19 7.5" fill="none" stroke="#8FA893" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </span>
-        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -.4 }}>준비가 끝났습니다</div>
-        <div style={{ fontSize: 13, color: "#8B948C", marginTop: 10, lineHeight: 1.8, textAlign: "center" }}>설정 요약 — 언제든 <span style={{ color: "#9AA59C" }}>⌘,</span> 에서 바꿀 수 있습니다.</div>
+        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -.4 }}>{t("ob.doneTitle")}</div>
+        <div style={{ fontSize: 13, color: "#8B948C", marginTop: 10, lineHeight: 1.8, textAlign: "center" }}>{t("ob.doneSummaryPre")}<span style={{ color: "#9AA59C" }}>⌘,</span>{t("ob.doneSummaryPost")}</div>
         <div style={{ width: 430, maxWidth: "90%", background: "#151917", border: "1px solid rgba(255,255,255,.07)", borderRadius: 12, padding: "16px 18px", marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
           {rows.map(([label, value, accent], i) => (
             <div key={i} style={{ display: "flex", fontSize: 12 }}>
@@ -589,14 +601,22 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 30 }}>
-          <button className="hv05" onClick={() => this.go(5)} style={{ ...backBtn, height: 38 }}>이전</button>
+          <button className="hv05" onClick={() => this.go(5)} style={{ ...backBtn, height: 38 }}>{t("ob.prev")}</button>
           <button className="hvAccent" onClick={() => {
             try { localStorage.setItem("schutz.manager", this.state.manager ?? "claude"); } catch { /* ignore */ }
             const themeId = THEME_TOKENS[this.state.theme] ? this.state.theme : "feldgrau";
             setThemeId(themeId); applyTheme(themeId);
+            // 온보딩이 물어본 설정을 실제로 저장·적용한다 (테마·관리자 외 전부 여기서)
+            setEditorPrefs({ codeFont: s.codeFont, fontSize: s.fontSize, uiFont: s.uiFont, keymap: s.keymap });
+            setAutonomy({ policy: s.policy, rules: { docs: !!s.rules.docs, tests: !!s.rules.tests, deps: !!s.rules.deps } });
+            applyUiFont(s.uiFont);
+            // 입력했지만 [연결]로 검증하지 않은 API 키도 저장 (조용히 버려지지 않게)
+            for (const [pid, c] of Object.entries(s.conn)) {
+              if (c && c.key && c.key.trim()) { try { setStoredKey(pid as any, c.key.trim()); } catch { /* ignore */ } }
+            }
             this.props.onFinish();
           }}
-            style={{ height: 38, display: "flex", alignItems: "center", padding: "0 30px", fontSize: 13, fontWeight: 700, borderRadius: 9, color: "#0C0E0D", background: "#8FA893", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Schutz 시작 →</button>
+            style={{ height: 38, display: "flex", alignItems: "center", padding: "0 30px", fontSize: 13, fontWeight: 700, borderRadius: 9, color: "#0C0E0D", background: "#8FA893", border: "none", cursor: "pointer", fontFamily: "inherit" }}>{t("ob.startSchutz")}</button>
         </div>
       </div>
     );
@@ -605,8 +625,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   navRow(step: number) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: step === 5 ? 28 : 30 }}>
-        <button className="hv05" onClick={() => this.go(step - 1)} style={backBtn}>이전</button>
-        <button className="hvAccent" onClick={() => this.go(step + 1)} style={nextBtn}>다음</button>
+        <button className="hv05" onClick={() => this.go(step - 1)} style={backBtn}>{t("ob.prev")}</button>
+        <button className="hvAccent" onClick={() => this.go(step + 1)} style={nextBtn}>{t("ob.next")}</button>
       </div>
     );
   }

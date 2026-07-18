@@ -6,18 +6,45 @@ import {
 } from "./ide/data";
 import {
   GitBranchIcon, SearchIcon,
-  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon,
+  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon, DebugIcon, McpIcon,
 } from "./icons";
+import { FileIcon } from "./fileIcons";
 import {
-  SCHUTZ_SYSTEM_PROMPT, MANAGER_SYSTEM_EXTRA,
+  schutzSystemPrompt, MANAGER_SYSTEM_EXTRA,
   WORKSPACE_TOOLS, DELEGATE_TOOL,
 } from "./ai/claude";
-import { PROVIDERS_MAP, testProvider, getManagerId } from "./ai/registry";
-import { Message, ToolCall, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, getModelOverride, setModelOverride } from "./ai/provider";
+import { PROVIDERS_MAP, testProvider, getManagerId, setManagerId } from "./ai/registry";
+import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, ModelOpt } from "./ai/models";
+import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, getModelOverride, setModelOverride } from "./ai/provider";
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
+import { DiffPane } from "./editor/DiffPane";
+import { XtermView } from "./editor/XtermView";
+import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
+import monaco from "./editor/monacoSetup";
+import * as projectModels from "./editor/projectModels";
+import * as lspClient from "./editor/lspClient";
+import * as lspConv from "./editor/lspConverters";
+import * as dap from "./debug/dapClient";
+import * as extHost from "./ext/extHost";
+import * as vscodeExt from "./ext/vscodeExt";
+import * as iconTheme from "./ext/iconTheme";
+import * as textmate from "./ext/textmate";
+import * as mcp from "./mcp/mcpClient";
+import * as mcpGen from "./mcp/generator";
+import { registerLspProviders } from "./editor/lspProviders";
+import { setThemeId, THEME_TOKENS, monacoThemeOf } from "./theme";
 import { applyTheme, getThemeId } from "./theme";
+// (setThemeId, THEME_TOKENS, monacoThemeOf 는 아래 editor import 라인에서 가져옴)
+import {
+  getEditorPrefs, setEditorPrefs, getAutonomy, setAutonomy, applyUiFont, autoAcceptFor,
+  CODE_FONTS, UI_FONTS, KEYMAPS, EditorPrefs,
+  getActiveVsxTheme, setActiveVsxTheme, getActiveIconTheme, setActiveIconTheme,
+} from "./settings";
+import { t, getLang, setLang, LANGS, onLangChange } from "./i18n";
+import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
+interface InlineRange { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }
 interface Proposal {
   id: string;
   rel: string;
@@ -27,10 +54,29 @@ interface Proposal {
   agent: string;
   status: "pending" | "accepted" | "rejected" | "failed";
   error?: string;
+  /** 자율성 정책으로 자동 수락됨 */
+  auto?: boolean;
+  /** 인라인 편집(Ctrl+K) 선택 범위 — 있으면 텍스트 검색 대신 이 정확 범위로 적용(non-unique 선택 대응) */
+  range?: InlineRange;
 }
 
-const MONO = "'IBM Plex Mono',monospace";
-const SUIT = "'SUIT Variable',sans-serif";
+// 설정 폰트가 전 UI에 전파되도록 CSS 변수를 참조(applyUiFont가 --font-ui/--font-code 설정).
+// 심볼·이모지 폴백 포함(장식 글리프 tofu 방지).
+const MONO = "var(--font-code,'IBM Plex Mono','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',monospace)";
+const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',sans-serif)";
+
+const APP_VERSION = "0.0.2";
+
+/** 맥 단축키 글리프(⌘⇧⌥)를 플랫폼에 맞게 표기 — Windows/Linux에서는 Ctrl/Shift/Alt 텍스트로 */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+function accel(s: string): string {
+  if (!s || IS_MAC) return s;
+  const hasCtrl = s.includes("⌘") || s.includes("⌃");
+  const hasAlt = s.includes("⌥");
+  const hasShift = s.includes("⇧");
+  const key = s.replace(/[⌘⌃⇧⌥]/g, "");
+  return [hasCtrl && "Ctrl", hasAlt && "Alt", hasShift && "Shift", key].filter(Boolean).join("+");
+}
 
 interface S {
   statusKey: "idle" | "thinking" | "tool" | "review" | "stopped";
@@ -42,15 +88,62 @@ interface S {
   files: ReviewFile[];
   docs: Record<string, DocLine[]>;
   chips: Record<string, { text: string; op: number }>;
-  panes: string[];
-  leftTab: "flow" | "tree";
+  /** 슬롯별 열린 탭 (rel 목록). 길이 = layout */
+  tabs: string[][];
+  /** 닫히는 중인 탭 (`slot:rel` 키) — szTabOut 재생 후 제거 */
+  closingTabs: string[];
+  /** 슬롯별 활성 rel ("" = 빈 슬롯). 길이 = layout */
+  active: string[];
+  leftTab: "flow" | "tree" | "git" | "debug" | "ext";
+  /** 확장: 로드된 커맨드 · 관리 목록 · 기여 패널 */
+  extCommands: import("./ext/extHost").ExtCommand[];
+  extList: import("./ext/extHost").ExtInfo[];
+  /** 마지막 확장 로드의 하드 오류 ("확장이름: 메시지") — 확장이 아무 기여도 못한 경우 */
+  extErrors: string[];
+  /** activate 는 실패했지만 선언형 기여(테마/아이콘/문법)는 정상인 "기능 제한" 확장 */
+  extLimited: { id: string; name: string; reason: string }[];
+  extPanel: { title: string; html: string } | null;
+  /** VS Code 확장 — 가져온 테마 · 아이콘테마 · Open VSX 마켓 검색 */
+  extThemes: import("./ext/vscodeExt").ImportedTheme[];
+  extIconThemes: { extId: string; label: string; path: string }[];
+  iconVer: number;
+  extSearch: string;
+  extResults: { namespace: string; name: string; version: string; displayName: string; description: string; downloadCount: number; rating: number; icon: string }[];
+  extBusy: boolean;
+  extInstalling: string[];
+  /** 확장 상세(정보) 뷰 */
+  extDetail: any | null;
+  extDetailBusy: boolean;
+  /** 디버그: 파일별 브레이크포인트(1-based 라인) */
+  breakpoints: Record<string, number[]>;
+  /** 디버그 세션 상태 */
+  debug: DebugState | null;
+  /** 디버그 콘솔 출력 라인 */
+  debugConsole: string[];
+  /** Git 상태 (소스 컨트롤 패널) */
+  git: GitStatus | null;
+  gitMsg: string;
+  gitBusy: boolean;
+  gitError: string;
+  /** Git 브랜치·로그 */
+  gitBranches: string[];
+  gitLog: { hash: string; author: string; date: string; subject: string }[];
+  branchOpen: boolean;
+  newBranch: string;
+  /** 채팅 컨텍스트 첨부 (@파일 / 현재 선택) */
+  attach: AttachRef[];
+  attachPickerOpen: boolean;
+  attachQuery: string;
   expanded: string | null;
   openMenu: string | null;
   projOpen: boolean;
   agentsOpen: boolean;
   reviewOpen: boolean;
   termOpen: boolean;
+  /** 활성 터미널 탭 id, 또는 "ai"(AI 로그) */
   termTab: string;
+  /** 열린 터미널 탭들 (멀티 터미널) */
+  terms: { id: string; title: string }[];
   agents: Record<string, AgentState>;
   /** 실제로 연 프로젝트 폴더 (Electron 전용). null이면 데모 모드 */
   workspace: SchutzWorkspaceTree | null;
@@ -63,6 +156,27 @@ interface S {
   termReal: string;
   termInput: string;
   settingsOpen: boolean;
+  /** 설정 모달 활성 섹션 탭 */
+  settingsTab: string;
+  /** UI 대시보드/모달 (채팅 대신) */
+  aboutOpen: boolean;
+  usageOpen: boolean;
+  keysOpen: boolean;
+  commandsOpen: boolean;
+  /** Claude Code · Codex 에서 발견한 커스텀 명령 */
+  agentCommands: DiscoveredCmd[];
+  /** MCP 관리 패널 */
+  mcpOpen: boolean;
+  mcpServers: mcp.McpServerInfo[];
+  mcpDiscovered: { name: string; source: string; command: string; args: string[]; env: Record<string, string>; url: string | null; added: boolean }[];
+  mcpBusy: string;               // 진행 중 작업 라벨 (서버명 등)
+  mcpJson: string;               // JSON 붙여넣기 추가
+  mcpGen: null | { mode: "cli" | "project" | "openapi" | "generic"; input: string; status: string; };
+  /** 사용법 스포트라이트 투어 */
+  tourOpen: boolean;
+  tourStep: number;
+  /** 닫히는 중인 오버레이 키(나가는 애니메이션 후 언마운트) */
+  closing: string[];
   /** 설정 모달의 프로바이더별 연결 테스트 결과 */
   testMsg: Record<string, string>;
   /** 에디터 분할 수 (1 | 2 | 4) */
@@ -77,6 +191,44 @@ interface S {
   quickOpen: boolean;
   quickQuery: string;
   quickSel: number;
+  /** Ctrl+T 워크스페이스 심볼 이동 */
+  symOpen: boolean;
+  symQuery: string;
+  symSel: number;
+  symLoading: boolean;
+  symResults: { name: string; container: string; kind: number; uri: string; range: import("monaco-editor").IRange }[];
+  /** Ctrl+Shift+F 전역 텍스트 검색 */
+  searchOpen: boolean;
+  searchQuery: string;
+  searchResults: SearchHit[];
+  searchSel: number;
+  searchBusy: boolean;
+  searchTruncated: boolean;
+  /** 미저장 탭 닫기 확인 */
+  askClose: { rel: string; slot: number } | null;
+  /** 진단(문제 패널) */
+  problems: ProblemItem[];
+  tsLargeProject: boolean;
+  /** Ctrl+Shift+P 커맨드 팔레트 */
+  cmdOpen: boolean;
+  cmdQuery: string;
+  cmdSel: number;
+  /** 모델 피커가 열린 에이전트 id (null=닫힘) */
+  modelPickFor: string | null;
+  /** 비차단 토스트 */
+  toasts: ToastItem[];
+  /** 좌·우 패널 폭 (드래그 리사이즈) */
+  leftW: number;
+  rightW: number;
+  /** 마크다운 미리보기 중인 rel 집합 */
+  mdPreview: Record<string, boolean>;
+  /** 찾기·바꾸기 모드(검색 오버레이) */
+  replaceOpen: boolean;
+  replaceVal: string;
+  searchOpts: { regex: boolean; caseSensitive: boolean; wholeWord: boolean; include: string; exclude: string };
+  /** Ctrl+Tab MRU 오버레이 */
+  mruOpen: boolean;
+  mruSel: number;
   /** 접힌 트리 디렉터리 */
   collapsed: Record<string, boolean>;
   /** 상태바 실정보 (포커스된 에디터) */
@@ -90,20 +242,77 @@ interface S {
   cliModel: string;
 }
 
+/** 전역 텍스트 검색 히트 */
+interface SearchHit { rel: string; line: number; col: number; preview: string }
+
+/** 진단(문제 패널) 항목 */
+interface ProblemItem { rel: string; line: number; col: number; message: string; severity: number }
+
+/** 커맨드 팔레트 액션 */
+interface Command { id: string; label: string; hint?: string; run: () => void }
+
+/** 비차단 토스트 알림 */
+interface ToastItem { id: string; kind: "info" | "error" | "ok"; text: string; leaving?: boolean }
+
+/** 채팅에 첨부하는 컨텍스트 참조 */
+interface AttachRef { kind: "file" | "selection"; rel: string; text?: string; label: string }
+
+/** Git 변경 항목 */
+interface GitEntry { path: string; code: string }
+interface GitStatus {
+  branch: string | null; ahead: number; behind: number; upstream: boolean; notRepo?: boolean;
+  staged: GitEntry[]; unstaged: GitEntry[]; untracked: GitEntry[];
+}
+
+/** 디버그 세션 상태 */
+interface DebugScope { name: string; ref: number; vars: { name: string; value: string; type?: string; ref: number }[]; expanded: boolean }
+interface DebugState {
+  status: "starting" | "running" | "stopped";
+  threadId: number | null;
+  frames: { id: number; name: string; line: number; path: string }[];
+  frameId: number | null;
+  scopes: DebugScope[];
+  stoppedRel: string | null;
+  stoppedLine: number | null;
+}
+
 /** 슬래시 명령 레지스트리 — origin별로 실행 경로가 다르다 */
-interface SlashCmd { cmd: string; origin: "schutz" | "claude" | "codex"; desc: string }
+interface SlashCmd { cmd: string; origin: "schutz" | "claude" | "codex"; desc: string; kind?: "local" | "forward"; argHint?: string }
+interface DiscoveredCmd { name: string; origin: "claude" | "codex"; scope: "user" | "project"; description: string; argHint: string; body: string }
 const SLASH_COMMANDS: SlashCmd[] = [
-  { cmd: "/help", origin: "schutz", desc: "명령 목록" },
-  { cmd: "/model", origin: "schutz", desc: "모델 확인 · 변경 (/model <에이전트> <모델>)" },
-  { cmd: "/usage", origin: "schutz", desc: "세션 토큰 · 비용" },
-  { cmd: "/agents", origin: "schutz", desc: "에이전트 연결 상태" },
-  { cmd: "/clear", origin: "schutz", desc: "대화 초기화" },
-  { cmd: "/init", origin: "claude", desc: "프로젝트 분석 후 CLAUDE.md 생성" },
-  { cmd: "/review", origin: "claude", desc: "변경사항 코드 리뷰" },
-  { cmd: "/security-review", origin: "claude", desc: "보안 관점 리뷰" },
-  { cmd: "/compact", origin: "claude", desc: "세션 컨텍스트 압축 (이어가기 세션)" },
-  { cmd: "/init", origin: "codex", desc: "프로젝트 분석 후 AGENTS.md 생성" },
-  { cmd: "/review", origin: "codex", desc: "변경사항 리뷰" },
+  // ── Schutz 로컬 (기존 기능에 매핑) — desc/argHint 는 i18n 키(렌더 시 t()) ──
+  { cmd: "/help", origin: "schutz", kind: "local", desc: "slash.help" },
+  { cmd: "/model", origin: "schutz", kind: "local", desc: "slash.model", argHint: "slash.argAgentModel" },
+  { cmd: "/usage", origin: "schutz", kind: "local", desc: "slash.usage" },
+  { cmd: "/cost", origin: "schutz", kind: "local", desc: "slash.usage" },
+  { cmd: "/agents", origin: "schutz", kind: "local", desc: "slash.agents" },
+  { cmd: "/clear", origin: "schutz", kind: "local", desc: "slash.clear" },
+  { cmd: "/new", origin: "schutz", kind: "local", desc: "slash.new" },
+  { cmd: "/settings", origin: "schutz", kind: "local", desc: "slash.settings" },
+  { cmd: "/config", origin: "schutz", kind: "local", desc: "slash.settings" },
+  { cmd: "/keys", origin: "schutz", kind: "local", desc: "slash.keys" },
+  { cmd: "/vim", origin: "schutz", kind: "local", desc: "slash.vim" },
+  { cmd: "/theme", origin: "schutz", kind: "local", desc: "slash.theme" },
+  { cmd: "/terminal", origin: "schutz", kind: "local", desc: "slash.terminal" },
+  { cmd: "/diff", origin: "schutz", kind: "local", desc: "slash.diff" },
+  { cmd: "/git", origin: "schutz", kind: "local", desc: "slash.git" },
+  { cmd: "/resume", origin: "schutz", kind: "local", desc: "slash.resume" },
+  { cmd: "/continue", origin: "schutz", kind: "local", desc: "slash.resume" },
+  { cmd: "/doctor", origin: "schutz", kind: "local", desc: "slash.doctor" },
+  { cmd: "/status", origin: "schutz", kind: "local", desc: "slash.status" },
+  { cmd: "/login", origin: "schutz", kind: "local", desc: "slash.login", argHint: "<claude|codex>" },
+  { cmd: "/logout", origin: "schutz", kind: "local", desc: "slash.logout", argHint: "<claude|codex>" },
+  { cmd: "/memory", origin: "schutz", kind: "local", desc: "slash.memory" },
+  // (/mcp 는 상단 AI 메뉴·타이틀바 버튼으로 이동 — 슬래시 팔레트에는 노출하지 않되 핸들러는 alias 로 유지)
+  // ── CLI 포워딩 (콘텐츠 생성) ──
+  { cmd: "/init", origin: "claude", kind: "forward", desc: "slash.initClaude" },
+  { cmd: "/review", origin: "claude", kind: "forward", desc: "slash.review" },
+  { cmd: "/security-review", origin: "claude", kind: "forward", desc: "slash.securityReview" },
+  { cmd: "/pr-comments", origin: "claude", kind: "forward", desc: "slash.prComments" },
+  { cmd: "/compact", origin: "claude", kind: "forward", desc: "slash.compact" },
+  { cmd: "/init", origin: "codex", kind: "forward", desc: "slash.initCodex" },
+  { cmd: "/review", origin: "codex", kind: "forward", desc: "slash.reviewCodex" },
+  { cmd: "/compact", origin: "codex", kind: "forward", desc: "slash.compact" },
 ];
 const ORIGIN_LABEL: Record<string, string> = { schutz: "Schutz", claude: "Claude Code", codex: "Codex" };
 const ORIGIN_COLOR: Record<string, string> = { schutz: "var(--accent)", claude: "#C4A882", codex: "#8FA8C0" };
@@ -129,42 +338,193 @@ export class App extends React.Component<{}, S> {
   state: S = {
     statusKey: "idle", running: false, messages: [], input: "",
     plan: [], tools: [], files: [], docs: freshDocs(), chips: {},
-    panes: [TM], leftTab: "flow", expanded: null,
+    tabs: [[TM]], active: [TM], leftTab: "flow", expanded: null,
+    breakpoints: {}, debug: null, debugConsole: [],
+    extCommands: [], extList: [], extErrors: [], extLimited: [], extPanel: null, extThemes: [], extIconThemes: [], iconVer: 0, extSearch: "", extResults: [], extBusy: false, extInstalling: [], extDetail: null, extDetailBusy: false,
+    git: null, gitMsg: "", gitBusy: false, gitError: "",
+    gitBranches: [], gitLog: [], branchOpen: false, newBranch: "",
+    attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termTab: "term",
+    termOpen: false, termTab: "t1", terms: [{ id: "t1", title: t("sc1.terminal_1") }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, settingsTab: "editor", aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
-      const v = m ? parseInt(m[1], 10) : 4;
-      return v === 1 || v === 2 ? v : 4;
+      if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
+      // 데스크톱은 단일 그룹(탭 스택)으로 시작, 웹 데모는 4분할 시각화
+      return window.schutz ? 1 : 4;
     })(),
     cliAgents: {}, cliBusy: false, cliModel: "",
     oauthPasteFor: null, oauthPasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
     slashSel: 0,
     quickOpen: false, quickQuery: "", quickSel: 0,
+    symOpen: false, symQuery: "", symSel: 0, symLoading: false, symResults: [],
+    searchOpen: false, searchQuery: "", searchResults: [], searchSel: 0, searchBusy: false, searchTruncated: false,
+    askClose: null,
+    problems: [], tsLargeProject: false,
+    cmdOpen: false, cmdQuery: "", cmdSel: 0, modelPickFor: null,
+    toasts: [],
+    leftW: (() => { try { return Math.max(200, Math.min(520, +(localStorage.getItem("schutz.leftW") || 272))); } catch { return 272; } })(),
+    rightW: (() => { try { return Math.max(240, Math.min(600, +(localStorage.getItem("schutz.rightW") || 336))); } catch { return 336; } })(),
+    mdPreview: {}, replaceOpen: false, replaceVal: "",
+    searchOpts: { regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "" },
+    mruOpen: false, mruSel: 0,
     collapsed: {}, statusInfo: null, ctxMenu: null,
   };
+
+  /** 새 파일이 열릴 슬롯 (포커스 추종) */
+  private _focusSlot = 0;
+  /** 탭 접근 순서 (MRU, 최근 우선) */
+  private _tabMRU: string[] = [];
+  private _touchMru(rel: string) {
+    if (!rel || this.parseDiffKey(rel)) return;
+    this._tabMRU = [rel, ...this._tabMRU.filter(r => r !== rel)].slice(0, 30);
+  }
+
+  /** 모든 슬롯에 열린 rel의 합집합 (하이라이트·리로드용) */
+  private allOpen(s: S = this.state): string[] {
+    const set = new Set<string>();
+    s.tabs.forEach(t => t.forEach(r => set.add(r)));
+    return [...set];
+  }
+  private isOpen(rel: string, s: S = this.state): boolean {
+    return s.tabs.some(t => t.includes(rel));
+  }
+  /** tabs/active를 layout 길이에 맞게 정규화 (축소 시 넘치는 탭은 마지막 슬롯으로 병합) */
+  private normSlots(tabs: string[][], active: string[], layout: number): { tabs: string[][]; active: string[] } {
+    let t = tabs.map(x => [...x]);
+    let a = [...active];
+    if (t.length > layout) {
+      const dropped = t.slice(layout).flat();
+      t = t.slice(0, layout);
+      a = a.slice(0, layout);
+      const last = Math.max(0, layout - 1);
+      for (const r of dropped) if (!t[last].includes(r)) t[last].push(r);
+    }
+    while (t.length < layout) { t.push([]); a.push(""); }
+    a = a.map((x, i) => (t[i].includes(x) ? x : (t[i][t[i].length - 1] ?? "")));
+    return { tabs: t, active: a };
+  }
 
   // ── 파일 작업 (트리 우클릭·메뉴) ──
   async saveAll() {
     for (const p of paneRegistry.panes.values()) await p.save();
+    // 열려있지 않은 모델(크로스파일 리네임 등)도 디스크에 반영
+    await this.saveAllDirtyModels(true);
+  }
+
+  /** projectModels의 미저장 모델(열린 파일 포함) 전부 디스크 저장 — 크로스파일 리네임 반영 */
+  async saveAllDirtyModels(silent = false): Promise<number> {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return 0;
+    const rels = projectModels.dirtyRels();
+    let n = 0;
+    for (const rel of rels) {
+      const m = projectModels.getByRel(rel);
+      if (!m) continue;
+      const content = m.getValue();
+      try {
+        await window.schutz.writeFile(ws.root, rel, content);
+        projectModels.markSaved(ws.root, rel, content);
+        this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
+        n++;
+      } catch { /* */ }
+    }
+    if (n > 0) { await this.refreshWorkspace(); if (!silent) this.toast("ok", t("sc1.n_files_saved", { n })); }
+    return n;
+  }
+
+  /** 심볼 이름 바꾸기 (F2) — 완료 후 크로스파일 변경까지 자동 저장 */
+  triggerRename() {
+    const ed = paneRegistry.focused?.editor;
+    if (!ed) { this.toast("info", t("sc1.put_cursor_on_symbol")); return; }
+    ed.focus();
+    const before = projectModels.dirtyRels().length;
+    void ed.getAction("editor.action.rename")?.run();
+    // 리네임 편집이 적용되면(dirty 증가) 잠시 후 자동 저장
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      const now = projectModels.dirtyRels().length;
+      if (now > before) { clearInterval(iv); setTimeout(() => void this.saveAllDirtyModels(), 500); }
+      else if (tries > 60) clearInterval(iv); // ~30s 타임아웃
+    }, 500);
+  }
+  /** 정의로 이동 (F12) / 참조 찾기 (Shift+F12) */
+  private triggerEditorAction(actionId: string) {
+    const ed = paneRegistry.focused?.editor;
+    if (!ed) return;
+    ed.focus();
+    void ed.getAction(actionId)?.run();
+  }
+
+  // ── 토스트 ──
+  toast(kind: ToastItem["kind"], text: string) {
+    const id = "to" + (this._uid++);
+    this.setState(s => ({ toasts: [...s.toasts, { id, kind, text }] }));
+    this.qt(() => this.dismissToast(id), 3600);
+  }
+  /** 나가는 애니메이션 후 제거 (keep-mounted 220ms) */
+  dismissToast(id: string) {
+    this.setState(s => ({ toasts: s.toasts.map(t => t.id === id ? { ...t, leaving: true } : t) }));
+    this.qt(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 220);
   }
 
   async newFileAt(dirRel: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    const name = window.prompt("새 파일 이름", "untitled.md");
+    const name = window.prompt(t("sc1.new_file_name"), "untitled.md");
     if (!name) return;
     const rel = dirRel ? dirRel + "/" + name : name;
     try {
       await window.schutz.writeFile(ws.root, rel, "");
       await this.refreshWorkspace();
       this.openFile(rel);
-    } catch (e) { window.alert("생성 실패: " + (e instanceof Error ? e.message : String(e))); }
+      this.toast("ok", t("sc1.file_created") + name);
+    } catch (e) { this.toast("error", t("sc1.create_failed") + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  async newFolderAt(dirRel: string) {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return;
+    const name = window.prompt(t("sc1.new_folder_name"), "new-folder");
+    if (!name) return;
+    const rel = dirRel ? dirRel + "/" + name : name;
+    try {
+      await window.schutz.mkdir(ws.root, rel);
+      await this.refreshWorkspace();
+      this.toast("ok", t("sc1.folder_created") + name);
+    } catch (e) { this.toast("error", t("sc1.folder_create_failed") + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  async revealAt(rel: string) {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return;
+    await window.schutz.reveal(ws.root, rel);
+  }
+
+  /** 좌·우 패널 드래그 리사이즈 */
+  private startResize(side: "left" | "right", e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = side === "left" ? this.state.leftW : this.state.rightW;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (side === "left") this.setState({ leftW: Math.max(200, Math.min(520, startW + dx)) });
+      else this.setState({ rightW: Math.max(240, Math.min(600, startW - dx)) });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      try { localStorage.setItem("schutz.leftW", String(this.state.leftW)); localStorage.setItem("schutz.rightW", String(this.state.rightW)); } catch { /* */ }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
   }
 
   async renameAt(rel: string) {
@@ -172,29 +532,47 @@ export class App extends React.Component<{}, S> {
     if (!ws || !window.schutz) return;
     const parts = rel.split("/");
     const base = parts.pop()!;
-    const nn = window.prompt("새 이름", base);
+    const nn = window.prompt(t("sc1.new_name"), base);
     if (!nn || nn === base) return;
     const relTo = [...parts, nn].join("/");
     try {
       await window.schutz.renameEntry(ws.root, rel, relTo);
+      const remap = (p: string) => p === rel ? relTo : p.startsWith(rel + "/") ? relTo + p.slice(rel.length) : p;
+      projectModels.rekeyUnder(ws.root, rel, relTo); // 하위 모델을 새 경로로 재생성(미저장 버퍼·dirty 보존, 옛 경로 잔존 없음)
       await this.refreshWorkspace();
-      this.setState(s => ({
-        panes: s.panes.map(p => p === rel ? relTo : p.startsWith(rel + "/") ? relTo + p.slice(rel.length) : p),
-      }));
-    } catch (e) { window.alert("이름 변경 실패: " + (e instanceof Error ? e.message : String(e))); }
+      this.setState(s => {
+        const collapsed: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(s.collapsed)) collapsed[remap(k)] = v; // 접힘 상태 이동
+        const paneDirty: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(s.paneDirty)) paneDirty[remap(k)] = v; // dirty 도 새 경로로 이동(버퍼 보존됨)
+        return {
+          tabs: s.tabs.map(t => t.map(remap)),
+          active: s.active.map(remap),
+          collapsed, paneDirty,
+        };
+      });
+    } catch (e) { this.toast("error", t("sc1.rename_failed") + (e instanceof Error ? e.message : String(e))); }
   }
 
   async deleteAt(rel: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    if (!window.confirm(`'${rel}' 을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    if (!window.confirm(t("sc1.confirm_delete", { rel }))) return;
     try {
       await window.schutz.deleteEntry(ws.root, rel);
+      projectModels.dropUnder(ws.root, rel); // 하위 파일 모델까지 dispose(옛 dirty 모델 잔존→Save All 이 삭제 파일 재생성하는 버그 방지)
       await this.refreshWorkspace();
-      this.setState(s => ({
-        panes: s.panes.filter(p => p !== rel && !p.startsWith(rel + "/")),
-      }));
-    } catch (e) { window.alert("삭제 실패: " + (e instanceof Error ? e.message : String(e))); }
+      const gone = (p: string) => p !== rel && !p.startsWith(rel + "/");
+      this.setState(s => {
+        const tabs = s.tabs.map(t => t.filter(gone));
+        const active = s.active.map((a, i) => (gone(a) ? a : (tabs[i][tabs[i].length - 1] ?? "")));
+        const collapsed: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(s.collapsed)) if (gone(k)) collapsed[k] = v; // 삭제 경로 접힘키 제거
+        const paneDirty: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(s.paneDirty)) if (gone(k)) paneDirty[k] = v;
+        return { tabs, active, collapsed, paneDirty };
+      });
+    } catch (e) { this.toast("error", t("sc1.delete_failed") + (e instanceof Error ? e.message : String(e))); }
   }
 
   /** 편집 메뉴 → 포커스된 Monaco 액션 */
@@ -236,15 +614,33 @@ export class App extends React.Component<{}, S> {
       this.clearTimers();
       this.pushRecent(root, tree.name);
       document.title = tree.name + " — Schutz";
-      this.setState({
-        workspace: tree, leftTab: "tree", panes: [],
+      this._focusSlot = 0;
+      this.history = [];
+      lspClient.shutdownAll();
+      projectModels.disposeAll();
+      lspClient.setRoot(tree.root);
+      const restored = this.restoredLayout(tree, this.state.layout); // 재시작 전 열려 있던 탭/레이아웃 복원
+      // 복원 직후 첫 componentDidUpdate 의 자동 persist 스킵 — 복원본(prune 포함)을 그대로 되쓰지 않게
+      // (일시적 미가용·오판 prune 이 저장 레이아웃을 영구 덮어쓰는 것 방지). componentDidUpdate 는 setState 콜백보다 먼저 실행되므로 여기서 시드.
+      this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active;
+      this.setState(s => ({
+        workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
         docs: freshDocs(), files: [], plan: [], tools: [], chips: {},
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
-      });
+        git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
+      } as any), () => { this._focusSlot = 0; this.restoreSession(); });
+      void this.loadGit();
+      void this.loadAgentCommands(); // 프로젝트 .claude/commands 반영
+      window.schutz.watchStart(tree.root); // 외부 변경 감지 시작
+      // TS/JS 프로젝트 모델 프리로드 (파일간 인텔리전스) — UI 논블로킹
+      setTimeout(() => {
+        void projectModels.preload(tree.root, tree.entries, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel])
+          .then(res => { if (res.skipped) this.setState({ tsLargeProject: true }); });
+      }, 0);
     } catch (e) {
       this.setState(s => ({
-        messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: "폴더를 열 수 없습니다: " + (e instanceof Error ? e.message : String(e)) }],
+        messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: t("sc1.cannot_open_folder") + (e instanceof Error ? e.message : String(e)) }],
       }));
     }
   }
@@ -274,16 +670,182 @@ export class App extends React.Component<{}, S> {
     return scored.slice(0, 12).map(x => x.f);
   }
 
-  /** 현재 입력 기준 팔레트 후보 (사용 가능 origin만) */
+  /** 커맨드 팔레트 액션 레지스트리 (Ctrl+Shift+P) */
+  commands(): Command[] {
+    const cmds: Command[] = [
+      { id: "newFile", label: t("sc1.cmd_new_file"), hint: "Ctrl+N", run: () => void this.newFileAt("") },
+      { id: "save", label: t("sc1.cmd_save"), hint: "Ctrl+S", run: () => void paneRegistry.focused?.save() },
+      { id: "saveAll", label: t("sc1.cmd_save_all"), hint: "Ctrl+Shift+S", run: () => void this.saveAll() },
+      { id: "settings", label: t("sc1.cmd_open_settings"), hint: "Ctrl+,", run: () => this.openO({ settingsOpen: true }) },
+      { id: "term", label: t("sc1.cmd_toggle_terminal"), hint: "Ctrl+`", run: () => this.toggleTerm() },
+      { id: "split1", label: t("sc1.cmd_split1"), run: () => this.setLayout(1) },
+      { id: "split2", label: t("sc1.cmd_split2"), run: () => this.setLayout(2) },
+      { id: "split4", label: t("sc1.cmd_split4"), run: () => this.setLayout(4) },
+      { id: "quickOpen", label: t("sc1.cmd_goto_file"), hint: "Ctrl+P", run: () => this.openO({ quickOpen: true, quickQuery: "", quickSel: 0 }) },
+      { id: "symOpen", label: t("sc1.cmd_goto_ws_symbol"), hint: "Ctrl+T", run: () => this.openSymbolPalette() },
+      { id: "search", label: t("sc1.cmd_global_search"), hint: "Ctrl+Shift+F", run: () => this.openO({ searchOpen: true, searchSel: 0 }) },
+      { id: "outline", label: t("sc1.cmd_goto_symbol_outline"), hint: "Ctrl+Shift+O", run: () => this.triggerOutline() },
+      { id: "gotoDef", label: t("sc1.cmd_goto_def"), hint: "F12", run: () => this.triggerEditorAction("editor.action.revealDefinition") },
+      { id: "findRefs", label: t("sc1.cmd_find_refs"), hint: "Shift+F12", run: () => this.triggerEditorAction("editor.action.goToReferences") },
+      { id: "rename", label: t("sc1.cmd_rename_symbol"), hint: "F2", run: () => this.triggerRename() },
+      { id: "gotoLine", label: t("sc1.cmd_goto_line"), hint: "Ctrl+G", run: () => this.triggerEditorAction("editor.action.gotoLine") },
+      { id: "format", label: t("sc1.cmd_format_doc"), run: () => void paneRegistry.focused?.editor.getAction("editor.action.formatDocument")?.run() },
+      { id: "wrap", label: t("sc1.cmd_toggle_wrap"), run: () => this.applyEditorPref({ wordWrap: !getEditorPrefs().wordWrap }) },
+      { id: "minimap", label: t("sc1.cmd_toggle_minimap"), run: () => this.applyEditorPref({ minimap: !getEditorPrefs().minimap }) },
+      { id: "problems", label: t("sc1.cmd_open_problems"), run: () => this.setState({ termOpen: true, termTab: "problems" }) },
+      { id: "newWindow", label: t("sc1.cmd_new_window"), hint: "Ctrl+Shift+N", run: () => window.schutz?.newWindow() },
+      { id: "theme", label: t("sc1.cmd_cycle_theme"), run: () => this.cycleTheme() },
+    ];
+    if (this.state.workspace) {
+      cmds.push({ id: "openProject", label: t("sc1.cmd_open_project"), hint: "Ctrl+O", run: () => void this.openProject() });
+      cmds.push({ id: "gitPanel", label: t("sc1.cmd_open_scm"), run: () => { this.setState({ leftTab: "git" }); void this.loadGit(); } });
+      cmds.push({ id: "gitRefresh", label: t("sc1.cmd_git_refresh"), run: () => void this.loadGit() });
+      cmds.push({ id: "debugStart", label: t("sc1.cmd_debug_start"), run: () => void this.startDebug() });
+      cmds.push({ id: "debugStop", label: t("sc1.cmd_debug_stop"), run: () => void this.stopDebug() });
+      cmds.push({ id: "debugView", label: t("sc1.cmd_debug_panel"), run: () => this.setState({ leftTab: "debug" }) });
+      cmds.push({ id: "gitBlame", label: t("sc1.cmd_git_blame"), run: () => void this.gitBlameLine() });
+      cmds.push({ id: "gitStash", label: t("sc1.cmd_git_stash"), run: () => void this.gitSimple("stash", t("sc1.toast_stash_saved")) });
+      cmds.push({ id: "gitStashPop", label: t("sc1.cmd_git_stash_pop"), run: () => void this.gitSimple("stashPop", t("sc1.toast_stash_popped")) });
+      cmds.push({ id: "gitPull", label: t("sc1.cmd_git_pull"), run: () => void this.gitSimple("pull", t("sc1.toast_pull_done")) });
+      cmds.push({ id: "gitFetch", label: t("sc1.cmd_git_fetch"), run: () => void this.gitSimple("fetch", t("sc1.toast_fetch_done")) });
+    }
+    cmds.push({ id: "extView", label: t("sc1.cmd_ext_manage"), run: () => this.setState({ leftTab: "ext" }) });
+    // ── AI 슬래시 명령 (Claude Code · Codex) — 커맨드 팔레트에도 노출 ──
+    const gate = (o: string) => o === "schutz" || (o === "claude" && !!this.state.cliAgents.claude?.ok) || (o === "codex" && !!this.state.cliAgents.codex?.ok);
+    for (const c of SLASH_COMMANDS) {
+      if (!gate(c.origin)) continue;
+      cmds.push({ id: "ai:" + c.origin + c.cmd, label: `AI: ${c.cmd} — ${t(c.desc)}${c.origin !== "schutz" ? " [" + ORIGIN_LABEL[c.origin] + "]" : ""}`, run: () => this.dispatchSlash(c.cmd, c.origin) });
+    }
+    const builtinNames = new Set(SLASH_COMMANDS.map(c => c.cmd));
+    for (const c of this.state.agentCommands) {
+      if (!gate(c.origin) || builtinNames.has("/" + c.name)) continue;
+      cmds.push({ id: "aic:" + c.origin + ":" + c.name, label: `AI: /${c.name} — ${c.description || t("sc1.custom_cmd")} [${ORIGIN_LABEL[c.origin]}·${c.scope === "project" ? t("sc1.project") : t("sc1.user")}]`, run: () => this.dispatchSlash("/" + c.name, c.origin) });
+    }
+    // 확장 기여 커맨드
+    for (const ec of this.state.extCommands) cmds.push({ id: ec.id, label: ec.title + "  (" + ec.source + ")", run: ec.run });
+    // id 중복 제거(먼저 것 유지) — 팔레트 렌더 key={c.id} 충돌 방지:
+    //  · 커스텀 명령이 user/project 양쪽에 동명(aic:origin:name 동일) → user 유지(findAgentCommand/slashList 와 일관)
+    //  · 확장 명령 id 가 빌트인(save/format 등)과 충돌 → 빌트인 유지
+    const seenId = new Set<string>();
+    return cmds.filter(c => { if (seenId.has(c.id)) return false; seenId.add(c.id); return true; });
+  }
+
+  /** 커맨드 팔레트에서 슬래시 명령 실행 — 인자 필요한 명령은 채팅 입력에 프리필 */
+  private dispatchSlash(cmd: string, origin: string) {
+    const spec = SLASH_COMMANDS.find(c => c.cmd === cmd && c.origin === origin);
+    // 발견된 커스텀 명령은 SLASH_COMMANDS 에 없으므로 argHint 를 별도 조회(빈 인자 즉시 실행 방지)
+    const name = cmd.replace(/^\//, "");
+    const custom = this.state.agentCommands.find(c => c.name === name && c.origin === origin);
+    // 인자 힌트가 있는 명령(/model, /login, 인자 받는 커스텀 명령)은 바로 실행하지 않고 입력창에 프리필
+    if (spec?.argHint || custom?.argHint) { this.setState({ input: cmd + " " }); return; }
+    this.setState({ input: cmd }, () => { void this.send(); });
+  }
+
+  /** 아웃라인 (심볼 퀵픽) — Monaco 내장 */
+  triggerOutline() {
+    const ed = paneRegistry.focused?.editor;
+    if (!ed) return;
+    ed.focus();
+    ed.getAction("editor.action.quickOutline")?.run();
+  }
+
+  /** 테마 순환 (feldgrau → graphite → paper) — Monaco 테마도 즉시 전환 */
+  cycleTheme() {
+    const order = ["feldgrau", "graphite", "paper"];
+    const cur = getThemeId();
+    this.setTheme(order[(order.indexOf(cur) + 1) % order.length]);
+  }
+  setTheme(id: string) {
+    setThemeId(id);
+    setActiveVsxTheme("");           // 내장 테마 선택 → 가져온 테마 해제
+    applyTheme(id);                  // CSS 변수(UI 크롬)
+    this.applyEditorTheme();         // Monaco 에디터 테마 조율
+    this.forceUpdate();
+  }
+  /** 에디터(Monaco) 테마를 영속 선택에 맞춰 적용 — 가져온 테마 > (TextMate ? TM테마 : 내장) */
+  applyEditorTheme(themes: vscodeExt.ImportedTheme[] = this.state.extThemes) {
+    const vsx = getActiveVsxTheme();
+    if (vsx && themes.some(t => t.id === vsx)) { monaco.editor.setTheme(vsx); return; }
+    if (textmate.isTextMateWired()) monaco.editor.setTheme("schutz-tm-dark");
+    else monaco.editor.setTheme(monacoThemeOf(getThemeId()));
+  }
+  /** 가져온 VS Code 에디터 테마 선택 + 영속화 */
+  selectVsxTheme(th: vscodeExt.ImportedTheme) {
+    setActiveVsxTheme(th.id);
+    monaco.editor.setTheme(th.id);
+    this.toast("ok", t("sc1.editorTheme", { label: th.label }));
+    this.forceUpdate();
+  }
+
+  /** 현재 입력 기준 팔레트 후보 (사용 가능 origin만) — 내장 + 발견된 커스텀 명령 */
   slashList(): SlashCmd[] {
     const v = this.state.input;
+    // /model 입력 중에는 모델 팔레트가 대신 뜬다
+    if (/^\/model(\s|$)/.test(v)) return [];
     if (!v.startsWith("/") || v.includes(" ")) return [];
-    return SLASH_COMMANDS.filter(c => {
-      if (!c.cmd.startsWith(v)) return false;
-      if (c.origin === "claude") return !!this.state.cliAgents.claude?.ok;
-      if (c.origin === "codex") return !!this.state.cliAgents.codex?.ok;
-      return true;
-    });
+    const gate = (o: string) => o === "schutz" || (o === "claude" && !!this.state.cliAgents.claude?.ok) || (o === "codex" && !!this.state.cliAgents.codex?.ok);
+    const builtin = SLASH_COMMANDS.filter(c => c.cmd.startsWith(v) && gate(c.origin));
+    // 발견된 커스텀 명령 (내장과 이름 겹치면 내장 우선)
+    const builtinNames = new Set(SLASH_COMMANDS.map(c => c.cmd));
+    const custom: SlashCmd[] = this.state.agentCommands
+      .filter(c => gate(c.origin) && ("/" + c.name).startsWith(v) && !builtinNames.has("/" + c.name))
+      .map(c => ({ cmd: "/" + c.name, origin: c.origin, desc: c.description || (c.scope === "project" ? t("sc1.project_cmd") : t("sc1.user_cmd")), kind: "forward" as const, argHint: c.argHint }));
+    // 이름 중복 제거 (여러 오리진/스코프에 동일 커스텀명)
+    const seen = new Set<string>();
+    return [...builtin, ...custom].filter(c => { const k = c.cmd + c.origin; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  /** /model 입력 시 뜨는 모델 팔레트 — 각 모델을 출처(Claude Code/Codex/…) 배지와 함께 */
+  modelPalette(): { agent: string; modelId: string; label: string; badge: string; color: string; current: boolean }[] {
+    const v = this.state.input;
+    if (!/^\/model(\s|$)/.test(v)) return [];
+    const q = v.replace(/^\/model\s*/, "").toLowerCase().trim();
+    const out: { agent: string; modelId: string; label: string; badge: string; color: string; current: boolean }[] = [];
+    for (const d of AGDEF) {
+      const ch = this.modelChannel(d.id);
+      if (!ch) continue;
+      const badge = d.id === "claude" ? "Claude Code" : (ch.overrideKey === "codex" ? "Codex" : d.name);
+      const color = d.id === "claude" ? ORIGIN_COLOR.claude : (ch.overrideKey === "codex" ? ORIGIN_COLOR.codex : d.color);
+      // 실시간 조회된 목록이 있으면 그걸 사용(실값), 없으면 큐레이트 폴백. 라벨은 알려진 것만 표기.
+      const fetched = this._modelCache[d.id];
+      let merged: { id: string; label: string }[];
+      if (fetched && fetched.length) {
+        const known = new Map(ch.options.map(o => [o.id, o.label]));
+        merged = fetched.map(id => ({ id, label: known.get(id) ?? "" }));
+      } else {
+        merged = ch.options;
+      }
+      for (const o of merged) {
+        if (q && !(o.id.toLowerCase().includes(q) || o.label.toLowerCase().includes(q) || d.name.toLowerCase().includes(q))) continue;
+        out.push({ agent: d.id, modelId: o.id, label: o.label, badge, color, current: o.id === ch.current });
+      }
+    }
+    // 직접 입력: 쿼리가 어느 목록에도 없고 공백이 없으면 "그대로 적용" 후보. id 접두어로 대상 에이전트 추론
+    if (q && !q.includes(" ") && !out.some(o => o.modelId.toLowerCase() === q)) {
+      const connectedId = (id: string) => (this.modelChannel(id) ? id : null);
+      const guess =
+        (q.startsWith("claude") && connectedId("claude")) ||
+        ((/^(gpt-|o\d|chatgpt)/.test(q)) && connectedId("gpt")) ||
+        (q.startsWith("grok") && connectedId("grok")) ||
+        (q.startsWith("glm") && connectedId("glm")) ||
+        AGDEF.find(d => this.modelChannel(d.id))?.id;
+      if (guess) {
+        const ch = this.modelChannel(guess)!;
+        const badge = guess === "claude" ? "Claude Code" : (ch.overrideKey === "codex" ? "Codex" : this.agDef(guess).name);
+        const color = guess === "claude" ? ORIGIN_COLOR.claude : (ch.overrideKey === "codex" ? ORIGIN_COLOR.codex : this.agDef(guess).color);
+        out.push({ agent: guess, modelId: v.replace(/^\/model\s*/, "").trim(), label: t("sc1.apply_id_directly"), badge, color, current: false });
+      }
+    }
+    return out;
+  }
+
+  /** 모델 팔레트에서 선택 → 적용 + 확인 메시지 */
+  applyModelFromPalette(agent: string, modelId: string) {
+    this.setModelFor(agent, modelId);
+    this.setState(s => ({
+      input: "",
+      messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: t("sc1.model_changed", { name: this.agDef(agent).name, modelId }) }],
+    }));
   }
 
   private _oauthOff: (() => void) | null = null;
@@ -291,20 +853,30 @@ export class App extends React.Component<{}, S> {
   async startOauth(id: string) {
     if (!window.schutz) return;
     this.setState({ oauthMsg: "", oauthPasteFor: null, oauthWait: id === "codex" });
-    const r = await window.schutz.oauthStart(id);
-    if (!r.ok) { this.setState({ oauthMsg: r.message ?? "로그인 시작 실패", oauthWait: false }); return; }
-    if (r.mode === "paste") this.setState({ oauthPasteFor: id, oauthPasteVal: "" });
+    try {
+      const r = await window.schutz.oauthStart(id);
+      if (!r.ok) { this.setState({ oauthMsg: r.message ?? t("sc1.login_start_failed"), oauthWait: false }); return; }
+      if (r.mode === "paste") this.setState({ oauthPasteFor: id, oauthPasteVal: "", oauthWait: false });
+    } catch (e) {
+      // 예외 시에도 스피너를 반드시 해제 (무한 대기 방지)
+      this.setState({ oauthMsg: t("sc1.login_start_error") + (e instanceof Error ? e.message : String(e)), oauthWait: false });
+    }
   }
 
   async submitOauthPaste() {
     const id = this.state.oauthPasteFor;
     if (!id || !window.schutz) return;
-    const r = await window.schutz.oauthExchange(id, this.state.oauthPasteVal);
-    if (r.ok && r.access) {
-      setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: (r as any).accountId ?? null });
-      this.setState(st => ({ oauthPasteFor: null, oauthPasteVal: "", oauthMsg: "", oauthTick: st.oauthTick + 1 }));
-    } else {
-      this.setState({ oauthMsg: r.message ?? "코드 교환 실패" });
+    this.setState({ oauthMsg: t("sc1.checking") });
+    try {
+      const r = await window.schutz.oauthExchange(id, this.state.oauthPasteVal);
+      if (r.ok && r.access) {
+        setOAuth(id, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: (r as any).accountId ?? null });
+        this.setState(st => ({ oauthPasteFor: null, oauthPasteVal: "", oauthMsg: "", oauthTick: st.oauthTick + 1 }));
+      } else {
+        this.setState({ oauthMsg: r.message ?? t("sc1.code_exchange_failed") });
+      }
+    } catch (e) {
+      this.setState({ oauthMsg: t("sc1.code_exchange_error") + (e instanceof Error ? e.message : String(e)) });
     }
   }
 
@@ -313,29 +885,52 @@ export class App extends React.Component<{}, S> {
     if (!window.schutz) return;
     const r = await window.schutz.cliCheck();
     this.setState({ cliAgents: r.agents ?? {} });
+    void this.loadAgentCommands();
+  }
+
+  /** Claude Code · Codex 커스텀 명령 발견 (홈 + 현재 프로젝트) */
+  async loadAgentCommands() {
+    if (!window.schutz) return;
+    try {
+      const r = await window.schutz.agentCommands(this.state.workspace?.root ?? null);
+      this.setState({ agentCommands: r.commands ?? [] });
+    } catch { /* 무시 */ }
+  }
+  /** 발견된 커스텀 명령 찾기 (오리진 게이트) */
+  private findAgentCommand(name: string): DiscoveredCmd | null {
+    const ca = this.state.cliAgents;
+    const cands = this.state.agentCommands.filter(c => c.name === name);
+    return cands.find(c => c.origin === "claude" && ca.claude?.ok)
+      ?? cands.find(c => c.origin === "codex" && ca.codex?.ok)
+      ?? null;
   }
 
   async testConn(id: string) {
-    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: "확인 중…" } }));
+    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: t("sc1.checking") } }));
     const r = await testProvider(id);
-    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: r.ok ? "✓ 연결됨" : "⚠️ " + r.message.slice(0, 120) } }));
+    this.setState(st => ({ testMsg: { ...st.testMsg, [id]: r.ok ? t("sc1.connected_ok") : "⚠️ " + r.message.slice(0, 120) } }));
   }
 
-  private _termOff: (() => void) | null = null;
-  private _termStarted = false;
   private _cliOff: (() => void) | null = null;
   /** CLI 세션 id (멀티턴 --resume) */
   private _cliSession: string | null = null;
+  private _codexSession: string | null = null;
   private _cliMsgId: string | null = null;
   private _cliAgentKey = "claude";
+  private _termSeq = 1;
 
-  /** Electron 셸 시작 + 출력 구독 (최초 1회) */
-  ensureTerm() {
-    if (!window.schutz || this._termStarted) return;
-    this._termStarted = true;
-    window.schutz.termStart(this.state.workspace?.root);
-    this._termOff = window.schutz.onTermData(d => {
-      this.setState(s => ({ termReal: (s.termReal + d).slice(-60_000) }));
+  /** 새 터미널 탭 추가 */
+  addTerm() {
+    this._termSeq++;
+    const id = "t" + this._termSeq + "_" + (this._uid++);
+    this.setState(s => ({ terms: [...s.terms, { id, title: t("sc1.terminal_prefix") + (s.terms.length + 1) }], termTab: id, termOpen: true } as any));
+  }
+  /** 터미널 탭 닫기 (셸은 XtermView 언마운트 시 kill) */
+  closeTerm(id: string) {
+    this.setState(s => {
+      const terms = s.terms.filter(t => t.id !== id);
+      const termTab = s.termTab === id ? (terms[terms.length - 1]?.id ?? "ai") : s.termTab;
+      return { terms, termTab } as any;
     });
   }
 
@@ -346,7 +941,7 @@ export class App extends React.Component<{}, S> {
       this.setState(s => ({
         messages: [...s.messages, {
           id: "a" + (this._uid++), role: "ai" as const, who: "Schutz",
-          text: "프로젝트 열기는 데스크톱 앱에서만 가능합니다. Schutz 앱(설치본 또는 npm run electron)에서 실행해 주세요.",
+          text: t("sc1.desktop_only_project"),
         }],
       }));
       return;
@@ -356,24 +951,56 @@ export class App extends React.Component<{}, S> {
     await this.openWorkspacePath(root);
   }
 
+  /** 제안 수락 — 전역 큐로 직렬화(같은 파일 동시 수락 시 read-modify-write 유실 방지) */
+  private _termMounted = false; // 터미널 도크가 한 번이라도 열렸는지(래치) — 접어도 XtermView 언마운트 방지
+  private _acceptQueue: Promise<void> = Promise.resolve();
+  private _acceptRequested = new Set<string>(); // 요청 시점 동기 디둡(‘모두 수락’+개별클릭 중복 → accepted가 failed로 뒤집힘 방지)
+  private _proposalsById = new Map<string, Proposal>(); // 제안 동기 등록 — 자동수락은 setState(macrotask) 커밋 전 microtask 로 실행돼 state.find 가 못 찾음
+  acceptProposal(id: string): Promise<void> {
+    if (this._acceptRequested.has(id)) return this._acceptQueue; // 이미 수락 요청됨 → 무시
+    this._acceptRequested.add(id);
+    this._acceptQueue = this._acceptQueue.then(() => this._acceptProposal(id)).catch(() => { /* 개별 실패는 상태로 반영됨 */ });
+    return this._acceptQueue;
+  }
   /** 제안 수락: find→replace를 실제 파일에 적용 */
-  async acceptProposal(id: string) {
-    const p = this.state.proposals.find(x => x.id === id);
+  private async _acceptProposal(id: string) {
+    // 동기 등록본 우선 — 자동수락 시 아직 state 에 커밋 안 됐어도 조회 가능(파일 미기록인데 성공 보고되는 버그 방지)
+    const p = this._proposalsById.get(id) ?? this.state.proposals.find(x => x.id === id);
     const ws = this.state.workspace;
     if (!p || !ws || !window.schutz || p.status !== "pending") return;
     try {
+      let newContent: string;
       if (p.find === "") {
-        // 새 파일 생성
-        await window.schutz.writeFile(ws.root, p.rel, p.replace);
+        // 새 파일 생성 — 기존 파일 덮어쓰기 방지
+        const exists = await window.schutz.readFile(ws.root, p.rel).then(() => true, () => false);
+        if (exists) throw new Error(t("proposal.fileExists"));
+        newContent = p.replace;
+        await window.schutz.writeFile(ws.root, p.rel, newContent);
         const tree = await window.schutz.readTree(ws.root);
         this.setState({ workspace: tree });
       } else {
         const cur = await window.schutz.readFile(ws.root, p.rel);
-        const idx = cur.indexOf(p.find);
-        if (idx < 0) throw new Error("원문을 찾을 수 없습니다 (파일이 변경됨)");
-        if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error("원문이 여러 번 존재합니다");
-        await window.schutz.writeFile(ws.root, p.rel, cur.replace(p.find, p.replace));
+        let start = -1, end = -1;
+        if (p.range) {
+          // 인라인 편집: 정확 범위로 적용(흔한/중복 라인 선택도 정상). 단 범위의 현재 내용이 선택과 동일할 때만(파일 변경 스테일 방지).
+          const off = (line: number, col: number) => { const ls = cur.split("\n"); let o = 0; for (let i = 0; i < line - 1 && i < ls.length; i++) o += ls[i].length + 1; return o + (col - 1); };
+          const s0 = off(p.range.startLineNumber, p.range.startColumn), e0 = off(p.range.endLineNumber, p.range.endColumn);
+          if (s0 >= 0 && e0 >= s0 && e0 <= cur.length && cur.slice(s0, e0) === p.find) { start = s0; end = e0; }
+        }
+        if (start >= 0) {
+          newContent = cur.slice(0, start) + p.replace + cur.slice(end);
+        } else {
+          // 범위 없음 또는 스테일 → 텍스트 유일성 매칭 폴백
+          const idx = cur.indexOf(p.find);
+          if (idx < 0) throw new Error(t("sc1.orig_not_found"));
+          if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error(t("sc1.orig_multiple"));
+          // 함수 replacer — 교체 내용의 $ 시퀀스($&, $1 등)가 오해석되어 파일이 손상되는 것 방지
+          newContent = cur.replace(p.find, () => p.replace);
+        }
+        await window.schutz.writeFile(ws.root, p.rel, newContent);
       }
+      // 공유 모델도 갱신 (인텔리전스·진단 반영)
+      projectModels.reload(ws.root, p.rel, newContent, false);
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
         paneVer: { ...s.paneVer, [p.rel]: (s.paneVer[p.rel] ?? 0) + 1 },
@@ -436,13 +1063,99 @@ export class App extends React.Component<{}, S> {
     }
     if (id === "gpt") {
       if (getStoredKey("gpt").trim()) return getModelOverride("gpt") || "gpt-5.2";
-      if (getOAuth("codex")) return getModelOverride("codex") || "gpt-5.2-codex";
+      if (getOAuth("codex")) return getModelOverride("codex") || "gpt-5.6-terra";
       if (this.state.cliAgents.codex?.ok) return "Codex CLI";
       return null;
     }
     if (id === "grok") return getStoredKey("grok").trim() ? "grok-4" : null;
     if (id === "glm") return getStoredKey("glm").trim() ? "glm-4.6" : null;
     return null;
+  }
+
+  /** 에이전트의 현재 인증 경로에 맞는 모델 채널 (오버라이드 키 + 선택지). 미연결이면 null */
+  modelChannel(id: string): { overrideKey: string; options: ModelOpt[]; current: string } | null {
+    if (!window.schutz) return null;
+    if (id === "claude") {
+      if (getOAuth("claude") || getStoredKey("claude").trim())
+        return { overrideKey: "claude", options: CLAUDE_MODELS, current: getModelOverride("claude") || "claude-sonnet-5" };
+      return null; // CLI 폴백은 CLI가 모델 관리
+    }
+    if (id === "gpt") {
+      if (getStoredKey("gpt").trim())
+        return { overrideKey: "gpt", options: OPENAI_MODELS, current: getModelOverride("gpt") || "gpt-5.2" };
+      if (getOAuth("codex"))
+        return { overrideKey: "codex", options: CODEX_MODELS, current: getModelOverride("codex") || "gpt-5.6-terra" };
+      return null;
+    }
+    if (id === "grok") return getStoredKey("grok").trim() ? { overrideKey: "grok", options: GROK_MODELS, current: getModelOverride("grok") || "grok-4" } : null;
+    if (id === "glm") return getStoredKey("glm").trim() ? { overrideKey: "glm", options: GLM_MODELS, current: getModelOverride("glm") || "glm-4.6" } : null;
+    return null;
+  }
+
+  /** 백엔드가 모델을 거부하면(지원 안 함/무효) 기본 모델로 자동 복구 */
+  private maybeRevertModel(agentId: string, message: string) {
+    if (!/not supported|지원하지 않|not a valid|invalid model|does not exist|model_not_found|unknown model|not.*available/i.test(message)) return;
+    const ch = this.modelChannel(agentId);
+    if (!ch) return;
+    setModelOverride(ch.overrideKey, ""); // 오버라이드 제거 → 채널 기본 모델로 복귀
+    this._modelFetched[agentId] = false; // 다음 조회 시 재확인
+    this.toast("error", t("sc2.modelReverted", { name: this.agDef(agentId).name }));
+    this.forceUpdate();
+  }
+
+  /** 모델 선택 적용 (목록에 없는 임의 ID도 허용 — 최신 모델 대응) */
+  setModelFor(agentId: string, modelId: string) {
+    const ch = this.modelChannel(agentId);
+    if (!ch) return;
+    setModelOverride(ch.overrideKey, modelId);
+    this.setState({ modelPickFor: null });
+    this.forceUpdate();
+  }
+
+  /** 프로바이더에서 받아온 실제 모델 목록 (에이전트별 id 배열) */
+  private _modelCache: Record<string, string[]> = {};
+  private _modelFetched: Record<string, boolean> = {};
+
+  /** /model 입력 시 실제 사용 가능한 모델을 프로바이더 API에서 1회 조회 (하드코딩 목록 보완) */
+  ensureModelsFetched() {
+    if (!window.schutz) return;
+    for (const d of AGDEF) if (this.modelChannel(d.id)) void this.fetchModels(d.id);
+  }
+  private async fetchModels(agent: string) {
+    if (!window.schutz || this._modelFetched[agent]) return;
+    this._modelFetched[agent] = true;
+    let url = "", headers: Record<string, string> = {}, keep: (id: string) => boolean = () => true;
+    if (agent === "claude") {
+      const key = getStoredKey("claude").trim();
+      const oauth = getOAuth("claude");
+      url = "https://api.anthropic.com/v1/models?limit=1000";
+      headers = { "anthropic-version": "2023-06-01" };
+      if (key) headers["x-api-key"] = key;
+      else if (oauth) { headers["authorization"] = "Bearer " + oauth.access; headers["anthropic-beta"] = "oauth-2025-04-20"; }
+      else return;
+      keep = id => id.startsWith("claude");
+    } else if (agent === "gpt") {
+      const key = getStoredKey("gpt").trim();
+      if (!key) return; // ChatGPT 구독(Codex)은 공개 목록 API 없음 — 큐레이트 유지
+      url = "https://api.openai.com/v1/models";
+      headers = { authorization: "Bearer " + key };
+      keep = id => /^(gpt-|o\d|chatgpt)/.test(id);
+    } else if (agent === "grok") {
+      const key = getStoredKey("grok").trim();
+      if (!key) return;
+      url = "https://api.x.ai/v1/models";
+      headers = { authorization: "Bearer " + key };
+      keep = id => id.startsWith("grok");
+    } else return; // glm: 목록 API 미지원 — 큐레이트 유지
+    try {
+      const r = await window.schutz.httpGet(url, headers);
+      if (!r.ok || !r.json) { this._modelFetched[agent] = false; return; } // 실패 시 재시도 허용
+      const arr = r.json.data || r.json.models || [];
+      const ids = arr.map((m: any) => m.id || m.name).filter((x: any): x is string => typeof x === "string" && keep(x));
+      // 목록이 큐레이트→실측으로 바뀌면 선택 인덱스가 다른 모델을 가리키므로 slashSel 을 0 으로 리셋(하이라이트 점프 방지)
+      if (ids.length) { this._modelCache[agent] = ids; this.setState({ slashSel: 0 }); }
+      else this._modelFetched[agent] = false;
+    } catch { this._modelFetched[agent] = false; /* 큐레이트 폴백 유지 */ }
   }
 
   qt(fn: () => void, at: number) { this._timers.push(setTimeout(fn, at)); }
@@ -492,7 +1205,11 @@ export class App extends React.Component<{}, S> {
     this.setState(s => ({
       running: true, statusKey: "thinking",
       plan: [], tools: [], files: [], chips: {},
-      docs: freshDocs(), panes: [TM], expanded: null,
+      // 현재 레이아웃 슬롯 수에 맞춰 구성 (4 하드코딩 제거)
+      docs: freshDocs(),
+      tabs: Array.from({ length: s.layout || 1 }, (_, i) => (i === 0 ? [TM] : [])),
+      active: Array.from({ length: s.layout || 1 }, (_, i) => (i === 0 ? TM : "")),
+      expanded: null,
       agents: this.freshAgents(),
       messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
       input: "",
@@ -525,7 +1242,7 @@ export class App extends React.Component<{}, S> {
 
     // 위임: 페인 분할·락·동시 타이핑 체인
     q(400, () => {
-      this.setState({ panes: [TM, TY, MD] });
+      this.setState({ tabs: [[TM], [TY], [MD], []], active: [TM, TY, MD, ""] });
       this.setPlan(1, "active"); this.setPlan(2, "active"); this.setPlan(3, "active");
       this.setAgent("gpt", { status: "edit", file: TY });
       this.setAgent("grok", { status: "edit", file: MD });
@@ -578,6 +1295,17 @@ export class App extends React.Component<{}, S> {
       running: false, statusKey: "review",
       messages: [...s.messages, { id: doneId, role: "ai" as const, who: "Claude · 관리자", text: "세 에이전트의 작업이 모두 끝났습니다. 3개 파일 +23 −1, 충돌 없음. 변경 검토에서 파일별 diff를 확인하고 처리해 주세요." }],
     })), endAt);
+  }
+
+  /** 특정 에이전트만 중지 */
+  stopAgent(id: string) {
+    const a = this.abortCtls.get(id);
+    if (!a) return;
+    a.abort();
+    this.abortCtls.delete(id);
+    for (const [rel, holder] of [...this.fileLocks.entries()]) if (holder === id) this.fileLocks.delete(rel);
+    this.setAgent(id, { status: "stop", file: null });
+    if (this.abortCtls.size === 0) this.setState({ running: false, statusKey: "stopped" });
   }
 
   stopRun() {
@@ -633,29 +1361,175 @@ export class App extends React.Component<{}, S> {
   resolveFile(path: string, accept: boolean) { this.openHunks(path).forEach(hk => this.resolveHunk(path, hk, accept)); }
   resolveAll(accept: boolean) { this.state.files.filter(f => f.status === "pending").forEach(f => this.resolveFile(f.path, accept)); }
 
+  /** 파일을 포커스된 슬롯의 탭으로 연다 (이미 어느 슬롯에 열려 있으면 그 슬롯을 활성화) */
   openFile(path: string) {
+    this._touchMru(path);
+    this._cancelPendingClose(path); // 닫힘 애니 중 재오픈 시 뒤늦은 제거 취소
     this.setState(s => {
-      if (s.panes.includes(path)) return null;
-      const cap = s.layout;
-      const panes = s.panes.length < cap ? [...s.panes, path] : [...s.panes.slice(0, cap - 1), path];
-      return { panes } as any;
+      const existing = s.tabs.findIndex(t => t.includes(path));
+      if (existing >= 0) {
+        this._focusSlot = existing;
+        return { active: s.active.map((a, i) => (i === existing ? path : a)) } as any;
+      }
+      const slot = Math.min(Math.max(0, this._focusSlot), s.layout - 1);
+      const tabs = s.tabs.map((t, i) => (i === slot ? [...t, path] : t));
+      const active = s.active.map((a, i) => (i === slot ? path : a));
+      return { tabs, active } as any;
+    });
+  }
+
+  // ── 채팅 컨텍스트 첨부 ──
+  addFileAttach(rel: string) {
+    this.setState(s => {
+      if (s.attach.some(a => a.kind === "file" && a.rel === rel)) return { attachPickerOpen: false, attachQuery: "" } as any;
+      return { attach: [...s.attach, { kind: "file", rel, label: rel.split("/").pop() ?? rel }], attachPickerOpen: false, attachQuery: "" } as any;
+    });
+  }
+  /** 포커스된 에디터의 선택 영역을 첨부 */
+  attachSelection() {
+    const api = paneRegistry.focused;
+    if (!api) { this.setState({ gitError: "" }); return; }
+    const sel = api.editor.getSelection();
+    const model = api.editor.getModel();
+    if (!sel || !model || sel.isEmpty()) return;
+    const text = model.getValueInRange(sel);
+    const label = api.rel.split("/").pop() + ` ${sel.startLineNumber}–${sel.endLineNumber}`;
+    this.setState(s => ({ attach: [...s.attach, { kind: "selection", rel: api.rel, text, label }] }));
+  }
+  removeAttach(i: number) {
+    this.setState(s => ({ attach: s.attach.filter((_, idx) => idx !== i) }));
+  }
+  /** 첨부를 소비해 AI 컨텍스트 블록 + 표시용 요약을 만든다 */
+  private async consumeAttachments(): Promise<{ block: string; summary: string }> {
+    const items = this.state.attach;
+    if (!items.length) return { block: "", summary: "" };
+    const ws = this.state.workspace;
+    const parts: string[] = [];
+    for (const a of items) {
+      if (a.kind === "selection") {
+        parts.push(`# 선택 영역 (${a.label})\n\`\`\`\n${(a.text ?? "").slice(0, 12_000)}\n\`\`\``);
+      } else if (ws && window.schutz) {
+        try {
+          const content = await window.schutz.readFile(ws.root, a.rel);
+          parts.push(`# 파일 ${a.rel}\n\`\`\`\n${content.slice(0, 20_000)}\n\`\`\``);
+        } catch { /* 무시 */ }
+      }
+    }
+    const summary = items.map(a => (a.kind === "selection" ? "✂ " : "@") + a.label).join(", ");
+    this.setState({ attach: [] });
+    return { block: parts.length ? "\n\n--- 첨부 컨텍스트 ---\n" + parts.join("\n\n") : "", summary };
+  }
+
+  /** 슬롯에서 특정 탭 활성화 */
+  selectTab(slot: number, rel: string) {
+    this._focusSlot = slot;
+    this._touchMru(rel);
+    this._cancelPendingClose(rel); // 닫힘 애니 중 재선택 시 뒤늦은 제거 취소
+    // 탭 전환 후 에디터에 포커스 → paneRegistry.focused 세팅(그 전엔 null 이라 save/format 이 no-op 되던 문제)
+    this.setState(s => ({ active: s.active.map((a, i) => (i === slot ? rel : a)) } as any),
+      () => { try { paneRegistry.panes.get(rel)?.editor.focus(); } catch { /* */ } });
+  }
+
+  private _dragTab: { slot: number; rel: string } | null = null;
+  /** 탭 드래그 재정렬 (같은 슬롯 내) */
+  reorderTab(slot: number, targetRel: string) {
+    const d = this._dragTab;
+    this._dragTab = null;
+    if (!d || d.slot !== slot || d.rel === targetRel) return;
+    this.setState(s => {
+      const arr = [...(s.tabs[slot] ?? [])];
+      const from = arr.indexOf(d.rel);
+      if (from < 0) return null;
+      arr.splice(from, 1);
+      // 제거 후 타깃 위치를 다시 계산 — left→right 드래그 시 한 칸 밀리는 off-by-one 방지
+      const to = arr.indexOf(targetRel);
+      if (to < 0) return null;
+      arr.splice(to, 0, d.rel);
+      return { tabs: s.tabs.map((t, i) => (i === slot ? arr : t)) } as any;
     });
   }
 
   setLayout(n: number) {
-    this.setState(s => ({
-      layout: n,
-      panes: s.panes.slice(0, n),
-      openMenu: null,
-    } as any));
+    this.setState(s => {
+      const { tabs, active } = this.normSlots(s.tabs, s.active, n);
+      if (this._focusSlot >= n) this._focusSlot = n - 1;
+      return { layout: n, tabs, active, openMenu: null } as any;
+    });
   }
-  closePane(path: string) {
-    this.setState(s => s.panes.length > 1 ? { panes: s.panes.filter(p => p !== path) } as any : null);
+
+  /** 탭 닫기 (미저장이면 확인 후) */
+  closeTab(slot: number, rel: string) {
+    if (this.state.paneDirty[rel] && this.isOpen(rel)) {
+      // 같은 파일이 다른 슬롯에도 열려 있지 않을 때만 데이터 유실 → 확인
+      const openCount = this.state.tabs.reduce((n, t) => n + (t.includes(rel) ? 1 : 0), 0);
+      if (openCount <= 1) { this.openO({ askClose: { rel, slot } }); return; }
+    }
+    this._removeTab(slot, rel);
+  }
+
+  private _closeTabTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 대기 중인 닫기 애니메이션 취소 — 재오픈/선택 시 뒤늦게 탭이 제거되는 것 방지 */
+  private _cancelPendingClose(rel: string) {
+    let changed = false;
+    for (const [key, tid] of this._closeTabTimers) {
+      if (key.endsWith(":" + rel)) { clearTimeout(tid); this._closeTabTimers.delete(key); changed = true; }
+    }
+    if (changed) this.setState(s => ({ closingTabs: s.closingTabs.filter(k => !k.endsWith(":" + rel)) }));
+  }
+  private _removeTab(slot: number, rel: string) {
+    const key = slot + ":" + rel;
+    if (this.state.closingTabs.includes(key)) return;
+    // 탭을 곧바로 제거하지 않고 szTabOut 재생 후 언마운트.
+    // 전용 타이머 — clearTimers()(startRun/stopRun) 가 이 닫기 타이머를 지워 좀비탭(닫힘 상태 영구 고착)이 되지 않도록 _timers 풀 밖에 둔다.
+    this.setState(s => ({ closingTabs: [...s.closingTabs, key] }));
+    const tid = setTimeout(() => {
+      this._closeTabTimers.delete(key);
+      this.setState(s => ({ closingTabs: s.closingTabs.filter(k => k !== key) }));
+      this._doRemoveTab(slot, rel);
+    }, 200);
+    this._closeTabTimers.set(key, tid);
+  }
+
+  private _doRemoveTab(slot: number, rel: string) {
+    this.setState(s => {
+      // 지연 제거 중 레이아웃이 바뀌어 slot 인덱스가 무효해졌으면, rel 을 가진 슬롯을 찾아 대상 보정
+      if (slot >= s.tabs.length || !(s.tabs[slot] ?? []).includes(rel)) {
+        const alt = s.tabs.findIndex(t => t.includes(rel));
+        if (alt >= 0) slot = alt;
+      }
+      const closedIdx = (s.tabs[slot] ?? []).indexOf(rel);
+      const tabs = s.tabs.map((t, i) => (i === slot ? t.filter(x => x !== rel) : t));
+      // 활성 탭을 닫으면 마지막이 아니라 이웃(제거 위치로 밀려온 탭, 없으면 이전 탭)을 활성화
+      const active = s.active.map((a, i) => (i === slot && a === rel ? (tabs[i][Math.min(closedIdx, tabs[i].length - 1)] ?? "") : a));
+      // 이 슬롯에서 완전히 닫혔고 다른 슬롯에도 없으면 dirty 상태도 정리
+      const stillOpen = tabs.some(t => t.includes(rel));
+      const paneDirty = stillOpen ? s.paneDirty : (() => { const d = { ...s.paneDirty }; delete d[rel]; return d; })();
+      return { tabs, active, paneDirty } as any;
+    });
+  }
+
+  /** 미저장 확인 모달의 세 선택지 */
+  private async confirmCloseSave() {
+    const a = this.state.askClose; if (!a) return;
+    await paneRegistry.panes.get(a.rel)?.save();
+    this._removeTab(a.slot, a.rel);
+    this.setState({ askClose: null });
+  }
+  private confirmCloseDiscard() {
+    const a = this.state.askClose; if (!a) return;
+    // 공유 모델을 디스크 원본으로 되돌린다 — 안 하면 버려진 편집이 dirtyRels 에 남아
+    // 이후 saveAll(Ctrl+Shift+S)/F2 리네임 시 디스크에 써지거나 재열람 시 다시 나타남
+    const ws = this.state.workspace;
+    if (ws) {
+      const m = projectModels.getByRel(a.rel);
+      const saved = projectModels.getSaved(ws.root, a.rel);
+      if (m && saved !== undefined && m.getValue() !== saved) m.setValue(saved);
+    }
+    this._removeTab(a.slot, a.rel);
+    this.setState({ askClose: null });
   }
   toggleTerm() {
-    this.setState(st => ({ termOpen: !st.termOpen }), () => {
-      if (this.state.termOpen) this.ensureTerm();
-    });
+    this.setState(st => ({ termOpen: !st.termOpen, termTab: (st.termTab === "ai" || st.termTab === "problems") ? (st.terms[0]?.id ?? st.termTab) : st.termTab }));
   }
 
   /** 로컬 슬래시 명령 — AI로 보내지 않고 Schutz가 직접 처리 */
@@ -672,65 +1546,151 @@ export class App extends React.Component<{}, S> {
     const [cmd, ...rest] = raw.trim().split(/\s+/);
     const connected = AGDEF.map(d => d.id).filter(id => this.modelOf(id) !== null);
     switch (cmd) {
-      case "/help": {
-        const avail = SLASH_COMMANDS.filter(c =>
-          c.origin === "schutz" ||
-          (c.origin === "claude" && this.state.cliAgents.claude?.ok) ||
-          (c.origin === "codex" && this.state.cliAgents.codex?.ok));
-        this.schutzSay(raw, "사용 가능한 명령:\n" +
-          avail.map(c => `${c.cmd} — ${c.desc} [${ORIGIN_LABEL[c.origin]}]`).join("\n") +
-          "\n\n/ 를 입력하면 자동완성 팔레트가 열립니다.");
+      case "/help":
+        this.openO({ commandsOpen: true, input: "" }); // 채팅 덤프 대신 레퍼런스 모달 (UI)
         return true;
-      }
       case "/model": {
+        // /model <agent> <model> — 변경
         if (rest.length >= 2) {
           const [ag, model] = rest;
-          if (!AGDEF.some(d => d.id === ag) && ag !== "codex") {
-            this.schutzSay(raw, "알 수 없는 에이전트: " + ag + " (claude/gpt/grok/glm)");
-            return true;
-          }
-          setModelOverride(ag, model);
-          this.schutzSay(raw, ag + " 모델을 `" + model + "` (으)로 변경했습니다. 다음 턴부터 적용됩니다.");
+          const ch = this.modelChannel(ag);
+          if (!ch) { this.schutzSay(raw, t("sc2.agentNotConnectedOrNoSwitch", { ag })); return true; }
+          // 임의 모델 ID 허용 — 최신 모델(목록에 없어도) 그대로 적용
+          const known = ch.options.some(o => o.id === model) || (this._modelCache[ag] ?? []).includes(model);
+          this.setModelFor(ag, model);
+          this.schutzSay(raw, t("sc2.modelChanged", { name: this.agDef(ag).name, model }) + (known ? "" : t("sc2.modelNotInList")) + t("sc2.appliesNextTurn"));
           return true;
         }
-        const lines = connected.length
-          ? connected.map(id => {
-              const m = this.modelOf(id) ?? "?";
-              const [pin, pout] = App.PRICING[m] ?? [3, 15];
-              const price = this.isSubscription(id) ? "구독 포함" : `$${pin}/${pout} per 1M`;
-              return `${this.agDef(id).name}: \`${m}\` (${price})`;
-            }).join("\n")
-          : "연결된 에이전트가 없습니다. 설정(⚙)에서 로그인하세요.";
-        this.schutzSay(raw, "현재 모델:\n" + lines + "\n\n변경: /model <에이전트> <모델>");
+        // /model <agent> — 해당 에이전트의 선택지 나열
+        if (rest.length === 1) {
+          const ag = rest[0];
+          const ch = this.modelChannel(ag);
+          if (!ch) { this.schutzSay(raw, t("sc2.agentNotConnected", { ag })); return true; }
+          const opts = ch.options.map(o => `${o.id === ch.current ? "● " : "○ "}\`${o.id}\` — ${o.label}`).join("\n");
+          this.schutzSay(raw, t("sc2.modelListForAgent", { name: this.agDef(ag).name, opts, ag }));
+          return true;
+        }
+        // /model — 전체 현황 + 선택지
+        if (!connected.length) { this.schutzSay(raw, t("sc2.noConnectedAgents")); return true; }
+        const blocks = connected.map(id => {
+          const m = this.modelOf(id) ?? "?";
+          const ch = this.modelChannel(id);
+          const price = this.isSubscription(id) ? t("sc2.subscriptionIncluded") : (() => { const [pin, pout] = App.PRICING[m] ?? [3, 15]; return `$${pin}/${pout} per 1M`; })();
+          const head = `${this.agDef(id).name}: \`${m}\` (${price})`;
+          if (!ch) return head;
+          const alts = ch.options.filter(o => o.id !== ch.current).map(o => o.id).join(", ");
+          return alts ? t("sc2.switchable", { head, alts }) : head;
+        }).join("\n");
+        this.schutzSay(raw, t("sc2.modelStatusHeader") + blocks + t("sc2.modelChangeHint"));
         return true;
       }
-      case "/usage": {
-        const lines = connected.length
-          ? connected.map(id => {
-              const a = this.state.agents[id];
-              const cost = this.isSubscription(id) ? "구독 포함" : "$" + a.cost.toFixed(4);
-              return `${this.agDef(id).name}: 입력 ${a.tin.toLocaleString()} · 출력 ${a.tout.toLocaleString()} 토큰 · ${cost}`;
-            }).join("\n")
-          : "연결된 에이전트가 없습니다.";
-        this.schutzSay(raw, "이번 세션 사용량:\n" + lines);
+      case "/usage":
+      case "/cost": {
+        this.openO({ usageOpen: true, input: "" }); // 채팅 대신 대시보드 UI
         return true;
       }
       case "/agents": {
         const lines = AGDEF.map(d => {
           const m = this.modelOf(d.id);
-          return `${d.name}: ${m ? "연결됨 (" + m + ")" : "미연결"}`;
+          return `${d.name}: ${m ? t("sc2.connectedWith", { model: m }) : t("sc2.notConnected")}`;
         }).join("\n");
-        this.schutzSay(raw, lines + "\n\n연결 관리는 설정(⚙) 또는 메뉴 AI → 모델 관리…");
+        this.schutzSay(raw, lines + t("sc2.connectionMgmtHint"));
         return true;
       }
       case "/clear":
+      case "/new":
         this.history = [];
         this._cliSession = null;
+        this._codexSession = null;
+        this.clearSession();
         this.setState({ messages: [], input: "" });
+        return true;
+      case "/settings":
+      case "/config":
+        this.openO({ settingsOpen: true, input: "" });
+        return true;
+      case "/keys":
+      case "/shortcuts":
+        this.openO({ keysOpen: true, input: "" });
+        return true;
+      case "/vim": {
+        const ed = getEditorPrefs();
+        const next = ed.keymap === "vim" ? "intellij" : "vim";
+        setEditorPrefs({ keymap: next });
+        this.forceUpdate();
+        this.schutzSay(raw, next === "vim" ? t("sc2.vimOn") : t("sc2.vimOff"));
+        return true;
+      }
+      case "/theme":
+        this.cycleTheme();
+        this.setState({ input: "" });
+        return true;
+      case "/terminal":
+        this.toggleTerm();
+        this.setState({ input: "" });
+        return true;
+      case "/diff":
+      case "/git":
+        this.setState({ leftTab: "git", input: "" });
+        void this.loadGit();
+        return true;
+      case "/resume":
+      case "/continue": {
+        const ca = this.state.cliAgents;
+        const who = ca.claude?.ok ? "claude" : ca.codex?.ok ? "codex" : null;
+        if (!window.schutz || !who) { this.schutzSay(raw, t("sc2.resumeNeedsCli")); return true; }
+        if (!this.state.workspace) { this.schutzSay(raw, t("sc2.resumeOpenProject")); return true; }
+        this.runCliTurn(who, "직전 작업을 이어서 계속 진행해줘.", true);
+        return true;
+      }
+      case "/doctor":
+      case "/status": {
+        this.setState({ input: "" });
+        void (async () => {
+          if (window.schutz) { try { const r = await window.schutz.cliCheck(); this.setState({ cliAgents: r.agents ?? {} }); } catch { /* */ } }
+          const cli = this.state.cliAgents;
+          const lines: string[] = [];
+          lines.push(t("sc2.connectionStatus"));
+          for (const d of AGDEF) { const m = this.modelOf(d.id); lines.push(`  ${d.name}: ${m ? t("sc2.connectedDot", { model: m }) : t("sc2.notConnected")}`); }
+          lines.push("\nCLI");
+          lines.push(`  Claude Code: ${cli.claude?.ok ? t("sc2.installedWith", { version: cli.claude.version || "" }) : t("sc2.notInstalled")}`);
+          lines.push(`  Codex: ${cli.codex?.ok ? t("sc2.installedWith", { version: cli.codex.version || "" }) : t("sc2.notInstalled")}`);
+          lines.push(t("sc2.workspaceLabel") + (this.state.workspace ? this.state.workspace.name : t("sc2.none")));
+          lines.push(t("sc2.sessionClaude") + (this._cliSession ? t("sc2.resumed") + "(" + this._cliSession.slice(0, 8) + "…)" : t("sc2.newSession")) + t("sc2.sessionCodex") + (this._codexSession ? t("sc2.resumed") : t("sc2.newSession")));
+          this.schutzSay(raw, lines.join("\n"));
+        })();
+        return true;
+      }
+      case "/login": {
+        const id = rest[0] === "codex" ? "codex" : "claude";
+        this.openO({ settingsOpen: true, input: "" });
+        void this.startOauth(id);
+        return true;
+      }
+      case "/logout": {
+        const id = rest[0] === "codex" ? "codex" : "claude";
+        setOAuth(id === "codex" ? "gpt" : id, null);
+        this.setState(st => ({ oauthTick: st.oauthTick + 1, input: "" }));
+        this.schutzSay(raw, t("sc2.loggedOut", { provider: id === "codex" ? "Codex/ChatGPT" : "Claude" }));
+        return true;
+      }
+      case "/memory": {
+        this.setState({ input: "" });
+        const isCodex = rest[0] === "codex";
+        const file = isCodex ? "AGENTS.md" : "CLAUDE.md";
+        if (!this.state.workspace) { this.schutzSay(raw, t("sc2.openFileNeedsProject", { file })); return true; }
+        const exists = this.state.workspace.entries.some(e => !e.dir && e.rel === file);
+        if (exists) this.openFile(file);
+        else this.schutzSay(raw, t("sc2.fileMissing", { file }));
+        return true;
+      }
+      case "/mcp":
+        this.openMcp();
+        this.setState({ input: "" });
         return true;
       default:
         if (cmd.startsWith("/")) {
-          this.schutzSay(raw, "알 수 없는 명령입니다: " + cmd + "\n/help 로 명령 목록을 확인하세요.");
+          this.schutzSay(raw, t("sc2.unknownCommand") + cmd + t("sc2.helpHint"));
           return true;
         }
         return false;
@@ -745,31 +1705,59 @@ export class App extends React.Component<{}, S> {
     const pick = cand.find(c => c.origin === "claude" && this.state.cliAgents.claude?.ok)
       ?? cand.find(c => c.origin === "codex" && this.state.cliAgents.codex?.ok);
     if (!pick) {
-      this.schutzSay(raw, "이 명령은 " + cand.map(c => ORIGIN_LABEL[c.origin]).join("/") + " 명령입니다. 해당 CLI가 설치·로그인되어 있어야 실행할 수 있어요.");
+      this.schutzSay(raw, t("sc2.thisCommandIs") + cand.map(c => ORIGIN_LABEL[c.origin]).join("/") + t("sc2.commandNeedsCli"));
       return true;
     }
     if (!this.state.workspace) {
-      this.schutzSay(raw, "`" + token + "` 은(는) 프로젝트 컨텍스트가 필요합니다. 먼저 폴더를 열어주세요 (파일 → 프로젝트 열기…).");
+      this.schutzSay(raw, "`" + token + t("sc2.needsProjectContext"));
       return true;
     }
     this.runCliTurn(pick.origin, raw, token === "/compact");
     return true;
   }
 
-  send() {
+  /** 발견된 커스텀 명령 실행 — claude는 원문 포워딩(자체 확장), codex는 body 치환 후 전달 */
+  private handleDiscoveredSlash(raw: string): boolean {
+    const parts = raw.trim().split(/\s+/);
+    const name = parts[0].replace(/^\//, "");
+    const args = parts.slice(1).join(" ");
+    const cmd = this.findAgentCommand(name);
+    if (!cmd || !window.schutz) return false;
+    if (!this.state.workspace) { this.schutzSay(raw, "`/" + name + t("sc2.needsProjectContext2")); return true; }
+    if (cmd.origin === "claude") {
+      this.runCliTurn("claude", raw, false); // Claude Code가 커스텀 명령을 자체 확장
+    } else {
+      const expanded = this.expandCommandBody(cmd.body, args); // codex exec는 확장 안 함 → body 치환
+      this.runCliTurn("codex", expanded, false);
+    }
+    return true;
+  }
+  private expandCommandBody(body: string, args: string): string {
+    const argv = args.length ? args.split(/\s+/) : [];
+    return body.replace(/\$ARGUMENTS/g, args).replace(/\$(\d+)/g, (_m, n) => argv[Number(n) - 1] ?? "");
+  }
+
+  async send() {
     const rawIn = this.state.input.trim();
     if (rawIn.startsWith("/")) {
       if (this.forwardSlash(rawIn)) return;
+      if (this.handleDiscoveredSlash(rawIn)) return;
       if (this.handleSlash(rawIn)) return;
     }
-    const t = this.state.input.trim() || "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘";
+    const hasAttach = this.state.attach.length > 0;
+    // 데스크톱: 빈 입력 + 첨부 없음이면 아무것도 보내지 않는다 (데모 프롬프트가 실제 AI로 나가는 것 방지).
+    // 데모 문자열은 웹 프리뷰 자동재생 전용.
+    if (!rawIn && !hasAttach && window.schutz) return;
+    const t = rawIn || (hasAttach ? "첨부한 컨텍스트를 참고해서 진행해줘." : "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘");
+    const { block, summary } = await this.consumeAttachments();
+    const display = summary ? t + "\n📎 " + summary : t;
     // 1순위: 앱 내 연결된 계정(OAuth) 또는 API 키 — Schutz 통합 에이전트 루프
-    if (this.configuredAgents().length > 0) { void this.runReal(t); return; }
+    if (this.configuredAgents().length > 0) { void this.runReal(t + block, display); return; }
     // 2순위(폴백): 로컬에 설치된 구독 CLI
     if (window.schutz) {
       const ca = this.state.cliAgents;
-      if (ca.claude?.ok) { this.runCliTurn("claude", t); return; }
-      if (ca.codex?.ok) { this.runCliTurn("codex", t); return; }
+      if (ca.claude?.ok) { this.runCliTurn("claude", t + block); return; }
+      if (ca.codex?.ok) { this.runCliTurn("codex", t + block); return; }
     }
     // 데스크톱 앱: 데모 대신 연결 안내 (데모는 웹 프리뷰 전용)
     if (window.schutz) {
@@ -790,85 +1778,125 @@ export class App extends React.Component<{}, S> {
   }
 
   /** 도구 실행 (워크스페이스 모드, 에이전트별) */
+  /** 실행 중 MCP 서버의 도구를 provider ToolDef 로 변환 (mcp__server__tool) */
+  private mcpToolDefs(): ToolDef[] {
+    return mcp.getMcpTools().map(t => ({
+      name: mcp.mcpToolName(t.server, t.name),
+      description: (t.description ? t.description + " " : "") + `[MCP: ${t.server}]`,
+      input_schema: (t.inputSchema && typeof t.inputSchema === "object") ? t.inputSchema : { type: "object", properties: {} },
+    }));
+  }
+
   private async execTool(agentId: string, call: ToolCall): Promise<string> {
+    // MCP 도구 — 워크스페이스와 무관하게 실행
+    if (mcp.isMcpToolName(call.name)) {
+      const r = mcp.resolveMcpTool(call.name);
+      if (!r) return "오류: 알 수 없는 MCP 도구 " + call.name;
+      const mid = "rt" + (this._uid++);
+      this.addTool(mid, agentId, "MCP", r.server + "·" + r.tool);
+      try {
+        const out = await mcp.callTool(r.server, r.tool, call.input ?? {});
+        this.setTool(mid, { st: "done", note: r.tool });
+        return out;
+      } catch (e) {
+        this.setTool(mid, { st: "done", note: t("sc2.noteError") });
+        return "MCP 오류: " + (e instanceof Error ? e.message : String(e));
+      }
+    }
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return "오류: 워크스페이스가 열려 있지 않습니다.";
     const toolId = "rt" + (this._uid++);
     try {
       if (call.name === "list_files") {
-        this.addTool(toolId, agentId, "목록", ws.name);
+        this.addTool(toolId, agentId, t("sc2.verbList"), ws.name);
         const list = ws.entries.filter(e => !e.dir).map(e => e.rel).join("\n");
-        this.setTool(toolId, { st: "done", note: ws.entries.filter(e => !e.dir).length + "개" });
+        this.setTool(toolId, { st: "done", note: t("sc2.noteCount", { n: ws.entries.filter(e => !e.dir).length }) });
         return list || "(빈 워크스페이스)";
       }
       if (call.name === "read_file") {
         const rel = String(call.input?.path ?? "");
-        this.addTool(toolId, agentId, "읽기", rel);
+        this.addTool(toolId, agentId, t("sc2.verbRead"), rel);
         const text = await window.schutz.readFile(ws.root, rel);
         this.setTool(toolId, { st: "done", note: (text.length / 1024).toFixed(1) + " KB" });
         return text;
       }
       if (call.name === "propose_create") {
         const rel = String(call.input?.path ?? "");
-        this.addTool(toolId, agentId, "생성", rel);
+        this.addTool(toolId, agentId, t("sc2.verbCreate"), rel);
         const holder = this.fileLocks.get(rel);
         if (holder && holder !== agentId) {
-          this.setTool(toolId, { st: "done", note: "락 충돌" });
+          this.setTool(toolId, { st: "done", note: t("sc2.noteLockConflict") });
           return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락).`;
         }
         this.fileLocks.set(rel, agentId);
         this.setAgent(agentId, { file: rel });
+        const auto = autoAcceptFor(rel, getAutonomy());
         const p: Proposal = {
           id: "pp" + (this._uid++),
           rel,
           find: "",
           replace: String(call.input?.content ?? ""),
-          rationale: String(call.input?.rationale ?? "새 파일 생성"),
+          rationale: String(call.input?.rationale ?? t("sc2.rationaleCreate")),
           agent: agentId,
           status: "pending",
+          auto,
         };
-        this.setState(s => ({ proposals: [...s.proposals, p] }));
-        this.setTool(toolId, { st: "done", note: "제안됨" });
+        this._proposalsById.set(p.id, p); this.setState(s => ({ proposals: [...s.proposals, p] }));
+        this.setTool(toolId, { st: "done", note: auto ? t("sc2.noteAutoAccept") : t("sc2.noteProposed") });
+        if (auto) { void this.acceptProposal(p.id); return "파일이 자동 수락 정책에 따라 생성되었습니다."; }
         return "파일 생성 제안이 등록되었습니다. 사용자가 수락하면 생성됩니다.";
       }
       if (call.name === "propose_edit") {
         const rel = String(call.input?.path ?? "");
-        this.addTool(toolId, agentId, "편집", rel);
+        this.addTool(toolId, agentId, t("sc2.verbEdit"), rel);
+        // find 빈 값 거부 — 빈 find 는 create 분기로 오라우팅되어 파일 전체를 덮어씀
+        if (!String(call.input?.find ?? "")) {
+          this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
+          return "오류: propose_edit의 find는 비어 있을 수 없습니다. 새 파일은 propose_create 를 사용하세요.";
+        }
         // 파일 락: 다른 에이전트가 잡고 있으면 거부
         const holder = this.fileLocks.get(rel);
         if (holder && holder !== agentId) {
-          this.setTool(toolId, { st: "done", note: "락 충돌" });
+          this.setTool(toolId, { st: "done", note: t("sc2.noteLockConflict") });
           return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락). 다른 파일을 작업하세요.`;
         }
         this.fileLocks.set(rel, agentId);
         this.setAgent(agentId, { file: rel });
+        const autoE = autoAcceptFor(rel, getAutonomy());
         const p: Proposal = {
           id: "pp" + (this._uid++),
           rel,
           find: String(call.input?.find ?? ""),
           replace: String(call.input?.replace ?? ""),
-          rationale: String(call.input?.rationale ?? "수정 제안"),
+          rationale: String(call.input?.rationale ?? t("sc2.rationaleEdit")),
           agent: agentId,
           status: "pending",
+          auto: autoE,
         };
-        this.setState(s => ({ proposals: [...s.proposals, p] }));
-        this.setTool(toolId, { st: "done", note: "제안됨" });
+        this._proposalsById.set(p.id, p); this.setState(s => ({ proposals: [...s.proposals, p] }));
+        this.setTool(toolId, { st: "done", note: autoE ? t("sc2.noteAutoAccept") : t("sc2.noteProposed") });
         this.openFile(rel);
+        if (autoE) { void this.acceptProposal(p.id); return "편집이 자동 수락 정책에 따라 적용되었습니다."; }
         return "편집 제안이 등록되었습니다. 사용자가 변경 검토 패널에서 수락/거절합니다.";
       }
       if (call.name === "delegate_task") {
         const target = String(call.input?.agent ?? "");
         const task = String(call.input?.task ?? "");
-        this.addTool(toolId, agentId, "위임", target);
+        this.addTool(toolId, agentId, t("sc2.verbDelegate"), target);
         if (!this.providers[target] || target === agentId) {
-          this.setTool(toolId, { st: "done", note: "대상 오류" });
+          this.setTool(toolId, { st: "done", note: t("sc2.noteTargetError") });
           return "오류: 알 수 없는 에이전트 " + target;
         }
         if (!this.providers[target].isConfigured()) {
-          this.setTool(toolId, { st: "done", note: "미연결" });
+          this.setTool(toolId, { st: "done", note: t("sc2.notConnected") });
           return `오류: ${this.agDef(target).name}이(가) 연결되어 있지 않습니다 (API 키 없음).`;
         }
-        this.setTool(toolId, { st: "done", note: "위임됨" });
+        // 이미 실행 중인 에이전트에 중복 위임 금지 — abortCtls/fileLocks 키 클로버 방지(중지·락 꼬임)
+        if (this.abortCtls.has(target)) {
+          this.setTool(toolId, { st: "done", note: t("sc2.noteTargetError") });
+          return `오류: ${this.agDef(target).name}이(가) 이미 다른 작업을 진행 중입니다.`;
+        }
+        this.setTool(toolId, { st: "done", note: t("sc2.noteDelegated") });
         // 병렬 실행 — 관리자 턴을 막지 않는다
         void this.runAgentLoop(target, [
           { role: "user", text: `관리자 Claude가 위임한 작업입니다:\n\n${task}` },
@@ -877,7 +1905,7 @@ export class App extends React.Component<{}, S> {
       }
       return "알 수 없는 도구: " + call.name;
     } catch (e) {
-      this.setTool(toolId, { st: "done", note: "오류" });
+      this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
       return "오류: " + (e instanceof Error ? e.message : String(e));
     }
   }
@@ -889,7 +1917,7 @@ export class App extends React.Component<{}, S> {
   async runAgentLoop(agentId: string, seed: NeutralMsg[], opts: { isManager: boolean }) {
     const provider = this.providers[agentId];
     const d = this.agDef(agentId);
-    const who = d.name + (opts.isManager ? " · 관리자" : "");
+    const who = d.name + (opts.isManager ? t("sc2.managerSuffix") : "");
     const abort = new AbortController();
     this.abortCtls.set(agentId, abort);
     this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
@@ -897,10 +1925,10 @@ export class App extends React.Component<{}, S> {
     const useTools = !!(this.state.workspace && window.schutz);
     const others = this.configuredAgents().filter(id => id !== agentId);
     const tools = useTools
-      ? (opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)
+      ? [...(opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS), ...this.mcpToolDefs()]
       : undefined;
     const system =
-      SCHUTZ_SYSTEM_PROMPT +
+      schutzSystemPrompt() +
       (opts.isManager ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
       (useTools ? "\n현재 워크스페이스: " + this.state.workspace!.name : "");
 
@@ -934,6 +1962,7 @@ export class App extends React.Component<{}, S> {
             turnText = turnText ? turnText + "\n\n⚠️ " + ev.message : "⚠️ " + ev.message;
             this.setMsg(aiId, { text: turnText });
             stopReason = "error";
+            this.maybeRevertModel(agentId, ev.message);
           }
         }
         this.setMsg(aiId, { streaming: false });
@@ -947,6 +1976,7 @@ export class App extends React.Component<{}, S> {
         transcript.push({ role: "assistant", text: turnText || undefined, calls });
         const results: { id: string; content: string }[] = [];
         for (const c of calls) {
+          if (abort.signal.aborted) break; // 중지 시 남은 도구 실행/파일쓰기 중단
           const out = await this.execTool(agentId, c);
           results.push({ id: c.id, content: out.slice(0, 40_000) });
         }
@@ -967,12 +1997,12 @@ export class App extends React.Component<{}, S> {
       const mine = this.state.proposals.some(p => p.agent === agentId && p.status === "pending");
       this.setAgent(agentId, { status: mine ? "review" : "idle", file: null });
       if (opts.isManager && finalText) this.history.push({ role: "assistant", content: finalText });
-      // 모든 에이전트가 끝났을 때만 running 해제
-      if (this.abortCtls.size === 0) {
+      // 모든 에이전트 루프가 끝났을 때만 running 해제 (인라인/mcp생성 사이드플로 컨트롤러는 무시)
+      if ([...this.abortCtls.keys()].every(k => k === "__mcpgen" || k.startsWith("__inline"))) {
         this.setState(s => ({
           running: false,
           statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
-        }));
+        }), () => this.saveSession());
       }
     }
   }
@@ -983,7 +2013,7 @@ export class App extends React.Component<{}, S> {
     const aiId = "a" + (this._uid++);
     this._cliMsgId = aiId;
     const agentKey = agent === "codex" ? "gpt" : "claude";
-    const who = agent === "codex" ? "Codex · 구독" : "Claude · 구독";
+    const who = agent === "codex" ? t("sc3.whoCodex") : t("sc3.whoClaude");
     this._cliAgentKey = agentKey;
     this.setState(s => ({
       running: true, cliBusy: true, statusKey: "tool", input: "",
@@ -992,6 +2022,7 @@ export class App extends React.Component<{}, S> {
         { id: "u" + (this._uid++), role: "user" as const, text },
         { id: aiId, role: "ai" as const, who, text: "", streaming: true }],
     }));
+    if (agent === "codex") this._codexSession = "last"; // 이후 이어가기(--last) 가능 표시
     window.schutz.cliRun({
       agent,
       cwd: this.state.workspace?.root,
@@ -1007,8 +2038,8 @@ export class App extends React.Component<{}, S> {
     const aiId = this._cliMsgId;
     const append = (t: string) => {
       if (!aiId) return;
-      const cur = this.state.messages.find(m => m.id === aiId)?.text ?? "";
-      this.setMsg(aiId, { text: cur ? cur + "\n\n" + t : t });
+      // 함수형 업데이트 — 한 이벤트에 여러 블록이 있어도 최신 state 기준으로 누적(유실 방지)
+      this.setState(s => ({ messages: s.messages.map(m => m.id === aiId ? { ...m, text: m.text ? m.text + "\n\n" + t : t } : m) }));
     };
     if (ev.type === "system" && ev.subtype === "init") {
       if (ev.session_id) this._cliSession = ev.session_id;
@@ -1020,7 +2051,7 @@ export class App extends React.Component<{}, S> {
         if (b.type === "text" && b.text) append(b.text);
         else if (b.type === "tool_use") {
           const file = b.input?.file_path ?? b.input?.path ?? b.input?.pattern ?? b.input?.command ?? "";
-          const verb = /edit|write/i.test(b.name) ? "편집" : /read|glob|grep|ls/i.test(b.name) ? "읽기" : "도구";
+          const verb = /edit|write/i.test(b.name) ? t("sc3.verbEdit") : /read|glob|grep|ls/i.test(b.name) ? t("sc3.verbRead") : t("sc3.verbTool");
           const tid = "cli" + (this._uid++);
           this.addTool(tid, "claude", verb, String(file).split(/[\/]/).slice(-2).join("/") || b.name);
           this.setTool(tid, { st: "done", note: b.name });
@@ -1030,7 +2061,11 @@ export class App extends React.Component<{}, S> {
     }
     if (ev.type === "result") {
       if (ev.session_id) this._cliSession = ev.session_id;
-      if (ev.result && aiId && !(this.state.messages.find(m => m.id === aiId)?.text)) append(String(ev.result));
+      if (ev.result && aiId) {
+        // 빈 여부 판정을 updater 안에서 — 직전 assistant append 가 아직 커밋 안 됐어도 정확(중복/누락 방지)
+        const res = String(ev.result);
+        this.setState(s => { const m = s.messages.find(x => x.id === aiId); if (!m || m.text) return null; return { messages: s.messages.map(x => x.id === aiId ? { ...x, text: res } : x) } as any; });
+      }
       if (typeof ev.total_cost_usd === "number") {
         this.setState(s => ({ agents: { ...s.agents, claude: { ...s.agents.claude, cost: s.agents.claude.cost + ev.total_cost_usd } } }));
       }
@@ -1040,8 +2075,8 @@ export class App extends React.Component<{}, S> {
       // codex 등 비-claude CLI: ANSI 제거한 원문 스트림
       const clean = String(ev.text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
       if (clean.trim() && aiId) {
-        const cur = this.state.messages.find(m => m.id === aiId)?.text ?? "";
-        this.setMsg(aiId, { text: cur ? cur + "\n" + clean : clean });
+        // 함수형 업데이트 — 빠른 IPC 버스트에서 stale this.state 로 청크 유실되지 않게(append 헬퍼와 동일 패턴)
+        this.setState(s => ({ messages: s.messages.map(m => m.id === aiId ? { ...m, text: m.text ? m.text + "\n" + clean : clean } : m) }));
       }
       return;
     }
@@ -1054,10 +2089,82 @@ export class App extends React.Component<{}, S> {
       this.setState(s => ({
         running: false, cliBusy: false, statusKey: "idle",
         agents: { ...s.agents, [ak]: { ...s.agents[ak], status: "idle" } },
-      }));
+      }), () => this.saveSession());
       // CLI가 파일을 직접 수정했을 수 있음 → 트리·열린 페인 리로드
       void this.refreshWorkspace();
     }
+  }
+
+  // ── 대화 세션 영속 (워크스페이스별 localStorage) ──
+  // 창 인덱스(win) — 0번(주 창)은 재시작 복원용 안정 키, 그 외 보조 창은 격리 키(동시 창 clobber 방지)
+  private _winId: number = (() => { try { return Number(new URLSearchParams(location.search).get("win")) || 0; } catch { return 0; } })();
+  private sessionKey(): string | null {
+    const r = this.state.workspace?.root;
+    if (!r) return null;
+    return this._winId > 0 ? `schutz.session:${r}::w${this._winId}` : `schutz.session:${r}`;
+  }
+  private layoutKey(root?: string): string | null {
+    const r = root ?? this.state.workspace?.root;
+    if (!r) return null;
+    return this._winId > 0 ? `schutz.layout:${r}::w${this._winId}` : `schutz.layout:${r}`;
+  }
+  /** 재시작 전 열려 있던 탭/활성/레이아웃 복원 (존재하는 실제 파일만). 없으면 빈 슬롯 */
+  private restoredLayout(tree: SchutzWorkspaceTree, fallbackLayout: number): { tabs: string[][]; active: string[]; layout: number } {
+    const k = this.layoutKey(tree.root);
+    let d: any = null;
+    try { const raw = k && localStorage.getItem(k); if (raw) d = JSON.parse(raw); } catch { /* */ }
+    const layout = d && [1, 2, 4].includes(d.layout) ? d.layout : fallbackLayout;
+    if (!d || !Array.isArray(d.tabs)) { const ns = this.normSlots([], [], layout); return { tabs: ns.tabs, active: ns.active, layout }; }
+    // 트리가 capped(truncated)면 tree.entries 를 존재 오라클로 신뢰 불가(>4000파일·깊은 경로 파일 누락) →
+    // 필터하지 않고 보존해 실제 존재하는 탭이 시작 시 사라지지 않게. 진짜 삭제 파일은 pane 오류 오버레이가 처리.
+    const truncated = !!(tree as any).truncated;
+    const exists = new Set(tree.entries.filter(e => !e.dir).map(e => e.rel));
+    const keep = (rel: string) => typeof rel === "string" && (truncated || exists.has(rel));
+    const tabs: string[][] = [];
+    for (let i = 0; i < layout; i++) tabs.push((Array.isArray(d.tabs[i]) ? d.tabs[i] : []).filter(keep));
+    const active = tabs.map((slot, i) => (Array.isArray(d.active) && slot.includes(d.active[i])) ? d.active[i] : (slot[slot.length - 1] ?? ""));
+    return { tabs, active, layout };
+  }
+  private _layoutT: ReturnType<typeof setTimeout> | null = null;
+  /** 현재 탭/활성/레이아웃을 워크스페이스별로 저장 (디바운스) */
+  private persistLayout() {
+    if (this._layoutT) clearTimeout(this._layoutT);
+    this._layoutT = setTimeout(() => {
+      const k = this.layoutKey();
+      if (!k) return;
+      try {
+        const { tabs, active, layout } = this.state;
+        const clean = tabs.map(slot => slot.filter(rel => !this.parseDiffKey(rel))); // diff 등 특수 탭 제외
+        localStorage.setItem(k, JSON.stringify({ tabs: clean, active, layout }));
+      } catch { /* ignore */ }
+    }, 400);
+  }
+  private saveSession() {
+    const k = this.sessionKey();
+    if (!k) return;
+    try {
+      const msgs = this.state.messages.filter(m => !m.streaming).slice(-200);
+      localStorage.setItem(k, JSON.stringify({ messages: msgs, history: this.history.slice(-120) }));
+    } catch { /* ignore */ }
+  }
+  private restoreSession() {
+    const k = this.sessionKey();
+    if (!k) return;
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (Array.isArray(d.messages)) {
+        this.setState({ messages: d.messages });
+        // _uid 를 복원된 id 뒤로 시드 — 새 메시지가 복원 id와 충돌해 엉뚱한 메시지를 덮어쓰는 것 방지
+        this._uid = d.messages.reduce((mx: number, m: any) => Math.max(mx, +((String(m.id).match(/\d+$/) || [])[0] ?? 0) + 1), this._uid);
+      }
+      if (Array.isArray(d.history)) this.history = d.history;
+    } catch { /* ignore */ }
+  }
+  private clearSession() {
+    const k = this.sessionKey();
+    if (k) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
   }
 
   async refreshWorkspace() {
@@ -1066,13 +2173,206 @@ export class App extends React.Component<{}, S> {
     const tree = await window.schutz.readTree(ws.root);
     this.setState(s => {
       const paneVer: Record<string, number> = { ...s.paneVer };
-      for (const p of s.panes) paneVer[p] = (paneVer[p] ?? 0) + 1;
+      for (const p of this.allOpen(s)) {
+        paneVer[p] = (paneVer[p] ?? 0) + 1;
+        const dm = this.parseDiffKey(p); // diff 탭은 실제 경로 키도 함께 bump
+        if (dm) paneVer[dm.path] = (paneVer[dm.path] ?? 0) + 1;
+      }
       return { workspace: tree, paneVer } as any;
     });
+    void this.loadGit();
+    // 열린 TS/JS 파일의 공유 모델을 디스크와 동기화 (dirty 아니면)
+    for (const rel of this.allOpen()) {
+      if (!projectModels.isTsLike(rel)) continue;
+      window.schutz.readFile(ws.root, rel)
+        .then(text => projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]))
+        .catch(() => { /* 삭제됨 등 무시 */ });
+    }
+  }
+
+  private _fsTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 파일 워처 트리거 — 트리·모델·git을 디스크와 가볍게 동기화 (페인 리마운트 없이 커서 보존) */
+  private onFsChange = () => {
+    if (this._fsTimer) clearTimeout(this._fsTimer);
+    this._fsTimer = setTimeout(() => void this.syncFromDisk(), 250);
+  };
+  async syncFromDisk(opts?: { bulk?: boolean }) {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return;
+    let tree: SchutzWorkspaceTree | null = null;
+    try {
+      tree = await window.schutz.readTree(ws.root);
+      if (this.state.workspace !== ws) return; // 그 사이 워크스페이스 전환 → 스테일 트리로 새 repo를 덮지 않음
+      this.setState({ workspace: tree });
+    } catch { /* */ }
+    // 사라진 파일(외부 삭제·브랜치 전환)의 stale 모델·진단·문제패널 항목 정리 — 트리 완전할 때만(truncated 면 실존 파일 오삭제 위험)
+    if (tree && !(tree as any).truncated) {
+      const present = new Set(tree.entries.filter(e => !e.dir).map(e => e.rel));
+      projectModels.dropMissing(ws.root, present);
+    }
+    // 대량 변경(브랜치 전환/pull/stash pop): 열지 않은 preload 모델도 디스크로 재로드해 stale 진단 방지
+    if (opts?.bulk) void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
+    // 열린 파일: dirty 아니면 모델 내용을 디스크와 맞춤 (공유 모델 setValue → 라이브 반영, 리마운트 없음)
+    for (const rel of this.allOpen()) {
+      if (this.state.paneDirty[rel]) continue; // 편집 중 보호
+      if (this.parseDiffKey(rel)) continue;    // diff 뷰는 별도
+      if (!projectModels.getByRel(rel)) continue; // 모델 없는 탭(이미지 등) 건너뜀
+      window.schutz.readFile(ws.root, rel)
+        // 비동기 readFile 사이 워크스페이스 전환 또는 편집 시작 가능 → 재확인해 사용자 편집/새 repo 클로버 방지
+        .then(text => { if (this.state.workspace !== ws) return; projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]); })
+        .catch(() => { /* 삭제됨 등 */ });
+    }
+    void this.loadGit();
+  }
+
+  // ── Git 소스 컨트롤 ──
+  private _gitLoadSeq = 0; // 동시/순서역전 loadGit 응답이 최신 상태를 스테일로 덮지 않게 하는 시퀀스
+  /** 팔레트 선택 행 콜백 ref — 키보드 네비 시 선택행을 항상 뷰 안으로 스크롤(안 보이는 항목이 Enter 되던 문제) */
+  private _selRowRef = (el: HTMLElement | null) => { try { el?.scrollIntoView({ block: "nearest" }); } catch { /* */ } };
+  async loadGit() {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) { this.setState({ git: null }); return; }
+    const seq = ++this._gitLoadSeq;
+    const stale = () => this.state.workspace !== ws || seq !== this._gitLoadSeq; // 워크스페이스 전환 or 더 최근 loadGit 시작됨
+    try {
+      const r = await window.schutz.git(ws.root, "status");
+      if (stale()) return; // 스테일 응답 드롭(순서 역전 시 옛 status 로 클로버 방지)
+      if (!r.ok) { this.setState({ git: { branch: ws.branch ?? null, ahead: 0, behind: 0, upstream: false, notRepo: !!r.notRepo, staged: [], unstaged: [], untracked: [] } }); return; }
+      this.setState({ git: { branch: r.branch, ahead: r.ahead, behind: r.behind, upstream: r.upstream, staged: r.staged, unstaged: r.unstaged, untracked: r.untracked } });
+      // 브랜치·로그도 함께 (실패 무시, 스테일 시 무시)
+      window.schutz.git(ws.root, "branches").then(b => { if (!stale() && b?.ok) this.setState({ gitBranches: b.branches }); }).catch(() => { });
+      window.schutz.git(ws.root, "log", { n: 40 }).then(l => { if (!stale() && l?.ok) this.setState({ gitLog: l.commits }); }).catch(() => { });
+    } catch { if (!stale()) this.setState({ git: null }); }
+  }
+
+  /** 브랜치 전환 */
+  async gitCheckout(branch: string) {
+    if (Object.values(this.state.paneDirty).some(Boolean)) { this.toast("error", t("sc3.unsavedChanges")); return; }
+    const ok = await this.gitDo("checkout", { branch });
+    this.setState({ branchOpen: false });
+    if (ok) { this.toast("ok", t("sc3.branchSwitched", { branch })); await this.syncFromDisk({ bulk: true }); }
+    else this.toast("error", t("sc3.switchFailed") + (this.state.gitError || ""));
+  }
+  /** 새 브랜치 생성+전환 */
+  async gitCreateBranch() {
+    const name = this.state.newBranch.trim();
+    if (!name) return;
+    const ok = await this.gitDo("createBranch", { branch: name });
+    this.setState({ branchOpen: false, newBranch: "" });
+    if (ok) { this.toast("ok", t("sc3.newBranchCreated", { name })); await this.syncFromDisk({ bulk: true }); }
+    else this.toast("error", t("sc3.branchCreateFailed") + (this.state.gitError || ""));
+  }
+
+  /** 단순 git 액션(스태시/풀/페치) + 토스트 */
+  async gitSimple(action: string, okMsg: string) {
+    const ok = await this.gitDo(action, action === "stash" ? { includeUntracked: true } : undefined);
+    if (ok) { this.toast("ok", okMsg); if (action === "pull" || action === "stashPop") await this.syncFromDisk({ bulk: true }); }
+    else this.toast("error", (this.state.gitError || t("sc3.failed")));
+  }
+  /** 현재 포커스 파일·라인의 blame을 토스트로 */
+  async gitBlameLine() {
+    const ws = this.state.workspace;
+    const rel = this.state.active[this._focusSlot];
+    const api = rel ? paneRegistry.panes.get(rel) : null;
+    if (!ws || !window.schutz || !rel || !api) { this.toast("info", t("sc3.noEditingFile")); return; }
+    const line = api.editor.getPosition()?.lineNumber ?? 1;
+    try {
+      const r = await window.schutz.git(ws.root, "blame", { path: rel });
+      if (!r.ok || !r.lines) { this.toast("error", t("sc3.blameFailed") + (r.error || "")); return; }
+      const info = r.lines[line - 1];
+      if (info) this.toast("info", `${info.hash} · ${info.author} — ${info.summary}`);
+      else this.toast("info", t("sc3.noBlameLine"));
+    } catch (e) { this.toast("error", t("sc3.blameFailed") + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  /** git 액션 실행 후 상태 갱신 (+ 열린 diff/페인 리로드) */
+  private _gitOpInFlight = false; // 동기 재진입 가드 — setState 는 async 라 state.gitBusy 만으론 rapid double-fire(이중 커밋/index.lock) 못 막음
+  private async gitDo(action: string, payload?: any): Promise<boolean> {
+    const ws = this.state.workspace;
+    if (!ws || !window.schutz) return false;
+    if (this._gitOpInFlight) return false; // 진행 중이면 동시 git 변경 차단
+    this._gitOpInFlight = true;
+    this.setState({ gitBusy: true, gitError: "" });
+    try {
+      const r = await window.schutz.git(ws.root, action, payload);
+      if (!r.ok) { this.setState({ gitBusy: false, gitError: r.error || t("sc3.gitError") }); return false; }
+      this.setState({ gitBusy: false });
+      await this.loadGit();
+      return true;
+    } catch (e) {
+      this.setState({ gitBusy: false, gitError: e instanceof Error ? e.message : String(e) });
+      return false;
+    } finally {
+      this._gitOpInFlight = false;
+    }
+  }
+
+  async gitCommit() {
+    const msg = this.state.gitMsg.trim();
+    if (!msg) { this.setState({ gitError: t("sc3.enterCommitMsg") }); return; }
+    if (!(this.state.git?.staged.length)) { this.setState({ gitError: t("sc3.noStagedChanges") }); return; }
+    const ok = await this.gitDo("commit", { message: msg });
+    if (ok) { this.setState({ gitMsg: "" }); void this.refreshWorkspace(); }
+  }
+
+  /** diff 뷰 열기 — 합성 rel `git-diff:<s|w>:<path>` 를 탭으로 */
+  openDiff(path: string, staged: boolean, untracked = false) {
+    const key = "git-diff:" + (untracked ? "u" : staged ? "s" : "w") + ":" + path;
+    this.openFile(key);
+  }
+  /** 합성 diff rel 파싱 */
+  private parseDiffKey(rel: string): { path: string; staged: boolean; untracked: boolean } | null {
+    if (!rel.startsWith("git-diff:")) return null;
+    const rest = rel.slice("git-diff:".length);
+    const kind = rest[0];
+    return { path: rest.slice(2), staged: kind === "s", untracked: kind === "u" };
+  }
+
+  private _fsOff: (() => void) | null = null;
+  private _langOff: (() => void) | null = null;
+
+  // ── 진단(문제 패널) ──
+  private _markersOff: monaco.IDisposable | null = null;
+  private _markerTimer: ReturnType<typeof setTimeout> | null = null;
+  private _scheduleMarkerScan() {
+    if (this._markerTimer) clearTimeout(this._markerTimer);
+    this._markerTimer = setTimeout(() => this._scanMarkers(), 180);
+  }
+  private _scanMarkers() {
+    const all = monaco.editor.getModelMarkers({});
+    const rows: ProblemItem[] = [];
+    for (const m of all) {
+      if (m.severity < 4) continue; // 4=Warning, 8=Error (Hint/Info 제외)
+      const rel = projectModels.relFor(m.resource.toString());
+      if (!rel) continue;
+      rows.push({ rel, line: m.startLineNumber, col: m.startColumn, message: m.message, severity: m.severity });
+    }
+    rows.sort((a, b) => (b.severity - a.severity) || a.rel.localeCompare(b.rel) || (a.line - b.line));
+    this.setState({ problems: rows });
+  }
+  /** 문제 항목 클릭 → 파일 열고 라인으로 이동 */
+  /** 파일을 연 뒤 위치로 스크롤/커서 — 페인이 아직 마운트 안 됐으면 폴링 재시도(고정 지연 no-op 방지), 라인은 모델 길이로 클램프 */
+  private revealInPane(rel: string, line: number, col: number, tries = 0) {
+    const api = paneRegistry.panes.get(rel);
+    if (api) {
+      try {
+        const max = Math.max(1, api.editor.getModel()?.getLineCount() ?? line);
+        const ln = Math.min(Math.max(1, line), max); // 치환·외부변경으로 라인이 시프트해도 범위 밖으로 안 감
+        api.editor.revealLineInCenter(ln);
+        api.editor.setPosition({ lineNumber: ln, column: Math.max(1, col) });
+        api.editor.focus();
+      } catch { /* disposed 등 무시 */ }
+      return;
+    }
+    if (tries < 25) setTimeout(() => this.revealInPane(rel, line, col, tries + 1), 40); // 최대 ~1s 폴링(대용량/느린 첫 마운트 대비)
+  }
+  openProblem(p: ProblemItem) {
+    this.openFile(p.rel);
+    this.revealInPane(p.rel, p.line, p.col);
   }
 
   /** 실제 모델 턴 시작 — 관리자(Claude 우선, 없으면 연결된 첫 에이전트)가 진입점 */
-  async runReal(text: string) {
+  async runReal(text: string, display: string = text) {
     if (this.state.running) return;
     const configured = this.configuredAgents();
     const pref = getManagerId();
@@ -1081,17 +2381,85 @@ export class App extends React.Component<{}, S> {
     this.history.push({ role: "user", content: text });
     this.setState(s => ({
       running: true, statusKey: "thinking", input: "",
-      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
+      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text: display }],
     }));
     const seed: NeutralMsg[] = this.history.map(m => ({ role: m.role as "user" | "assistant", text: m.content }));
     await this.runAgentLoop(managerId, seed, { isManager: true });
   }
 
+  /** Ctrl+K 인라인 편집 — 선택 코드를 지시대로 바꾼 제안을 만든다 (도구 없이 단발 완성) */
+  async inlineEdit(rel: string, selection: string, instruction: string, range?: InlineRange) {
+    const configured = this.configuredAgents();
+    const pref = getManagerId();
+    const managerId = configured.includes(pref) ? pref : (configured.includes("claude") ? "claude" : configured[0]);
+    if (!managerId) {
+      this.schutzSay(t("sc3.inlineEdit"), t("sc3.noConnectedAi"));
+      return;
+    }
+    const provider = this.providers[managerId];
+    const aiId = "a" + (this._uid++);
+    this.setState(s => ({ messages: [...s.messages, { id: aiId, role: "ai" as const, who: this.agDef(managerId).name + t("sc3.inlineEditWhoSuffix"), text: t("sc3.editingSelection"), streaming: true }] }));
+    const system = "당신은 코드 편집기입니다. 사용자가 파일에서 코드 조각을 선택했습니다. 지시에 따라 그 조각을 수정하고, 그 조각을 대체할 코드만 출력하세요. 설명·주석·마크다운 코드펜스 없이 순수 코드만 반환합니다. 들여쓰기는 원본 문맥을 유지하세요.";
+    const transcript: NeutralMsg[] = [{ role: "user", text: `파일: ${rel}\n\n선택된 코드:\n${selection}\n\n지시: ${instruction}\n\n이 코드를 대체할 코드만 반환하세요.` }];
+    const abort = new AbortController();
+    const inlineKey = "__inline:" + aiId; // 요청별 고유 키 — 동시 인라인 편집이 서로의 컨트롤러를 덮어쓰지 않게
+    this.abortCtls.set(inlineKey, abort);
+    let out = "";
+    try {
+      for await (const ev of provider.streamAgentTurn({ transcript, system, tools: undefined, signal: abort.signal })) {
+        if (ev.type === "text") out += ev.delta;
+        else if (ev.type === "usage") this.bumpAgent(managerId, ev.inputTokens, ev.outputTokens);
+        else if (ev.type === "error") out = out || "⚠️ " + ev.message;
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") { this.setMsg(aiId, { text: t("sc3.inlineEditCancelled"), streaming: false }); this.abortCtls.delete(inlineKey); return; }
+      this.setMsg(aiId, { text: "⚠️ " + (e instanceof Error ? e.message : String(e)), streaming: false }); this.abortCtls.delete(inlineKey); return;
+    }
+    this.abortCtls.delete(inlineKey);
+    let code = out.trim();
+    // 코드펜스 제거
+    if (code.startsWith("```")) code = code.replace(/^```[^\n]*\n/, "").replace(/\n?```\s*$/, "").trim();
+    this.setMsg(aiId, { streaming: false });
+    if (!code) { this.setMsg(aiId, { text: t("sc3.emptyEditResult") }); return; }
+    if (code === selection.trim()) { this.setMsg(aiId, { text: t("sc3.noChanges") }); return; }
+    const p: Proposal = {
+      id: "pp" + (this._uid++), rel, find: selection, replace: code, range,
+      rationale: t("sc3.inlineEditRationale") + instruction, agent: managerId, status: "pending",
+    };
+    this.setState(s => ({ proposals: [...s.proposals, p] }));
+    this.setMsg(aiId, { text: t("sc3.inlineEditProposalMade") });
+    this.openFile(rel);
+    void this.saveSession();
+  }
+
   componentDidMount() {
     applyTheme(getThemeId());
+    applyUiFont(); // 저장된 UI 폰트를 전역 적용
+    this._langOff = onLangChange(() => this.forceUpdate()); // 언어 변경 시 전체 리렌더
     // 데스크톱 앱: 데모 없이 빈 상태에서 시작 + Claude Code CLI(구독 인증) 감지
     if (window.schutz) {
-      this.setState({ panes: [], leftTab: "tree" });
+      this.setState(s => ({ ...this.normSlots([], [], s.layout), leftTab: "tree" } as any));
+      window.addEventListener("beforeunload", this._onBeforeUnload);
+      this._markersOff = monaco.editor.onDidChangeMarkers(() => this._scheduleMarkerScan());
+      this._fsOff = window.schutz.onFsChange(this.onFsChange);
+      // 재로드 후 고아 PTY 정리 — 이 렌더러의 현재 터미널 탭에 없는 셸을 메인이 종료(리로드 시 누수 방지)
+      try { window.schutz.termReconcile?.(this.state.terms.map(t => t.id)); } catch { /* */ }
+      // LSP 초기화 + Monaco 프로바이더 등록 (Python 등)
+      void lspClient.initLsp().then(() => { registerLspProviders(); return lspClient.syncOpenModels(); });
+      // 확장 로드 (커맨드 기여 → 팔레트)
+      void this.reloadExtensions();
+      // MCP 서버 시작 (Schutz 호스트) → 도구를 에이전트 루프에 노출
+      mcp.setMcpChangeHandler(() => this.forceUpdate());
+      void mcp.startAll();
+      // 모델 목록 미리 조회 → /model 팔레트가 즉시 실시간 목록을 보여줌
+      setTimeout(() => this.ensureModelsFetched(), 1500);
+      // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
+      // this.qt 사용(언마운트 시 clearTimers 로 취소) — 고아 타이머가 죽은 인스턴스에서 startTour 호출하는 것 방지
+      try {
+        if (!localStorage.getItem("schutz.tutorialDone")) {
+          this.qt(() => { if (!this.state.tourOpen && !this.state.settingsOpen) this.startTour(); }, 1400);
+        }
+      } catch { /* ignore */ }
       document.title = "Schutz";
       // 마지막 프로젝트 자동 복원
       try {
@@ -1109,7 +2477,7 @@ export class App extends React.Component<{}, S> {
             setOAuth(r.provider, { access: r.access, refresh: r.refresh ?? null, exp: r.exp ?? Date.now() + 3600_000, accountId: r.accountId ?? null });
             this.setState(st => ({ oauthWait: false, oauthMsg: "", oauthTick: st.oauthTick + 1 }));
           } else if (r.provider) {
-            this.setState({ oauthWait: false, oauthMsg: r.message ?? "로그인 실패" });
+            this.setState({ oauthWait: false, oauthMsg: r.message ?? t("sc3.loginFailed") });
           }
         } catch { /* ignore */ }
       });
@@ -1122,40 +2490,426 @@ export class App extends React.Component<{}, S> {
   }
   componentWillUnmount() {
     this.clearTimers();
-    this._termOff?.();
-    this._termOff = null;
-    this._termStarted = false;
+    // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
+    if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
+    if (this._extSearchT) { clearTimeout(this._extSearchT); this._extSearchT = null; }
+    if (this._searchTimer) { clearTimeout(this._searchTimer); this._searchTimer = null; }
+    if (this._layoutT) { clearTimeout(this._layoutT); this._layoutT = null; }
+    if (this._markerTimer) { clearTimeout(this._markerTimer); this._markerTimer = null; } // 언마운트 후 _scanMarkers setState 방지(_timers 풀 밖)
+    for (const k of Object.keys(this._closeTimers)) clearTimeout(this._closeTimers[k]);
     this._cliOff?.();
     this._cliOff = null;
     this._oauthOff?.();
     this._oauthOff = null;
     window.removeEventListener("keydown", this._onGlobalKey);
+    window.removeEventListener("beforeunload", this._onBeforeUnload);
+    this._markersOff?.dispose();
+    this._fsOff?.();
+    this._langOff?.();
+    window.removeEventListener("resize", this._tourResize);
+    this._mruCommit?.();
+    try { window.schutz?.watchStop(); } catch { /* */ }
+    lspClient.shutdownAll();
+    void dap.shutdown();
+    projectModels.disposeAll();
   }
+
+  /** 앱 종료 가드 — 미저장 변경이 있으면 네이티브 확인 */
+  private _onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (Object.values(this.state.paneDirty).some(Boolean)) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  };
 
   /** 전역 단축키 (데스크톱) */
   private _onGlobalKey = (e: KeyboardEvent) => {
-    if (!window.schutz) return;
     const mod = e.ctrlKey || e.metaKey;
-    if (!mod) {
-      if (e.key === "Escape" && this.state.quickOpen) this.setState({ quickOpen: false });
+    // Escape — 열린 오버레이/모달을 닫는다 (웹/데모 모드에서도 동작)
+    if (!mod && e.key === "Escape") {
+      const s = this.state;
+      if (s.tourOpen) { this.endTour(); return; }
+      if (s.cmdOpen) this.closeOverlay("cmd", { cmdOpen: false });
+      else if (s.quickOpen) this.closeOverlay("quick", { quickOpen: false });
+      else if (s.symOpen) this.closeOverlay("sym", { symOpen: false });
+      else if (s.searchOpen) this.closeOverlay("search", { searchOpen: false });
+      else if (s.aboutOpen) this.closeOverlay("about", { aboutOpen: false });
+      else if (s.commandsOpen) this.closeOverlay("commands", { commandsOpen: false });
+      else if (s.mcpOpen) this.closeOverlay("mcp", { mcpOpen: false });
+      else if (s.usageOpen) this.closeOverlay("usage", { usageOpen: false });
+      else if (s.keysOpen) this.closeOverlay("keys", { keysOpen: false });
+      else if (s.settingsOpen) this.closeOverlay("settings", { settingsOpen: false });
+      else if (s.extDetail) this.closeOverlay("extDetail", { extDetail: null });
+      else if (s.extPanel) this.closeOverlay("extPanel", { extPanel: null });
+      else if (s.askClose) this.closeOverlay("askClose", { askClose: null });
+      else if (s.openMenu || s.projOpen) this.setState({ openMenu: null, projOpen: false });
+      else if ([...this.abortCtls.keys()].some(k => k.startsWith("__inline"))) {
+        // 진행 중 인라인 편집(Ctrl+K)을 Escape 로 취소 — 등록된 AbortController 의 유일한 도달 가능 트리거
+        for (const [k, ac] of this.abortCtls) if (k.startsWith("__inline")) ac.abort();
+      }
+      else return; // 닫을 오버레이 없음 → 다른 핸들러에 위임
       return;
     }
+    if (!window.schutz) return;
+    // 디버그 F키 (모디파이어 없음)
+    if (!mod) {
+      if (e.key === "F5") { e.preventDefault(); if (this.state.debug) { if (this.state.debug.status === "stopped") this.dbgContinue(); } else void this.startDebug(); return; }
+      if (e.key === "F10" && this.state.debug?.status === "stopped") { e.preventDefault(); this.dbgStepOver(); return; }
+      if (e.key === "F11" && this.state.debug?.status === "stopped") { e.preventDefault(); if (e.shiftKey) this.dbgStepOut(); else this.dbgStepIn(); return; }
+    }
+    if (e.key === "F5" && e.shiftKey && this.state.debug) { e.preventDefault(); void this.stopDebug(); return; }
+    if (!mod) return; // Escape 는 위에서 처리됨
     const k = e.key.toLowerCase();
-    if (k === "p" && !e.shiftKey) { e.preventDefault(); this.setState(s => ({ quickOpen: !s.quickOpen, quickQuery: "", quickSel: 0 })); }
+    if (k === "p" && e.shiftKey) { e.preventDefault(); this.cancelClose("cmd"); this.setState(s => ({ cmdOpen: !s.cmdOpen, cmdQuery: "", cmdSel: 0 })); }
+    else if (k === "p" && !e.shiftKey) { e.preventDefault(); this.cancelClose("quick"); this.setState(s => ({ quickOpen: !s.quickOpen, quickQuery: "", quickSel: 0 })); }
+    else if (k === "t" && !e.shiftKey) { e.preventDefault(); this.cancelClose("sym"); this.openSymbolPalette(); }
+    else if (k === "f" && e.shiftKey) { e.preventDefault(); this.cancelClose("search"); this.setState(s => ({ searchOpen: !s.searchOpen, searchSel: 0 })); }
+    else if (k === "o" && e.shiftKey) { e.preventDefault(); this.triggerOutline(); }
     else if (k === "s" && e.shiftKey) { e.preventDefault(); void this.saveAll(); }
     else if (k === "n" && !e.shiftKey) { e.preventDefault(); void this.newFileAt(""); }
     else if (k === "n" && e.shiftKey) { e.preventDefault(); window.schutz.newWindow(); }
     else if (k === "o" && !e.shiftKey) { e.preventDefault(); void this.openProject(); }
-    else if (k === ",") { e.preventDefault(); this.setState({ settingsOpen: true }); }
+    else if (k === "g") { e.preventDefault(); this.triggerEditorAction("editor.action.gotoLine"); }
+    else if (k === "tab") { e.preventDefault(); this.cycleMru(e.shiftKey ? -1 : 1); }
+    else if (k === ",") { e.preventDefault(); this.openO({ settingsOpen: true }); }
     else if (k === "`") { e.preventDefault(); this.toggleTerm(); }
   };
 
+  /** Ctrl+Tab MRU 탭 순환 */
+  private _mruCommit: (() => void) | null = null;
+  cycleMru(dir: number) {
+    const mru = this._tabMRU.filter(r => this.isOpen(r));
+    if (mru.length < 2) return;
+    if (!this.state.mruOpen) {
+      this.setState({ mruOpen: true, mruSel: 1 });
+      // Ctrl 떼면 확정
+      const onUp = (ev: KeyboardEvent) => {
+        if (ev.key === "Control" || ev.key === "Meta") {
+          window.removeEventListener("keyup", onUp);
+          this._mruCommit = null;
+          const list = this._tabMRU.filter(r => this.isOpen(r));
+          const rel = list[this.state.mruSel % Math.max(1, list.length)];
+          this.setState({ mruOpen: false });
+          if (rel) this.openFile(rel);
+        }
+      };
+      this._mruCommit = () => window.removeEventListener("keyup", onUp);
+      window.addEventListener("keyup", onUp);
+    } else {
+      this.setState(st => ({ mruSel: (st.mruSel + dir + mru.length) % mru.length }));
+    }
+  }
+
+  /** 전역 텍스트 검색 실행 (디바운스는 호출측에서) */
+  private _searchSeq = 0;
+  private _shownQuery = ""; private _shownOpts = ""; // 표시된 결과가 어떤 query/opts 로 나온 것인지 — replace 표시-실행 불일치 방지
+  async runSearch(query: string) {
+    const ws = this.state.workspace;
+    const seq = ++this._searchSeq;
+    if (!ws || !window.schutz || query.trim().length < 2) {
+      this._shownQuery = ""; this._shownOpts = "";
+      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false });
+      return;
+    }
+    this.setState({ searchBusy: true });
+    const opts = { ...this.state.searchOpts }; // 이 검색이 쓴 옵션 캡처
+    try {
+      const r = await window.schutz.searchFiles(ws.root, query, { max: 500, ...opts });
+      if (seq !== this._searchSeq) return; // 최신 쿼리만 반영
+      this._shownQuery = query; this._shownOpts = JSON.stringify(opts);
+      this.setState({ searchResults: r.hits ?? [], searchBusy: false, searchTruncated: !!r.truncated, searchSel: 0 });
+    } catch {
+      if (seq !== this._searchSeq) return;
+      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false });
+    }
+  }
+
+  /** 파일 전체에서 찾아 바꾸기 */
+  async doReplaceAll() {
+    const ws = this.state.workspace;
+    const q = this.state.searchQuery;
+    if (!ws || !window.schutz || q.trim().length < 2) return;
+    // #9: 표시된 결과가 현재 query/opts 와 일치하고 검색이 끝났을 때만 — 아니면 치환 대상과 화면이 달라짐
+    if (this.state.searchBusy || this._shownQuery !== q || this._shownOpts !== JSON.stringify(this.state.searchOpts)) {
+      this.toast("error", t("sc3.replaceResultsStale")); return;
+    }
+    // #7: 열린 파일에 미저장 편집이 있으면 디스크 치환과 충돌(Save All 이 치환을 클로버 → 데이터 손실) → 먼저 저장 요구
+    const dirtyOpen = this.allOpen().filter(rel => this.state.paneDirty[rel] && !this.parseDiffKey(rel));
+    if (dirtyOpen.length) { this.toast("error", t("sc3.replaceSaveFirst", { files: dirtyOpen.slice(0, 6).join(", ") })); return; }
+    if (!window.confirm(t("sc3.replaceAllConfirm", { q, rep: this.state.replaceVal }))) return;
+    try {
+      const r = await window.schutz.replaceInFiles(ws.root, q, this.state.replaceVal, this.state.searchOpts);
+      this.toast("ok", t("sc3.replaceResult", { files: r.files, changed: r.changed }));
+      // 모든 non-dirty owned 모델 재로드 — 열린 탭뿐 아니라 preload(닫힌) 모델도 디스크 반영(#8: 나중에 열면 stale 방지). dirty 는 위에서 차단됨.
+      void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
+      this.setState(st => { const pv = { ...st.paneVer }; for (const p of this.allOpen(st)) pv[p] = (pv[p] ?? 0) + 1; return { paneVer: pv }; });
+      void this.runSearch(q);
+    } catch (e) { this.toast("error", t("sc3.replaceFailed") + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  /** 검색 히트로 이동 — 파일 열고 해당 라인으로 스크롤 */
+  jumpToHit(h: SearchHit) {
+    this.openFile(h.rel);
+    this.closeOverlay("search", { searchOpen: false });
+    this.revealInPane(h.rel, h.line, h.col);
+  }
+
+  // ── Ctrl+T 워크스페이스 심볼 이동 (LSP workspace/symbol) ──────────────────
+  private _symTimer: ReturnType<typeof setTimeout> | null = null;
+  private _extSearchT: ReturnType<typeof setTimeout> | null = null;
+  openSymbolPalette() {
+    if (!this.state.workspace) { this.toast("info", t("sc3.openProjectFirst")); return; }
+    this.openO({ symOpen: true, symQuery: "", symSel: 0, symResults: [], symLoading: false });
+  }
+  private runSymbolSearch(query: string) {
+    this.setState({ symQuery: query, symSel: 0 });
+    if (this._symTimer) clearTimeout(this._symTimer);
+    const q = query.trim();
+    if (!q) { this.setState({ symResults: [], symLoading: false }); return; }
+    this.setState({ symLoading: true });
+    this._symTimer = setTimeout(async () => {
+      try {
+        const raw = await lspClient.workspaceSymbols(q);
+        const results = lspConv.toWorkspaceSymbols(raw).slice(0, 200);
+        // 현재 쿼리와 여전히 일치할 때만 반영
+        if (this.state.symQuery.trim() === q) this.setState({ symResults: results, symLoading: false });
+      } catch { this.setState({ symResults: [], symLoading: false }); }
+    }, 180);
+  }
+  /** LSP file uri → 워크스페이스 상대경로 */
+  private uriToRel(uri: string): string | null {
+    const ws = this.state.workspace;
+    if (!ws) return null;
+    let p: string;
+    try { p = monaco.Uri.parse(uri).fsPath; } catch { return null; }
+    const root = ws.root.replace(/\\/g, "/").replace(/\/+$/, "");
+    const norm = p.replace(/\\/g, "/");
+    if (norm.toLowerCase().startsWith(root.toLowerCase() + "/")) return norm.slice(root.length + 1);
+    return norm.split("/").pop() || null;
+  }
+  jumpToSymbol(sym: { uri: string; range: import("monaco-editor").IRange }) {
+    const rel = this.uriToRel(sym.uri);
+    this.closeOverlay("sym", { symOpen: false });
+    if (!rel) return;
+    this.openFile(rel);
+    this.revealInPane(rel, sym.range.startLineNumber, sym.range.startColumn);
+  }
+
+  // ── 디버그 (DAP) ───────────────────────────────────────────────────────────
+  private dbgRelToAbs(rel: string): string {
+    const root = (this.state.workspace?.root ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+    return root + "/" + rel.replace(/\\/g, "/");
+  }
+  private dbgAbsToRel(abs: string): string | null {
+    const root = (this.state.workspace?.root ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+    const p = (abs ?? "").replace(/\\/g, "/");
+    if (root && p.toLowerCase().startsWith(root.toLowerCase() + "/")) return p.slice(root.length + 1);
+    return null;
+  }
+  /** 거터 클릭 → 브레이크포인트 토글 (실행 중이면 어댑터에도 반영) */
+  toggleBreakpoint = (rel: string, line: number) => {
+    // 갱신은 순수 updater 에서, IPC 부수효과는 완료 콜백에서 1회만 (StrictMode 이중 호출 대비)
+    let next: number[] = [];
+    this.setState(s => {
+      const cur = s.breakpoints[rel] ?? [];
+      next = cur.includes(line) ? cur.filter(l => l !== line) : [...cur, line].sort((a, b) => a - b);
+      return { breakpoints: { ...s.breakpoints, [rel]: next } };
+    }, () => { if (dap.isActive()) void dap.updateBreakpoints(this.dbgRelToAbs(rel), next); });
+  };
+  // MonacoPane 콜백 — 안정 참조(arrow property)로 두어 React.memo 가 불필요한 리렌더를 차단하게 한다
+  private handleDirtyChange = (rel: string, d: boolean) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }));
+  private handleStatus = (info: any) => this.setState({ statusInfo: info });
+  private handleInlineEdit = (rel: string, selection: string, instruction: string, range?: InlineRange) => void this.inlineEdit(rel, selection, instruction, range);
+
+  /** 현재 활성 파일(.py)을 디버그 실행 */
+  async startDebug() {
+    const ws = this.state.workspace;
+    const rel = this.state.active[this._focusSlot];
+    if (!ws || !rel) { this.toast("info", t("sc3.openDebugFile")); return; }
+    if (!rel.endsWith(".py")) { this.toast("info", t("sc3.pythonOnlyDebug")); return; }
+    if (dap.isActive()) await this.stopDebug();
+    const bpByPath: Record<string, number[]> = {};
+    for (const [r, lines] of Object.entries(this.state.breakpoints)) if (lines.length) bpByPath[this.dbgRelToAbs(r)] = lines;
+    this.setState({ debug: { status: "starting", threadId: null, frames: [], frameId: null, scopes: [], stoppedRel: null, stoppedLine: null }, debugConsole: [], leftTab: "debug" });
+    const res = await dap.launch("python", { program: this.dbgRelToAbs(rel), cwd: ws.root }, bpByPath, {
+      onStopped: (b) => void this.onDebugStopped(b),
+      onContinued: () => this.setState(s => ({ debug: s.debug ? { ...s.debug, status: "running", stoppedLine: null, stoppedRel: null } : null })),
+      onOutput: (cat, text) => this.setState(s => ({ debugConsole: [...s.debugConsole, (cat === "stderr" ? "⚠ " : "") + text].slice(-500) })),
+      onTerminated: () => { this.setState({ debug: null }); this.toast("info", t("sc3.debugSessionEnded")); },
+      onExited: (code) => this.setState(s => ({ debugConsole: [...s.debugConsole, t("sc3.processExited", { code })] })),
+    });
+    if (!res.ok) { this.setState({ debug: null }); this.toast("error", t("sc3.debugStartFailed") + (res.reason || "")); }
+    else this.setState(s => ({ debug: s.debug ? { ...s.debug, status: "running" } : null }));
+  }
+
+  private async onDebugStopped(body: dap.StoppedBody) {
+    const threadId = body.threadId ?? 1;
+    const raw = await dap.stackTrace(threadId);
+    const frames = raw.map((f: any) => ({ id: f.id, name: f.name, line: f.line, path: f.source?.path ?? "" }));
+    const top = frames[0];
+    const scopes = top ? await this.dbgLoadScopes(top.id) : [];
+    const stoppedRel = top ? this.dbgAbsToRel(top.path) : null;
+    const stoppedLine = top?.line ?? null;
+    if (stoppedRel) this.openFile(stoppedRel);
+    this.setState({ debug: { status: "stopped", threadId, frames, frameId: top?.id ?? null, scopes, stoppedRel, stoppedLine }, leftTab: "debug" });
+  }
+
+  private async dbgLoadScopes(frameId: number): Promise<DebugScope[]> {
+    const scopes = await dap.scopes(frameId);
+    const out: DebugScope[] = [];
+    for (const sc of scopes) {
+      const isLocal = /local/i.test(sc.name);
+      const vars = isLocal ? await dap.variables(sc.variablesReference) : [];
+      out.push({ name: sc.name, ref: sc.variablesReference, vars: vars.map((v: any) => ({ name: v.name, value: v.value, type: v.type, ref: v.variablesReference })), expanded: isLocal });
+    }
+    return out;
+  }
+
+  /** 콜스택 프레임 선택 → 해당 변수·위치로 */
+  async selectFrame(frameId: number) {
+    const s = this.state;
+    if (!s.debug) return;
+    const fr = s.debug.frames.find(f => f.id === frameId);
+    const scopes = await this.dbgLoadScopes(frameId);
+    const stoppedRel = fr ? this.dbgAbsToRel(fr.path) : s.debug.stoppedRel;
+    if (stoppedRel) this.openFile(stoppedRel);
+    this.setState(st => ({ debug: st.debug ? { ...st.debug, frameId, scopes, stoppedRel, stoppedLine: fr?.line ?? st.debug.stoppedLine } : null }));
+  }
+  async toggleScope(idx: number) {
+    const s = this.state;
+    if (!s.debug) return;
+    const scope = s.debug.scopes[idx];
+    if (!scope) return;
+    let vars = scope.vars;
+    if (!scope.expanded && vars.length === 0) { const v = await dap.variables(scope.ref); vars = v.map((x: any) => ({ name: x.name, value: x.value, type: x.type, ref: x.variablesReference })); }
+    this.setState(st => ({ debug: st.debug ? { ...st.debug, scopes: st.debug.scopes.map((sc, i) => i === idx ? { ...sc, expanded: !sc.expanded, vars } : sc) } : null }));
+  }
+
+  // ── 확장 ─────────────────────────────────────────────────────────────────
+  async reloadExtensions() {
+    if (!window.schutz) return;
+    const res = await extHost.loadExtensions({
+      toast: (k, m) => this.toast(k, m),
+      showPanel: (title, html) => this.openO({ extPanel: { title, html } }),
+      getActiveFile: () => this.state.active[this._focusSlot] || null,
+    });
+    // VS Code 확장(선언형) — 테마·스니펫·언어설정 적용
+    const vres = await vscodeExt.loadVscodeExtensions();
+    // 아이콘 테마 목록 수집
+    const raw = await window.schutz.extList();
+    const iconThemes: { extId: string; label: string; path: string }[] = [];
+    for (const e of raw) { if (e.kind === "vscode" && e.enabled) for (const it of (e.contributes?.iconThemes || [])) iconThemes.push({ extId: e.id, label: it.label || e.name, path: it.path }); }
+    iconTheme.setIconThemeChangeHandler(() => this.setState(s => ({ iconVer: s.iconVer + 1 })));
+    const list = await extHost.listExtensions();
+    this.setState({ extCommands: extHost.getExtCommands(), extList: list, extErrors: res.errors, extLimited: res.limited, extThemes: vres.themes, extIconThemes: iconThemes });
+    // TextMate 문법 연결 (있으면 VS Code급 하이라이팅) — 완료 후 테마 조율
+    await textmate.loadTextMateGrammars().catch(() => 0);
+    // 영속 선택 복원/조율: 가져온 에디터 테마 + 아이콘 테마 (재시작·재로드 후에도 유지)
+    this.applyEditorTheme(vres.themes);
+    const savedIcon = getActiveIconTheme();
+    if (savedIcon && !iconTheme.isIconThemeActive() && iconThemes.some(it => it.extId === savedIcon.extId && it.path === savedIcon.path)) {
+      const ok = await iconTheme.setIconTheme(savedIcon.extId, savedIcon.path, savedIcon.label);
+      if (ok) this.setState(s => ({ iconVer: s.iconVer + 1 }));
+    }
+    // 하드 오류(아무 기여도 못한 확장)만 빨간 토스트로. 선언형 기여가 살아있는 "기능 제한"은
+    // 확장 관리 패널에서만 차분히 안내(정상 동작하는 확장을 오류로 오인시키지 않음).
+    if (res.errors.length) {
+      console.error("[Schutz] 확장 오류:", res.errors);
+      this.toast("error", t("sc3.extErrorCount", { n: res.errors.length }) + res.errors.map(e => e.split(":")[0]).join(", "));
+    }
+  }
+  async applyIconTheme(th: { extId: string; label: string; path: string } | null) {
+    if (!th) { iconTheme.clearIconTheme(); setActiveIconTheme(null); this.toast("info", t("sc3.builtinIconUse")); this.forceUpdate(); return; }
+    const ok = await iconTheme.setIconTheme(th.extId, th.path, th.label);
+    if (ok) setActiveIconTheme({ extId: th.extId, path: th.path, label: th.label });
+    this.toast(ok ? "ok" : "error", ok ? t("sc3.iconThemeSet", { label: th.label }) : t("sc3.iconThemeFail"));
+    this.forceUpdate();
+  }
+  /** Open VSX 마켓플레이스 검색 (빈 쿼리면 인기 확장) */
+  async extMarketSearch(q: string) {
+    this.setState({ extSearch: q });
+    if (this._extSearchT) clearTimeout(this._extSearchT);
+    if (!window.schutz) return;
+    this.setState({ extBusy: true });
+    this._extSearchT = setTimeout(async () => {
+      try {
+        const r = await window.schutz!.openVsxSearch(q.trim());
+        if (this.state.extSearch.trim() !== q.trim()) return; // 쿼리 변경됨 → 무시
+        if (!r.ok) this.toast("error", t("sc3.marketSearchFailed") + (r.error || t("sc3.networkError")));
+        this.setState({ extResults: r.ok ? (r.extensions || []) : [], extBusy: false });
+      } catch (e) {
+        if (this.state.extSearch.trim() !== q.trim()) return;
+        this.toast("error", t("sc3.marketSearchFailed") + (e instanceof Error ? e.message : String(e)));
+        this.setState({ extResults: [], extBusy: false });
+      }
+    }, q.trim() ? 320 : 0);
+  }
+  /** 확장 상세(정보) 열기 — Open VSX 메타 + README */
+  async openExtDetail(namespace: string, name: string) {
+    if (!window.schutz) return;
+    this.openO({ extDetail: { namespace, name, displayName: name, loading: true }, extDetailBusy: true });
+    const r = await window.schutz.openVsxDetail(namespace, name);
+    if (r.ok) this.setState({ extDetail: r.detail, extDetailBusy: false });
+    else { this.setState({ extDetail: null, extDetailBusy: false }); this.toast("error", t("sc3.infoLoadFailed") + (r.error || "")); }
+  }
+  fmtCount(n: number): string {
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+    return String(n || 0);
+  }
+  async extInstall(namespace: string, name: string) {
+    if (!window.schutz) return;
+    const key = namespace + "." + name;
+    this.setState(s => ({ extInstalling: [...s.extInstalling, key] }));
+    const r = await window.schutz.vsixInstallOpenVsx(namespace, name);
+    this.setState(s => ({ extInstalling: s.extInstalling.filter(k => k !== key) }));
+    if (r.ok) { this.toast("ok", t("sc3.extInstalled", { name: r.name })); await this.reloadExtensions(); this.autoApplyInstalled(r.id || key); }
+    else this.toast("error", t("sc3.installFailed") + (r.error || ""));
+  }
+  /** 설치 직후 확장의 선언형 기여를 즉시 적용 — 테마·아이콘테마는 자동 활성화.
+   *  reloadExtensions 가 채운 extThemes/extIconThemes(둘 다 extId 보유)로 판정 — 확실한 신호. */
+  private async autoApplyInstalled(id: string) {
+    const th = this.state.extThemes.find(x => x.extId === id);
+    if (th) this.selectVsxTheme(th);
+    const it = this.state.extIconThemes.find(x => x.extId === id);
+    if (it) await this.applyIconTheme(it);
+    // 테마/아이콘이 아니면 문법 기여 여부만 원본 목록으로 확인해 안내
+    if (!th && !it && window.schutz) {
+      try {
+        const raw = await window.schutz.extList();
+        const ext = raw.find(e => e.id === id);
+        const grammars = (ext?.contributes as any)?.grammars;
+        if (Array.isArray(grammars) && grammars.length) this.toast("info", t("sc3.grammarApplied"));
+      } catch { /* ignore */ }
+    }
+  }
+  async toggleExtEnabled(id: string, enabled: boolean) {
+    if (!window.schutz) return;
+    await window.schutz.extSetEnabled(id, enabled);
+    await this.reloadExtensions();
+    this.toast("info", t("sc3.extToggled", { state: enabled ? t("sc3.enabled") : t("sc3.disabled") }));
+  }
+
+  private dbgTid(): number { return this.state.debug?.threadId ?? 1; }
+  dbgContinue = () => { this.setState(s => ({ debug: s.debug ? { ...s.debug, status: "running", stoppedLine: null, stoppedRel: null } : null })); void dap.cont(this.dbgTid()); };
+  dbgStepOver = () => void dap.next(this.dbgTid());
+  dbgStepIn = () => void dap.stepIn(this.dbgTid());
+  dbgStepOut = () => void dap.stepOut(this.dbgTid());
+  async stopDebug() { await dap.shutdown(); this.setState({ debug: null }); }
+
+  private _lastTabsRef: string[][] | null = null;
+  private _lastActiveRef: string[] | null = null;
   componentDidUpdate() {
+    // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
+    if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
+      this._lastTabsRef = this.state.tabs; this._lastActiveRef = this.state.active;
+      this.persistLayout();
+    }
     if (this._chat) {
       const sig = this.state.messages.map(m => m.text.length).join(",");
       if (sig !== this._chatSig) { this._chatSig = sig; this._chat.scrollTop = this._chat.scrollHeight; }
     }
-    this.state.panes.forEach(path => {
+    this.allOpen().forEach(path => {
       const el = this._paneRefs[path];
       if (!el) return;
       const doc = this.state.docs[path] || [];
@@ -1232,7 +2986,7 @@ export class App extends React.Component<{}, S> {
 
   render() {
     const s = this.state;
-    const stMap = { idle: "대기 중", thinking: "계획 수립 중…", tool: "동시 작업 중…", review: "검토 대기", stopped: "중지됨" };
+    const stMap = { idle: t("topstatus.idle"), thinking: t("topstatus.thinking"), tool: t("topstatus.tool"), review: t("topstatus.review"), stopped: t("topstatus.stopped") };
     const statusLabel = stMap[s.statusKey];
     const totIn = AGDEF.reduce((n, d) => n + s.agents[d.id].tin, 0);
     const totOut = AGDEF.reduce((n, d) => n + s.agents[d.id].tout, 0);
@@ -1247,36 +3001,56 @@ export class App extends React.Component<{}, S> {
     const closeMenus = () => this.setState({ openMenu: null, projOpen: false });
 
     return (
-      <div style={{ height: "100vh", minWidth: 1400, display: "flex", flexDirection: "column", background: "var(--bg-root)", color: "var(--fg)", fontFamily: SUIT, fontSize: 13, overflow: "hidden" }}>
+      <div style={{ height: "100vh", minWidth: 1400, display: "flex", flexDirection: "column", background: "var(--bg-root)", color: "var(--fg)", fontFamily: `var(--font-ui, ${SUIT})`, fontSize: 13, overflow: "hidden" }}>
         {anyMenuOpen && <div onClick={closeMenus} style={{ position: "fixed", inset: 0, zIndex: 40 }} />}
         {this.renderSettings()}
         {this.renderQuickOpen()}
+        {this.renderSymbolPalette()}
+        {this.renderExtPanel()}
+        {this.renderExtDetail()}
+        {this.renderAbout()}
+        {this.renderCommands()}
+        {this.renderMcp()}
+        {this.renderTour()}
+        {this.renderUsage()}
+        {this.renderKeybindings()}
+        {this.renderCommandPalette()}
+        {this.renderSearch()}
+        {this.renderAskClose()}
+        {this.renderToasts()}
+        {this.renderMru()}
         {s.ctxMenu && (
           <div onClick={() => this.setState({ ctxMenu: null })} onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: null }); }}
             style={{ position: "fixed", inset: 0, zIndex: 190 }}>
             <div onClick={e => e.stopPropagation()}
               style={{ position: "fixed", left: s.ctxMenu.x, top: s.ctxMenu.y, minWidth: 160, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 191 }}>
               {s.ctxMenu.isDir && (
-                <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.newFileAt(r); }}
-                  style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>새 파일</div>
+                <>
+                  <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.newFileAt(r); }}
+                    style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>{t("sc4.ctxNewFile")}</div>
+                  <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.newFolderAt(r); }}
+                    style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>{t("sc4.ctxNewFolder")}</div>
+                </>
               )}
               <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.renameAt(r); }}
-                style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>이름 바꾸기</div>
+                style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>{t("sc4.ctxRename")}</div>
+              <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.revealAt(r); }}
+                style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "var(--fg-code)" }}>{t("sc4.ctxReveal")}</div>
               <div className="hvMenuItem" onClick={() => { const r = s.ctxMenu!.rel; this.setState({ ctxMenu: null }); void this.deleteAt(r); }}
-                style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "#CE9A9A" }}>삭제</div>
+                style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: "#CE9A9A" }}>{t("sc4.ctxDelete")}</div>
             </div>
           </div>
         )}
 
         {/* ══ Header ══ */}
-        <div className="titlebar" style={{ flex: "none", height: 46, display: "flex", alignItems: "center", gap: 10, padding: window.schutz ? "0 150px 0 14px" : "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)", position: "relative", zIndex: 50 }}>
-          <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block" }} />
+        <div className="titlebar" style={{ flex: "none", height: 54, display: "flex", alignItems: "center", gap: 10, padding: window.schutz ? "2px 150px 0 14px" : "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)", position: "relative", zIndex: 50 }}>
+          <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 24, height: 24, display: "block", filter: "var(--logo-filter)" }} />
 
           {/* project switcher */}
           <div style={{ position: "relative" }}>
             <button className="hv06" onClick={() => this.setState(st => ({ projOpen: !st.projOpen, openMenu: null }))}
               style={{ height: 28, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: "var(--fg)", background: s.projOpen ? "var(--w07)" : "var(--w03)", border: "1px solid var(--w08)", borderRadius: 7, cursor: "pointer" }}>
-              {s.workspace ? s.workspace.name : (window.schutz ? "프로젝트 열기" : "schutz-core")}
+              {s.workspace ? s.workspace.name : (window.schutz ? t("sc4.projSwitcherOpen") : "schutz-core")}
               {s.workspace?.branch && (
                 <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--fg-sub2)", fontWeight: 400, fontFamily: MONO, background: "var(--w05)", borderRadius: 4, padding: "2px 7px 2px 5px" }}>
                   <GitBranchIcon />{s.workspace.branch}
@@ -1286,7 +3060,7 @@ export class App extends React.Component<{}, S> {
             </button>
             {s.projOpen && (
               <div style={{ position: "absolute", top: 33, left: 0, width: 250, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 6, zIndex: 100 }}>
-                <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>프로젝트</div>
+                <div style={{ padding: "4px 8px 6px", fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("sc4.projHeader")}</div>
                 {s.workspace ? (
                   <div className="hv05" onClick={closeMenus} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}>
                     <span style={{ flex: "none", width: 20, height: 20, borderRadius: 5, background: "var(--accent)", color: "var(--bg-root)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{s.workspace.name.slice(0, 1).toUpperCase()}</span>
@@ -1298,7 +3072,7 @@ export class App extends React.Component<{}, S> {
                     <span style={{ fontSize: 11, color: "var(--accent)" }}>✓</span>
                   </div>
                 ) : (
-                  <div style={{ padding: "4px 8px 8px", fontSize: 11, color: "var(--fg-dim2)" }}>열린 프로젝트가 없습니다.</div>
+                  <div style={{ padding: "4px 8px 8px", fontSize: 11, color: "var(--fg-dim2)" }}>{t("sc4.noOpenProject")}</div>
                 )}
                 {window.schutz && this.recents().filter(r => r.root !== s.workspace?.root).slice(0, 5).map(r => (
                   <div key={r.root} className="hv05" onClick={() => { this.setState({ projOpen: false }); void this.openWorkspacePath(r.root); }}
@@ -1312,7 +3086,7 @@ export class App extends React.Component<{}, S> {
                 ))}
                 <div style={{ height: 1, background: "var(--w07)", margin: "5px 6px" }} />
                 <div className="hv05" onClick={() => void this.openProject()} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, cursor: "pointer", fontSize: 12, color: "var(--fg-sub)" }}>
-                  프로젝트 열기…<div style={{ flex: 1 }} /><span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>⇧⌘O</span>
+                  {t("sc4.openProjectMenu")}<div style={{ flex: 1 }} /><span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>{accel("⌘O")}</span>
                 </div>
               </div>
             )}
@@ -1322,7 +3096,7 @@ export class App extends React.Component<{}, S> {
 
           {/* menu bar */}
           <div style={{ display: "flex", gap: 1 }}>
-            {MENUS.map(([k, label, items]) => {
+            {MENUS.map(([k, items]) => {
               const open = s.openMenu === k;
               return (
                 <div key={k} style={{ position: "relative" }}>
@@ -1331,42 +3105,52 @@ export class App extends React.Component<{}, S> {
                     onClick={() => this.setState(st => ({ openMenu: st.openMenu === k ? null : k, projOpen: false }))}
                     onMouseEnter={() => this.setState(st => (st.openMenu && st.openMenu !== k) ? { openMenu: k } as any : null)}
                     style={{ height: 26, padding: "0 10px", fontFamily: "inherit", fontSize: 12, color: open ? "var(--fg)" : "var(--fg-sub2)", background: open ? "var(--w07)" : "transparent", border: "none", borderRadius: 6, cursor: "pointer" }}>
-                    {label}
+                    {t("menu." + k)}
                   </button>
                   {open && (
-                    <div style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 5, zIndex: 100 }}>
+                    <div className="sz-drop" style={{ position: "absolute", top: 29, left: 0, minWidth: 215, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 5, zIndex: 100 }}>
                       {items.map((it, i) => it === null
                         ? <div key={"s" + i} style={{ height: 1, background: "var(--w07)", margin: "4px 6px" }} />
                         : (
                           <div key={"i" + i} className="hvMenuItem"
                             onClick={() => {
-                              if (it[0] === "프로젝트 열기…") { void this.openProject(); return; }
-                              if (it[0] === "설정…") { this.setState({ openMenu: null, settingsOpen: true }); return; }
-                              if (it[0] === "새 창") { window.schutz?.newWindow(); this.setState({ openMenu: null }); return; }
-                              if (it[0] === "모델 관리…") { this.setState({ openMenu: null, settingsOpen: true }); return; }
-                              if (it[0] === "사용량 대시보드") { this.setState({ openMenu: null }); this.handleSlash("/usage"); return; }
-                              if (it[0] === "새 파일") { this.setState({ openMenu: null }); void this.newFileAt(""); return; }
-                              if (it[0] === "저장") { this.setState({ openMenu: null }); void paneRegistry.focused?.save(); return; }
-                              if (it[0] === "모두 저장") { this.setState({ openMenu: null }); void this.saveAll(); return; }
-                              if (it[0] === "터미널") { this.setState({ openMenu: null }); this.toggleTerm(); return; }
-                              if (it[0] === "파일로 이동") { this.setState({ openMenu: null, quickOpen: true, quickQuery: "", quickSel: 0 }); return; }
-                              if (it[0] === "실행 취소") { this.setState({ openMenu: null }); this.editorAction("undo"); return; }
-                              if (it[0] === "다시 실행") { this.setState({ openMenu: null }); this.editorAction("redo"); return; }
-                              if (it[0] === "잘라내기") { this.setState({ openMenu: null }); this.editorAction("cut"); return; }
-                              if (it[0] === "복사") { this.setState({ openMenu: null }); this.editorAction("copy"); return; }
-                              if (it[0] === "붙여넣기") { this.setState({ openMenu: null }); this.editorAction("paste"); return; }
-                              if (it[0] === "찾기") { this.setState({ openMenu: null }); this.editorAction("find"); return; }
-                              if (it[0] === "단축키 목록") { this.setState({ openMenu: null }); this.schutzSay("/help", "단축키:\nCtrl+P 파일로 이동 · Ctrl+S 저장 · Ctrl+Shift+S 모두 저장 · Ctrl+N 새 파일 · Ctrl+` 터미널 · Ctrl+, 설정 · Ctrl+Shift+N 새 창 · Ctrl+F 찾기(에디터)"); return; }
-                              if (it[0] === "Schutz 정보") { this.setState({ openMenu: null }); this.schutzSay("정보", "Schutz v0.0.1 — AI 네이티브 IDE\ngithub.com/SchutzScript/Schutz"); return; }
-                              if (it[0] === "에디터 4분할") { this.setLayout(4); return; }
-                              if (it[0] === "에디터 2분할") { this.setLayout(2); return; }
-                              if (it[0] === "분할 해제") { this.setLayout(1); return; }
-                              this.setState({ openMenu: null });
+                              switch (it[0]) {
+                                case "file.openProject": void this.openProject(); return;
+                                case "file.settings": this.openO({ openMenu: null, settingsOpen: true }); return;
+                                case "file.newWindow": window.schutz?.newWindow(); this.setState({ openMenu: null }); return;
+                                case "file.new": this.setState({ openMenu: null }); void this.newFileAt(""); return;
+                                case "file.save": this.setState({ openMenu: null }); void paneRegistry.focused?.save(); return;
+                                case "file.saveAll": this.setState({ openMenu: null }); void this.saveAll(); return;
+                                case "ai.models": this.openO({ openMenu: null, settingsOpen: true }); return;
+                                case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
+                                case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
+                                case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
+                                case "view.split4": this.setLayout(4); return;
+                                case "view.split2": this.setLayout(2); return;
+                                case "view.splitReset": this.setLayout(1); return;
+                                case "view.format": this.setState({ openMenu: null }); void paneRegistry.focused?.editor.getAction("editor.action.formatDocument")?.run(); return;
+                                case "view.wordWrap": this.setState({ openMenu: null }); this.applyEditorPref({ wordWrap: !getEditorPrefs().wordWrap }); return;
+                                case "view.minimap": this.setState({ openMenu: null }); this.applyEditorPref({ minimap: !getEditorPrefs().minimap }); return;
+                                case "view.problems": this.setState({ openMenu: null, termOpen: true, termTab: "problems" }); return;
+                                case "nav.quickOpen": this.openO({ openMenu: null, quickOpen: true, quickQuery: "", quickSel: 0 }); return;
+                                case "nav.commandPalette": this.openO({ openMenu: null, cmdOpen: true, cmdQuery: "", cmdSel: 0 }); return;
+                                case "nav.symbol": this.setState({ openMenu: null }); this.triggerOutline(); return;
+                                case "edit.undo": this.setState({ openMenu: null }); this.editorAction("undo"); return;
+                                case "edit.redo": this.setState({ openMenu: null }); this.editorAction("redo"); return;
+                                case "edit.cut": this.setState({ openMenu: null }); this.editorAction("cut"); return;
+                                case "edit.copy": this.setState({ openMenu: null }); this.editorAction("copy"); return;
+                                case "edit.paste": this.setState({ openMenu: null }); this.editorAction("paste"); return;
+                                case "edit.find": this.setState({ openMenu: null }); this.editorAction("find"); return;
+                                case "help.replayTutorial": this.setState({ openMenu: null }); this.startTour(); return;
+                                case "help.keys": this.openO({ openMenu: null, keysOpen: true }); return;
+                                case "help.about": this.openO({ openMenu: null, aboutOpen: true }); return;
+                                default: this.setState({ openMenu: null });
+                              }
                             }}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-                            <span style={{ color: "var(--fg-code)" }}>{it[0]}</span>
+                            <span style={{ color: "var(--fg-code)" }}>{t("menu." + it[0])}</span>
                             <div style={{ flex: 1 }} />
-                            <span style={{ color: "var(--fg-dim)", fontSize: 10.5, fontFamily: MONO }}>{it[1]}</span>
+                            <span style={{ color: "var(--fg-dim)", fontSize: 10.5, fontFamily: MONO }}>{accel(it[1])}</span>
                           </div>
                         ))}
                     </div>
@@ -1377,11 +3161,19 @@ export class App extends React.Component<{}, S> {
           </div>
 
           <div style={{ flex: 1 }} />
-          <button className="hv07" title="파일로 이동 (Ctrl+P)" onClick={() => this.setState({ quickOpen: true, quickQuery: "", quickSel: 0 })} style={iconBtn}><SearchIcon /></button>
+          {(() => { const mcpRunning = s.mcpServers.filter(x => x.running).length; return (
+            <button data-tour="mcp" className="hv07" title={t("title.mcp")} onClick={() => this.openMcp()} style={{ ...iconBtn, position: "relative" }}>
+              <McpIcon size={14} color={mcpRunning > 0 ? "var(--accent-hi)" : "#6E776F"} />
+              {mcpRunning > 0 && (
+                <span style={{ position: "absolute", top: -2, right: -2, minWidth: 13, height: 13, padding: "0 3px", borderRadius: 7, background: "var(--accent)", color: "var(--on-accent)", fontSize: 8.5, fontWeight: 800, lineHeight: "13px", textAlign: "center" }}>{mcpRunning}</span>
+              )}
+            </button>
+          ); })()}
+          <button className="hv07" title={t("title.goToFile")} onClick={() => this.openO({ quickOpen: true, quickQuery: "", quickSel: 0 })} style={iconBtn}><SearchIcon /></button>
           <span style={{ width: 1, height: 16, background: "var(--w08)" }} />
           <span style={{ fontSize: 12, color: "var(--fg-sub2)", whiteSpace: "nowrap" }}>{statusLabel}</span>
           <span style={{ width: 1, height: 16, background: "var(--w08)" }} />
-          <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Σ 입력 {totIn.toLocaleString()} · 출력 {totOut.toLocaleString()} · {costText}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("sc4.tokenSummary", { in: totIn.toLocaleString(), out: totOut.toLocaleString(), cost: costText })}</span>
         </div>
 
         {/* progress beam */}
@@ -1394,53 +3186,78 @@ export class App extends React.Component<{}, S> {
 
           {/* tool rail */}
           <div style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
-            <button className="hv07" title="프로젝트" onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: !flow ? "rgba(143,168,147,.16)" : "transparent" }}>
-              <FolderIcon color={!flow ? "var(--accent-hi)" : "#6E776F"} />
+            <button data-tour="rail-tree" className="hv07" title={t("sc4.railProject")} onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: s.leftTab === "tree" ? "rgba(143,168,147,.16)" : "transparent" }}>
+              <FolderIcon color={s.leftTab === "tree" ? "var(--accent-hi)" : "#6E776F"} />
             </button>
-            <button className="hv07" title="작업 흐름" onClick={() => this.setState({ leftTab: "flow" })} style={{ ...railBtn, background: flow ? "rgba(143,168,147,.16)" : "transparent" }}>
+            <button className="hv07" title={t("sc4.railFlow")} onClick={() => this.setState({ leftTab: "flow" })} style={{ ...railBtn, background: flow ? "rgba(143,168,147,.16)" : "transparent" }}>
               <FlowIcon color={flow ? "var(--accent-hi)" : "#6E776F"} />
             </button>
+            <button className="hv07" title={t("sc4.railGit")} onClick={() => { this.setState({ leftTab: "git" }); void this.loadGit(); }} style={{ ...railBtn, position: "relative", background: s.leftTab === "git" ? "rgba(143,168,147,.16)" : "transparent" }}>
+              <GitBranchIcon color={s.leftTab === "git" ? "var(--accent-hi)" : "#6E776F"} />
+              {(() => { const c = (s.git?.staged.length ?? 0) + (s.git?.unstaged.length ?? 0) + (s.git?.untracked.length ?? 0); return c > 0 ? <span style={{ position: "absolute", top: 3, right: 3, minWidth: 13, height: 13, borderRadius: 7, background: "var(--accent)", color: "var(--on-accent)", fontSize: 8.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{c}</span> : null; })()}
+            </button>
+            <button className="hv07" title={t("sc4.railDebug")} onClick={() => this.setState({ leftTab: "debug" })} style={{ ...railBtn, position: "relative", background: s.leftTab === "debug" ? "rgba(143,168,147,.16)" : "transparent" }}>
+              <DebugIcon />
+              {s.debug && <span style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: 4, background: s.debug.status === "stopped" ? "#E0B052" : "#5DA06E" }} />}
+            </button>
+            <button className="hv07" title={t("sc4.railExt")} onClick={() => { this.setState({ leftTab: "ext" }); void this.reloadExtensions(); if (!this.state.extResults.length) void this.extMarketSearch(""); }} style={{ ...railBtn, background: s.leftTab === "ext" ? "rgba(143,168,147,.16)" : "transparent" }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={s.leftTab === "ext" ? "var(--accent-hi)" : "#6E776F"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h6v3a2 2 0 1 0 4 0V3h2v6h-3a2 2 0 1 0 0 4h3v6h-6v-3a2 2 0 1 0-4 0v3H3v-6h3a2 2 0 1 0 0-4H3V3h6z" /></svg>
+            </button>
             <div style={{ width: 22, height: 1, background: "var(--w07)", margin: "4px 0" }} />
-            <button className="hv07" title="터미널" onClick={() => this.toggleTerm()} style={{ ...railBtn, background: s.termOpen ? "rgba(143,168,147,.16)" : "transparent" }}>
+            <button className="hv07" title={t("sc4.railTerminal")} onClick={() => this.toggleTerm()} style={{ ...railBtn, background: s.termOpen ? "rgba(143,168,147,.16)" : "transparent" }}>
               <TermIcon />
             </button>
             <div style={{ flex: 1 }} />
-            <button className="hv07" title="설정" onClick={() => this.setState({ settingsOpen: true })} style={railBtn}><GearIcon /></button>
+            <button className="hv07" title={t("sc4.railSettings")} onClick={() => this.openO({ settingsOpen: true })} style={railBtn}><GearIcon /></button>
           </div>
 
           {/* ── Left column ── */}
-          <div style={{ flex: "none", width: 272, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
-            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{flow ? "작업 흐름" : "프로젝트"}</div>
+          <div style={{ flex: "none", width: s.leftW, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
+            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
-            {flow ? this.renderFlow() : this.renderTree()}
+            <div key={s.leftTab} className="sz-in" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
+            </div>
             {this.renderChat()}
           </div>
+          {/* 좌 리사이즈 핸들 */}
+          <div onMouseDown={e => this.startResize("left", e)} title={t("sc4.resizeHandle")}
+            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
 
           {/* ── Editor grid ── */}
-          <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)" }}>
+          <div data-tour="editor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)" }}>
             {this.renderPanes()}
           </div>
 
+          {/* 우 리사이즈 핸들 */}
+          <div onMouseDown={e => this.startResize("right", e)} title={t("sc4.resizeHandle")}
+            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
           {/* ── Right column ── */}
-          <div style={{ flex: "none", width: 336, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
+          <div data-tour="agents" style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
             {this.renderAgents()}
             {this.renderReview()}
           </div>
         </div>
 
-        {/* ══ Terminal dock ══ */}
-        {s.termOpen && this.renderTerm()}
+        {/* ══ Terminal dock ══ 최초 오픈 후엔 계속 마운트 유지(접어도 셸·스크롤백 보존), 접힘은 display:none 로 처리 */}
+        {(s.termOpen || this._termMounted) && this.renderTerm()}
 
         {/* ══ Status bar ══ */}
         <div style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "var(--bg-panel)", borderTop: "1px solid var(--w06)", fontSize: 11, color: "var(--fg-dim)" }}>
-          {s.workspace?.branch && (
-            <span style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)" }}>
-              <GitBranchIcon size={10} sw={1.6} />{s.workspace.branch}
-            </span>
+          {(s.git?.branch || s.workspace?.branch) && (
+            <button className="hv08" onClick={() => { this.setState({ leftTab: "git" }); void this.loadGit(); }}
+              style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)", background: "transparent", border: "none", cursor: "pointer", height: 18, padding: "0 5px", borderRadius: 4 }}>
+              <GitBranchIcon size={10} sw={1.6} />{s.git?.branch ?? s.workspace?.branch}
+              {s.git?.upstream && (s.git.behind > 0 || s.git.ahead > 0) && (
+                <span style={{ color: "var(--fg-dim)" }}>{s.git.behind > 0 ? " ↓" + s.git.behind : ""}{s.git.ahead > 0 ? " ↑" + s.git.ahead : ""}</span>
+              )}
+            </button>
           )}
-          <span style={{ color: pendingFiles > 0 ? "#CCB491" : "var(--fg-dim)" }}>{pendingFiles > 0 ? "검토 대기 " + pendingFiles + "개 파일" : "변경 없음"}</span>
+          {(() => { const c = (s.git?.staged.length ?? 0) + (s.git?.unstaged.length ?? 0) + (s.git?.untracked.length ?? 0); return c > 0
+            ? <span style={{ color: "#CCB491" }}>{t("status.changes", { n: c })}</span>
+            : <span style={{ color: pendingFiles > 0 ? "#CCB491" : "var(--fg-dim)" }}>{pendingFiles > 0 ? t("status.pendingReview", { n: pendingFiles }) : t("status.noChanges")}</span>; })()}
           <div style={{ flex: 1 }} />
-          <span>에이전트 {AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length + "/" + AGDEF.length + " 활성"}</span>
+          <span>{t("status.agentsActive", { active: AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length, total: AGDEF.length })}</span>
           <span style={{ fontFamily: MONO }}>{costText}</span>
           {s.statusInfo && (
             <>
@@ -1451,30 +3268,200 @@ export class App extends React.Component<{}, S> {
           <span style={{ width: 1, height: 13, background: "var(--w07)" }} />
           <button className="hv08" onClick={() => this.toggleTerm()}
             style={{ height: 19, padding: "0 8px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.termOpen ? "var(--accent-hi)" : "var(--fg-dim)", background: s.termOpen ? "rgba(143,168,147,.14)" : "transparent", border: "none" }}>
-            <TermStatusIcon />터미널
+            <TermStatusIcon />{t("status.terminal")}
           </button>
         </div>
       </div>
     );
   }
 
+  // ── 좌 패널: 소스 컨트롤 (Git) ──
+  private gitCodeColor(code: string): string {
+    if (code === "A" || code === "?") return "#8BB292";
+    if (code === "M") return "#CCB491";
+    if (code === "D") return "#C97B7B";
+    if (code === "R" || code === "C") return "#8FA8C0";
+    return "var(--fg-sub2)";
+  }
+
+  renderGit() {
+    const s = this.state;
+    const g = s.git;
+    if (!window.schutz) {
+      return <div style={{ flex: 1, padding: "10px 16px", fontSize: 12, color: "var(--fg-dim)" }}>{t("gitp.desktopOnly")}</div>;
+    }
+    if (!s.workspace) {
+      return <div style={{ flex: 1, padding: "10px 16px", fontSize: 12, color: "var(--fg-dim)" }}>{t("gitp.openProjectFirst")}</div>;
+    }
+    if (g?.notRepo) {
+      return <div style={{ flex: 1, padding: "10px 16px", fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.7 }}>{t("gitp.notRepo")}<br />{t("gitp.notRepoRunPrefix")}<span style={{ fontFamily: MONO, color: "var(--fg-sub2)" }}>git init</span>{t("gitp.notRepoRunSuffix")}</div>;
+    }
+    const staged = g?.staged ?? [];
+    const changes = [...(g?.unstaged ?? []), ...(g?.untracked ?? []).map(u => ({ ...u, code: "?" }))];
+    const untrackedSet = new Set((g?.untracked ?? []).map(u => u.path));
+
+    const row = (e: GitEntry, section: "staged" | "changes") => {
+      const isUntracked = untrackedSet.has(e.path);
+      const name = e.path.split("/").pop();
+      return (
+        <div key={section + ":" + e.path} className="hv04"
+          onClick={() => this.openDiff(e.path, section === "staged", isUntracked)}
+          style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: "0 10px 0 14px", cursor: "pointer" }}>
+          <span style={{ flex: "none", width: 12, textAlign: "center", fontFamily: MONO, fontSize: 11, fontWeight: 700, color: this.gitCodeColor(e.code) }}>{e.code}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.path}>{name}</span>
+          <span style={{ fontSize: 10, color: "var(--fg-dim3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : ""}</span>
+          <div style={{ flex: 1 }} />
+          {section === "changes" ? (
+            <>
+              <button className="hvDim" title={t("gitp.discardChange")} disabled={this.state.gitBusy} onClick={ev => { ev.stopPropagation(); void this.gitDiscard(e.path, isUntracked); }}
+                style={gitIconBtn}>↩</button>
+              <button className="hvDim" title={t("gitp.stage")} disabled={this.state.gitBusy} onClick={ev => { ev.stopPropagation(); void this.gitDo("stage", { path: e.path }); }}
+                style={gitIconBtn}>＋</button>
+            </>
+          ) : (
+            <button className="hvDim" title={t("gitp.unstage")} disabled={this.state.gitBusy} onClick={ev => { ev.stopPropagation(); void this.gitDo("unstage", { path: e.path }); }}
+              style={gitIconBtn}>−</button>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div style={{ flex: 1.15, minHeight: 0, display: "flex", flexDirection: "column", borderBottom: "1px solid var(--w06)" }}>
+        {/* 브랜치 + 동기화 */}
+        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "2px 14px 8px", position: "relative" }}>
+          <button className="hv05" title={t("gitp.switchCreateBranch")} onClick={() => this.setState(st => ({ branchOpen: !st.branchOpen }))}
+            style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 11, color: "var(--fg-sub)", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px", borderRadius: 5 }}>
+            <GitBranchIcon size={11} color="var(--accent-hi)" />{g?.branch ?? "—"}<span style={{ fontSize: 7, opacity: .7 }}>▾</span>
+          </button>
+          {g?.upstream && (g.ahead > 0 || g.behind > 0) && (
+            <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)" }}>{g.behind > 0 ? "↓" + g.behind : ""}{g.ahead > 0 ? " ↑" + g.ahead : ""}</span>
+          )}
+          {s.branchOpen && (
+            <>
+              <div onClick={() => this.setState({ branchOpen: false })} style={{ position: "fixed", inset: 0, zIndex: 90 }} />
+              <div className="sz-drop" style={{ position: "absolute", top: 28, left: 14, zIndex: 91, minWidth: 220, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 9, boxShadow: "var(--shadow-pop)", padding: 5 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)", padding: "3px 8px 5px" }}>{t("gitp.switchBranch")}</div>
+                <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                  {s.gitBranches.map(b => (
+                    <div key={b} className="hv04" onClick={() => void this.gitCheckout(b)}
+                      style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 9px", borderRadius: 6, cursor: "pointer", background: b === g?.branch ? "var(--accent-soft)" : "transparent" }}>
+                      <span style={{ flex: "none", width: 10, color: "var(--accent)", fontSize: 10 }}>{b === g?.branch ? "✓" : ""}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg)" }}>{b}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 5, padding: "6px 6px 3px", borderTop: "1px solid var(--w06)", marginTop: 4 }}>
+                  <input value={s.newBranch} onChange={e => this.setState({ newBranch: e.target.value })}
+                    onKeyDown={e => { if (e.key === "Enter") void this.gitCreateBranch(); }}
+                    placeholder={t("gitp.newBranchName")}
+                    style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 6, height: 26, padding: "0 8px", color: "var(--fg)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
+                  <button className="hvAccent" onClick={() => void this.gitCreateBranch()}
+                    style={{ flex: "none", height: 26, padding: "0 9px", fontSize: 10.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("gitp.create")}</button>
+                </div>
+              </div>
+            </>
+          )}
+          <div style={{ flex: 1 }} />
+          <button className="hvDim" title={t("common.refresh")} onClick={() => void this.loadGit()} style={gitIconBtn} disabled={s.gitBusy}>⟳</button>
+          <button className="hv05" title={g?.upstream ? t("gitp.push") : t("gitp.setUpstreamAndPush")} disabled={s.gitBusy || !(g && g.ahead > 0)}
+            onClick={() => void this.gitDo("push", { setUpstream: !g?.upstream })}
+            style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontFamily: "inherit", cursor: (g && g.ahead > 0) ? "pointer" : "default", borderRadius: 6, color: (g && g.ahead > 0) ? "var(--fg-sub)" : "var(--fg-dim3)", background: "transparent", border: "1px solid var(--w12)" }}>
+            {t("gitp.push")}{g && g.ahead > 0 ? " ↑" + g.ahead : ""}
+          </button>
+        </div>
+
+        {/* 커밋 박스 */}
+        <div style={{ flex: "none", padding: "0 14px 10px" }}>
+          <textarea value={s.gitMsg} placeholder={t("gitp.commitPlaceholder")}
+            onChange={e => this.setState({ gitMsg: e.target.value })}
+            onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void this.gitCommit(); } }}
+            style={{ width: "100%", minHeight: 48, resize: "vertical", background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8, padding: "8px 10px", color: "var(--fg)", fontSize: 12, fontFamily: SUIT, outline: "none" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            <button className="hvAccent" disabled={s.gitBusy || staged.length === 0 || !s.gitMsg.trim()}
+              onClick={() => void this.gitCommit()}
+              style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: (staged.length && s.gitMsg.trim()) ? "pointer" : "default", borderRadius: 8, color: "var(--on-accent)", background: (staged.length && s.gitMsg.trim()) ? "var(--accent)" : "var(--w10)", border: "none" }}>
+              ✓ {t("gitp.commit")}{staged.length ? " (" + staged.length + ")" : ""}
+            </button>
+          </div>
+          {s.gitError && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6, lineHeight: 1.5 }}>⚠️ {s.gitError}</div>}
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingBottom: 10 }}>
+          {staged.length > 0 && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px 3px" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("gitp.staged")}</span>
+                <span style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{staged.length}</span>
+                <div style={{ flex: 1 }} />
+                <button className="hvDim" title={t("gitp.unstageAll")} disabled={s.gitBusy} onClick={() => void this.gitUnstageAll()} style={{ ...gitIconBtn, width: "auto", padding: "0 6px", fontSize: 10 }}>−</button>
+              </div>
+              {staged.map(e => row(e, "staged"))}
+            </>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px 3px" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("gitp.changes")}</span>
+            <span style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{changes.length}</span>
+            <div style={{ flex: 1 }} />
+            {changes.length > 0 && <button className="hvDim" title={t("gitp.stageAll")} disabled={s.gitBusy} onClick={() => void this.gitDo("stageAll")} style={{ ...gitIconBtn, width: "auto", padding: "0 6px", fontSize: 11 }}>＋</button>}
+          </div>
+          {changes.length === 0 && staged.length === 0 && (
+            <div style={{ padding: "8px 16px", fontSize: 11.5, color: "var(--fg-dim2)" }}>{t("gitp.noChanges")}</div>
+          )}
+          {changes.map(e => row(e, "changes"))}
+
+          {/* 커밋 히스토리 */}
+          {s.gitLog.length > 0 && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 14px 3px", borderTop: "1px solid var(--w06)", marginTop: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("gitp.history")}</span>
+              </div>
+              {s.gitLog.slice(0, 40).map(c => (
+                <div key={c.hash} className="hv04" title={`${c.author} · ${c.date}`}
+                  style={{ display: "flex", alignItems: "baseline", gap: 7, padding: "3px 14px", cursor: "default" }}>
+                  <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "var(--accent)" }}>{c.hash}</span>
+                  <span style={{ fontSize: 11, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.subject}</span>
+                  <div style={{ flex: 1 }} />
+                  <span style={{ flex: "none", fontSize: 9.5, color: "var(--fg-dim2)", whiteSpace: "nowrap" }}>{c.date}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  async gitUnstageAll() {
+    // git reset -q HEAD -- . (전체 스테이지 해제)
+    await this.gitDo("unstage", { path: "." });
+  }
+
+  async gitDiscard(path: string, untracked: boolean) {
+    if (!window.confirm(t("sc4.discardConfirm", { path }))) return;
+    await this.gitDo("discard", { path, untracked });
+    void this.refreshWorkspace();
+  }
+
   // ── 좌 패널: 작업 흐름 ──
   renderFlow() {
     const s = this.state;
     const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "#8BB292"], stopped: ["–", "#C97B7B"] };
+    const doneLabel = t("flowtree.done"); // 아래 s.tools.map(t => …) 에서 t 가 섀도잉되므로 미리 계산
+    const editVerb = t("sc3.verbEdit"); // verb 는 번역값(1973) → 편집 하이라이트 비교를 리터럴 대신 번역값으로
     return (
       <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 14px 14px", position: "relative", borderBottom: "1px solid var(--w06)" }}>
         <div style={{ position: "absolute", left: 21, top: 0, bottom: 0, width: 2, background: "linear-gradient(180deg,#3B463F,#7D9183,#3B463F)", opacity: .4 }} />
         {s.plan.length === 0 && (
-          <div style={{ position: "relative", paddingLeft: 22, fontSize: 12, color: "var(--fg-dim2)", marginTop: 8 }}>요청을 보내면 계획과 실행 과정이 이곳에 기록됩니다.</div>
+          <div style={{ position: "relative", paddingLeft: 22, fontSize: 12, color: "var(--fg-dim2)", marginTop: 8 }}>{t("flowtree.emptyState")}</div>
         )}
         {s.plan.length > 0 && (
           <div style={{ position: "relative", marginTop: 6 }}>
             <span style={{ position: "absolute", left: 4, top: 8, width: 8, height: 8, borderRadius: "50%", background: "var(--accent)" }} />
             <div style={{ marginLeft: 22, background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>계획</span>
-                <span style={{ fontSize: 10, color: "var(--accent)", background: "rgba(143,168,147,.1)", borderRadius: 3, padding: "0 6px", lineHeight: "15px" }}>Claude · 관리자</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("flowtree.planLabel")}</span>
+                <span style={{ fontSize: 10, color: "var(--accent)", background: "rgba(143,168,147,.1)", borderRadius: 3, padding: "0 6px", lineHeight: "15px" }}>{t("flowtree.planAuthor")}</span>
               </div>
               {s.plan.map(p => {
                 const [icon, iconColor] = planIcon[p.st] || ["○", "var(--fg-dim2)"];
@@ -1503,12 +3490,12 @@ export class App extends React.Component<{}, S> {
               <span style={{ position: "absolute", left: 5, top: 5, width: 6, height: 6, borderRadius: "50%", background: d.color }} />
               <div style={{ marginLeft: 22, display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
-                <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, padding: "0 6px", lineHeight: "16px", borderRadius: 3, color: t.verb === "편집" ? "#CCB491" : "#A3B5A6", background: t.verb === "편집" ? "rgba(196,168,130,.1)" : "rgba(125,145,131,.12)" }}>{t.verb}</span>
+                <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, padding: "0 6px", lineHeight: "16px", borderRadius: 3, color: t.verb === editVerb ? "#CCB491" : "#A3B5A6", background: t.verb === editVerb ? "rgba(196,168,130,.1)" : "rgba(125,145,131,.12)" }}>{t.verb}</span>
                 <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-sub)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.path.split("/").pop()}</span>
                 <div style={{ flex: 1 }} />
                 {t.st === "run"
                   ? <span style={{ ...spinner("var(--accent)", "rgba(143,168,147,.25)"), flex: "none" }} />
-                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55" }}>{t.note || "완료"}</span>}
+                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55" }}>{t.note || doneLabel}</span>}
               </div>
             </div>
           );
@@ -1524,48 +3511,54 @@ export class App extends React.Component<{}, S> {
     if (window.schutz && !s.workspace) {
       return (
         <div style={{ flex: 1.15, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, borderBottom: "1px solid var(--w06)", padding: "0 20px" }}>
-          <span style={{ fontSize: 12, color: "var(--fg-dim)", textAlign: "center", lineHeight: 1.7 }}>아직 열린 프로젝트가 없습니다.</span>
+          <span style={{ fontSize: 12, color: "var(--fg-dim)", textAlign: "center", lineHeight: 1.7 }}>{t("flowtree.noProject")}</span>
           <button className="hvAccent" onClick={() => void this.openProject()}
-            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>프로젝트 열기…</button>
+            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("flowtree.openProject")}</button>
         </div>
       );
     }
     // 실제 워크스페이스가 열려 있으면 실파일 트리
     if (s.workspace) {
       const ws = s.workspace;
+      const collapsed = s.collapsed;
+      // 접힘 판정 — 항목의 조상 경로만 검사(O(depth))해 O(N·M) 전체 스캔 회피
+      const isHidden = (rel: string) => {
+        const parts = rel.split("/");
+        let acc = "";
+        for (let i = 0; i < parts.length - 1; i++) { acc = acc ? acc + "/" + parts[i] : parts[i]; if (collapsed[acc]) return true; }
+        return false;
+      };
       return (
         <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid var(--w06)" }}>
           <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{ws.name.toUpperCase()}</div>
           {ws.entries.map(en => {
             const pad = 16 + en.depth * 14;
-            // 접힌 상위 디렉터리 아래 항목은 숨김
-            const hidden = Object.keys(s.collapsed).some(c => s.collapsed[c] && en.rel !== c && en.rel.startsWith(c + "/"));
-            if (hidden) return null;
+            if (isHidden(en.rel)) return null;
             if (en.dir) {
               const isCollapsed = !!s.collapsed[en.rel];
               return (
-                <div key={en.rel} className="hv04" onClick={() => this.setState(st => ({ collapsed: { ...st.collapsed, [en.rel]: !st.collapsed[en.rel] } }))}
+                <div key={en.rel} className="hv04 sz-row-in" onClick={() => this.setState(st => ({ collapsed: { ...st.collapsed, [en.rel]: !st.collapsed[en.rel] } }))}
                   onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: true } }); }}
                   style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer" }}>
-                  <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}>{isCollapsed ? "▸" : "▾"}</span>
+                  <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8, display: "inline-block", transform: isCollapsed ? "rotate(0deg)" : "rotate(90deg)", transition: "transform var(--dur) var(--ease)" }}>▸</span>
                   <span style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
                 </div>
               );
             }
-            const inPane = s.panes.includes(en.rel);
+            const inPane = this.isOpen(en.rel, s);
             const dirty = s.paneDirty[en.rel];
             return (
-              <div key={en.rel} className="hv04" onClick={() => this.openFile(en.rel)}
+              <div key={en.rel} className="hv04 sz-row-in" onClick={() => this.openFile(en.rel)}
                 onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: false } }); }}
-                style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
-                <span style={{ flex: "none", fontSize: 9, width: 8 }}></span>
+                style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
+                <FileIcon rel={en.rel} size={14} />
                 <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
                 <div style={{ flex: 1 }} />
                 {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
               </div>
             );
           })}
-          {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "var(--fg-dim2)" }}>… 항목이 많아 일부만 표시합니다</div>}
+          {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "var(--fg-dim2)" }}>{t("flowtree.truncated")}</div>}
         </div>
       );
     }
@@ -1574,7 +3567,7 @@ export class App extends React.Component<{}, S> {
     const fileRow = (path: string, name: string, pad: number) => {
       const lock = lockOf(path);
       const pend = pendOf(path);
-      const inPane = s.panes.includes(path);
+      const inPane = this.isOpen(path, s);
       return (
         <div key={path} className="hv04" onClick={() => this.openFile(path)}
           style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
@@ -1622,25 +3615,25 @@ export class App extends React.Component<{}, S> {
   renderChat() {
     const s = this.state;
     return (
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div data-tour="chat" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
-          대화
+          {t("chat.title")}
           <div style={{ flex: 1 }} />
           {window.schutz && s.cliAgents.claude?.ok && s.workspace && !s.running && (
-            <button className="hv05" title="이 폴더의 최근 Claude 세션을 이어서 진행"
-              onClick={() => this.runCliTurn("claude", "직전 작업을 이어서 계속 진행해줘.", true)}
-              style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontWeight: 500, letterSpacing: 0, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--accent)", background: "rgba(143,168,147,.08)", border: "1px solid rgba(143,168,147,.3)" }}>↻ 이어가기</button>
+            <button className="hv05" title={t("chat.continueTitle")}
+              onClick={() => this.runCliTurn("claude", t("chat.continuePrompt"), true)}
+              style={{ height: 22, padding: "0 9px", fontSize: 10.5, fontWeight: 500, letterSpacing: 0, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--accent)", background: "rgba(143,168,147,.08)", border: "1px solid rgba(143,168,147,.3)" }}>↻ {t("chat.continue")}</button>
           )}
           {s.running && (
             <button className="hvRed2" onClick={() => this.stopRun()}
               style={{ height: 22, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 500, letterSpacing: 0, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#C98A8A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.3)" }}>
-              <span style={{ width: 7, height: 7, borderRadius: 1.5, background: "#C98A8A" }} />중지
+              <span style={{ width: 7, height: 7, borderRadius: 1.5, background: "#C98A8A" }} />{t("chat.stop")}
             </button>
           )}
         </div>
         <div ref={el => { this._chat = el; }} style={{ flex: 1, overflowY: "auto", padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
           {s.messages.map(m => (
-            <div key={m.id} style={{ display: "flex", gap: 8 }}>
+            <div key={m.id} className="sz-in" style={{ display: "flex", gap: 8 }}>
               <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
               <div style={{ minWidth: 0 }}>
                 {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: "var(--accent)", marginBottom: 2 }}>{m.who}</div>}
@@ -1652,21 +3645,67 @@ export class App extends React.Component<{}, S> {
             </div>
           ))}
         </div>
-        <div style={{ flex: "none", padding: "10px 12px", borderTop: "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
-          <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#4D5D53)" : "var(--w10)", transition: "background .4s ease" }}>
-            {(() => {
-              const list = this.slashList();
-              if (!list.length) return null;
-              const sel = Math.min(s.slashSel, list.length - 1);
+        {window.schutz && s.workspace && (
+          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", position: "relative", borderTop: "1px solid var(--w06)" }}>
+            <button className="hv05" title={t("chat.attachFileTitle")} onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}
+              style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachFile")}</button>
+            <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
+              style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachSelection")}</button>
+            {s.attach.map((a, i) => (
+              <span key={i} style={{ display: "flex", alignItems: "center", gap: 4, height: 21, padding: "0 4px 0 8px", fontSize: 10.5, fontFamily: MONO, borderRadius: 6, color: "var(--accent-hi)", background: "var(--accent-soft)", border: "1px solid var(--w08)" }}>
+                {a.kind === "selection" ? "✂" : "@"} {a.label}
+                <button className="hvDim" onClick={() => this.removeAttach(i)} style={{ width: 15, height: 15, fontSize: 9, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
+              </span>
+            ))}
+            {s.attachPickerOpen && (() => {
+              const q = s.attachQuery.toLowerCase();
+              const files = (s.workspace?.entries ?? []).filter(e => !e.dir && (!q || e.rel.toLowerCase().includes(q))).slice(0, 10);
               return (
-                <div style={{ position: "absolute", bottom: 58, left: 12, right: 12, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 60, maxHeight: 220, overflowY: "auto" }}>
-                  {list.map((c, i) => (
+                <div className="sz-drop" style={{ position: "absolute", bottom: 28, left: 12, right: 12, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 60, maxHeight: 240, overflowY: "auto" }}>
+                  <input autoFocus value={s.attachQuery} onChange={e => this.setState({ attachQuery: e.target.value })}
+                    onKeyDown={e => { if (e.key === "Escape") this.setState({ attachPickerOpen: false }); else if (e.key === "Enter" && files[0]) this.addFileAttach(files[0].rel); }}
+                    placeholder={t("chat2.fileNamePlaceholder")}
+                    style={{ width: "100%", background: "var(--bg-root)", border: "none", borderBottom: "1px solid var(--w08)", height: 32, padding: "0 10px", color: "var(--fg)", fontSize: 12, fontFamily: SUIT, outline: "none", marginBottom: 4 }} />
+                  {files.length === 0 && <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--fg-dim)" }}>{t("chat2.noMatchingFiles")}</div>}
+                  {files.map(f => (
+                    <div key={f.rel} onMouseDown={ev => { ev.preventDefault(); this.addFileAttach(f.rel); }}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 9px", borderRadius: 6, cursor: "pointer" }} className="hv04">
+                      <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)" }}>{f.rel.split("/").pop()}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.rel}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        <div style={{ flex: "none", padding: "10px 12px", borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
+          <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
+            {(() => {
+              const models = this.modelPalette();
+              const list = models.length ? [] : this.slashList();
+              const len = models.length || list.length;
+              if (!len) return null;
+              const sel = Math.min(s.slashSel, len - 1);
+              return (
+                <div className="sz-drop" style={{ position: "absolute", bottom: 58, left: 12, right: 12, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 60, maxHeight: 260, overflowY: "auto" }}>
+                  {models.length ? models.map((m, i) => (
+                    <div key={m.agent + m.modelId}
+                      onMouseDown={ev => { ev.preventDefault(); this.applyModelFromPalette(m.agent, m.modelId); }}
+                      onMouseEnter={() => this.setState({ slashSel: i })}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
+                      <span style={{ flex: "none", width: 10, color: "var(--accent)", fontSize: 11 }}>{m.current ? "●" : ""}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", fontWeight: 600 }}>{m.modelId}</span>
+                      <span style={{ fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{m.label}</span>
+                      <span style={{ flex: "none", fontSize: 9.5, color: m.color, border: `1px solid ${m.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{m.badge}</span>
+                    </div>
+                  )) : list.map((c, i) => (
                     <div key={c.origin + c.cmd}
                       onMouseDown={ev => { ev.preventDefault(); this.setState({ input: c.cmd + (c.cmd === "/model" ? " " : "") }, () => { if (c.cmd !== "/model") this.send(); }); }}
                       onMouseEnter={() => this.setState({ slashSel: i })}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
                       <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", fontWeight: 600 }}>{c.cmd}</span>
-                      <span style={{ fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{c.desc}</span>
+                      <span style={{ fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{t(c.desc)}</span>
                       <span style={{ flex: "none", fontSize: 9.5, color: ORIGIN_COLOR[c.origin], border: `1px solid ${ORIGIN_COLOR[c.origin]}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{ORIGIN_LABEL[c.origin]}</span>
                     </div>
                   ))}
@@ -1674,192 +3713,240 @@ export class App extends React.Component<{}, S> {
               );
             })()}
             <input value={s.input}
-              onChange={e => this.setState({ input: e.target.value, slashSel: 0 })}
+              onChange={e => { const val = e.target.value; this.setState({ input: val, slashSel: 0 }); if (/^\/model/.test(val)) this.ensureModelsFetched(); }}
               onKeyDown={e => {
-                const list = this.slashList();
-                if (list.length) {
-                  const sel = Math.min(s.slashSel, list.length - 1);
-                  if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ slashSel: (sel + 1) % list.length }); return; }
-                  if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ slashSel: (sel - 1 + list.length) % list.length }); return; }
-                  if (e.key === "Tab") { e.preventDefault(); this.setState({ input: list[sel].cmd + " " }); return; }
-                  if (e.key === "Enter" && s.input !== list[sel].cmd && list[sel].cmd.startsWith(s.input)) {
-                    e.preventDefault();
-                    this.setState({ input: list[sel].cmd }, () => this.send());
-                    return;
+                const models = this.modelPalette();
+                const list = models.length ? [] : this.slashList();
+                const len = models.length || list.length;
+                if (len) {
+                  const sel = Math.min(s.slashSel, len - 1);
+                  if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ slashSel: (sel + 1) % len }); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ slashSel: (sel - 1 + len) % len }); return; }
+                  if (models.length) {
+                    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); this.applyModelFromPalette(models[sel].agent, models[sel].modelId); return; }
+                  } else {
+                    if (e.key === "Tab") { e.preventDefault(); this.setState({ input: list[sel].cmd + " " }); return; }
+                    if (e.key === "Enter" && s.input !== list[sel].cmd && list[sel].cmd.startsWith(s.input)) {
+                      e.preventDefault();
+                      this.setState({ input: list[sel].cmd }, () => this.send());
+                      return;
+                    }
                   }
                 }
                 if (e.key === "Enter") this.send();
               }}
-              placeholder="요청 입력 · /명령 (Enter)"
+              placeholder={t("chat.inputPlaceholder")}
               style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, height: 34, padding: "0 13px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none", display: "block" }} />
           </div>
-          <button className="hvAccent" onClick={() => this.send()}
-            style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: "pointer", borderRadius: 9, color: "var(--bg-root)", background: "var(--accent)", border: "none", fontWeight: 700 }}>↑</button>
+          {(() => {
+            const canSend = (!!this.state.input.trim() || this.state.attach.length > 0) && !this.state.running;
+            return (
+              <button className="hvAccent" onClick={() => this.send()} disabled={!canSend} title={this.state.running ? t("chat.sending") : t("chat.send")}
+                style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 9, color: "var(--bg-root)", background: "var(--accent)", border: "none", fontWeight: 700 }}>↑</button>
+            );
+          })()}
         </div>
       </div>
     );
   }
 
-  // ── 에디터 그리드 ──
+  // ── 에디터 그리드 (슬롯 × 탭) ──
+  private _lineColors: Record<string, [string, string]> = {
+    typing: ["rgba(125,145,131,.1)", ""],
+    fresh: ["rgba(196,168,130,.16)", "#C4A882"],
+    pending: ["rgba(125,145,131,.07)", ""],
+    removed: ["rgba(201,123,123,.08)", "#C97B7B"],
+    accepted: ["rgba(139,178,146,.13)", "#8BB292"],
+    base: ["transparent", "transparent"],
+  };
+
   renderPanes() {
     const s = this.state;
-    const n = s.panes.length;
-    const slots: (string | null)[] = [...s.panes.slice(0, s.layout)];
-    while (slots.length < s.layout) slots.push(null);
-
-    const lineColors: Record<string, [string, string]> = {
-      typing: ["rgba(125,145,131,.1)", ""],
-      fresh: ["rgba(196,168,130,.16)", "#C4A882"],
-      pending: ["rgba(125,145,131,.07)", ""],
-      removed: ["rgba(201,123,123,.08)", "#C97B7B"],
-      accepted: ["rgba(139,178,146,.13)", "#8BB292"],
-      base: ["transparent", "transparent"],
-    };
-
-    return slots.map((path, si) => {
-      if (!path) {
+    return Array.from({ length: s.layout }, (_, si) => {
+      const tabsHere = s.tabs[si] ?? [];
+      const activeRel = s.active[si] ?? "";
+      if (tabsHere.length === 0 || !activeRel) {
         return (
-          <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
+          <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
+            onMouseDown={() => { this._focusSlot = si; }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--fg-dim3)" }}>
               {window.schutz && !s.workspace ? (
                 <>
-                  <img src="./assets/logo-t.png" alt="" style={{ width: 40, height: 40, opacity: .25 }} />
-                  <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>프로젝트를 열어 시작하세요</span>
+                  <img src="./assets/logo-t.png" alt="" style={{ width: 40, height: 40, opacity: .3, filter: "var(--logo-filter)" }} />
+                  <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>{t("misc.openProjectToStart")}</span>
                   <button className="hvAccent" onClick={() => void this.openProject()}
-                    style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>폴더 열기</button>
+                    style={{ marginTop: 4, height: 30, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("misc.openFolder")}</button>
                 </>
               ) : (
                 <>
                   <span style={{ fontSize: 20 }}>▢</span>
-                  <span style={{ fontSize: 11 }}>빈 편집 창 · 탐색기에서 파일을 열 수 있습니다</span>
+                  <span style={{ fontSize: 11 }}>{t("misc.emptyEditorHint")}</span>
                 </>
               )}
             </div>
           </div>
         );
       }
-
-      // 실제 워크스페이스 파일 → Monaco 편집 페인
-      if (s.workspace && !s.docs[path]) {
-        const dirty = s.paneDirty[path];
-        return (
-          <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
-            <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 9, padding: "0 14px", borderBottom: "1px solid var(--w05)" }}>
-              <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: dirty ? "#CCB491" : "var(--fg-dim2)" }} />
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
-              <div style={{ flex: 1 }} />
-              <span style={{ flex: "none", display: "flex", alignItems: "center", height: 19, padding: "0 8px", borderRadius: 10, fontSize: 10.5, whiteSpace: "nowrap", color: dirty ? "#CCB491" : "#535B55", background: dirty ? "rgba(196,168,130,.1)" : "var(--w04)" }}>{dirty ? "수정됨" : "✓"}</span>
-              {n > 1 && (
-                <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
-              )}
-            </div>
-            <MonacoPane
-              key={path + ":" + (s.paneVer[path] ?? 0)}
-              root={s.workspace.root}
-              rel={path}
-              onDirtyChange={(rel, d) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }))}
-              onStatus={info => this.setState({ statusInfo: info })}
-            />
-          </div>
-        );
-      }
-
-      const doc = s.docs[path] || [];
-      const isMd = path.endsWith(".md");
-      const agColor = this.agentColorFor(path) || "#7D9183";
-      const editing = doc.some(l => l.kind === "typing" || l.kind === "fresh");
-      const nOpen = this.openHunks(path).length;
-      let inspText: string, inspColor: string, inspBg: string;
-      if (editing) { inspText = "작성 중…"; inspColor = "#A3B5A6"; inspBg = "rgba(125,145,131,.12)"; }
-      else if (nOpen > 0) { inspText = "검토 " + nOpen + "곳"; inspColor = "#CCB491"; inspBg = "rgba(196,168,130,.1)"; }
-      else { inspText = "✓"; inspColor = "#535B55"; inspBg = "var(--w04)"; }
-      const lock = AGDEF.find(d => s.agents[d.id].file === path);
-
-      const hunkInfo: Record<string, { active: boolean; open: boolean }> = {};
-      doc.forEach(l => {
-        if (!l.hunk) return;
-        const h = hunkInfo[l.hunk] || (hunkInfo[l.hunk] = { active: false, open: false });
-        if (l.kind === "typing" || l.kind === "fresh") h.active = true;
-        if (l.kind === "pending" || l.kind === "removed") h.open = true;
-      });
-      const headSeen: Record<string, boolean> = {};
-      let num = 0;
-
+      const diffMeta = this.parseDiffKey(activeRel);
+      const realFile = !!(s.workspace && !s.docs[activeRel] && !diffMeta);
+      const isImg = realFile && isImage(activeRel);
+      const isMdPrev = realFile && activeRel.endsWith(".md") && !!s.mdPreview[activeRel];
+      const isReal = realFile && !isImg && !isMdPrev;
       return (
-        <div key={path} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}>
-          <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 9, padding: "0 14px", borderBottom: "1px solid var(--w05)" }}>
-            <span style={{ flex: "none", width: 7, height: 7, borderRadius: "50%", background: this.agentColorFor(path) || "var(--fg-dim2)" }} />
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
-            {lock && (
-              <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: lock.color, border: `1px solid ${lock.color}50`, borderRadius: 4, padding: "0 6px", lineHeight: "16px" }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: lock.color, animation: "szPulse 1.1s ease-in-out infinite" }} />{lock.name} 작업 중
-              </span>
-            )}
-            <div style={{ flex: 1 }} />
-            <span style={{ flex: "none", display: "flex", alignItems: "center", height: 19, padding: "0 8px", borderRadius: 10, fontSize: 10.5, whiteSpace: "nowrap", color: inspColor, background: inspBg }}>{inspText}</span>
-            {n > 1 && (
-              <button className="hvDim" onClick={() => this.closePane(path)} style={{ width: 20, height: 20, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
-            )}
-          </div>
-          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-            <div ref={el => { this._paneRefs[path] = el; }} style={{ position: "absolute", inset: 0, overflow: "auto", padding: "10px 0 50px", fontFamily: MONO }}>
-              {doc.map(l => {
-                const removed = l.kind === "removed";
-                if (!removed) num++;
-                const colorDef = lineColors[l.kind] || lineColors.base;
-                const rowBg = colorDef[0];
-                const barColor = (l.kind === "typing" || l.kind === "pending") ? agColor : colorDef[1];
-                const marked = ["pending", "removed", "fresh", "typing"].includes(l.kind);
-                const isHead = l.hunk && marked && !headSeen[l.hunk];
-                if (isHead) headSeen[l.hunk!] = true;
-                const chip = isHead && s.chips[l.hunk!] ? s.chips[l.hunk!] : null;
-                const info = l.hunk ? hunkInfo[l.hunk] : null;
-                const actions = !!(isHead && info && info.open && !info.active);
-                const hk = l.hunk!;
-                return (
-                  <div key={l.id} style={{ position: "relative", display: "flex", alignItems: "flex-start", minHeight: 20, background: rowBg, transition: "background .7s ease" }}>
-                    <div style={{ flex: "none", width: 46, textAlign: "right", paddingRight: 10, fontSize: 10.5, lineHeight: "20px", color: l.kind === "base" ? "var(--fg-dim3)" : "var(--fg-sub2)", userSelect: "none" }}>{removed ? "" : String(num)}</div>
-                    <div style={{ flex: "none", width: 2.5, borderRadius: 2, alignSelf: "stretch", margin: "1px 0", background: barColor }} />
-                    <div style={{ paddingLeft: 14, whiteSpace: "pre", lineHeight: "20px", fontSize: 12, color: "var(--fg-code)", textDecoration: removed ? "line-through" : "none", opacity: removed ? 0.5 : 1 }}>
-                      {this.hl(l.text, isMd)}
-                      {l.kind === "typing" && <span style={{ display: "inline-block", width: 2, height: 13, marginLeft: 1, background: agColor, verticalAlign: -2, animation: "szBlink 1s steps(1) infinite" }} />}
-                      {chip && (
-                        <span style={{ marginLeft: 14, fontFamily: SUIT, fontSize: 10, color: "#93A896", background: "rgba(125,145,131,.12)", borderRadius: 3, padding: "1px 6px", opacity: chip.op, transition: "opacity .9s ease", whiteSpace: "nowrap", verticalAlign: 1 }}>{chip.text}</span>
-                      )}
-                    </div>
-                    {actions && (
-                      <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
-                        <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#9DC4A3", background: "transparent", border: "none" }}>✓ 수락</button>
-                        <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
-                        <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>✕ 거절</button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+        <div key={"slot" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
+          onMouseDown={() => { this._focusSlot = si; }}>
+          {this.renderTabStrip(si, tabsHere, activeRel)}
+          {diffMeta && s.workspace ? (
+            <DiffPane
+              key={activeRel + ":" + (s.paneVer[diffMeta.path] ?? 0)}
+              root={s.workspace.root}
+              rel={diffMeta.path}
+              staged={diffMeta.staged}
+              untracked={diffMeta.untracked}
+            />
+          ) : isImg ? (
+            <ImagePane key={activeRel + ":" + (s.paneVer[activeRel] ?? 0)} root={s.workspace!.root} rel={activeRel} />
+          ) : isMdPrev ? (
+            <MarkdownPane key={activeRel + ":md:" + (s.paneVer[activeRel] ?? 0)} root={s.workspace!.root} rel={activeRel} />
+          ) : isReal ? (
+            <MonacoPane
+              key={activeRel + ":" + (s.paneVer[activeRel] ?? 0)}
+              root={s.workspace!.root}
+              rel={activeRel}
+              onDirtyChange={this.handleDirtyChange}
+              onStatus={this.handleStatus}
+              onInlineEdit={this.handleInlineEdit}
+              breakpoints={s.breakpoints[activeRel]}
+              stoppedLine={s.debug?.stoppedRel === activeRel ? s.debug.stoppedLine : null}
+              onToggleBreakpoint={this.toggleBreakpoint}
+            />
+          ) : this.renderDemoBody(activeRel)}
         </div>
       );
     });
   }
 
+  /** 슬롯 탭 바 */
+  renderTabStrip(si: number, tabsHere: string[], activeRel: string) {
+    const s = this.state;
+    const lock = AGDEF.find(d => s.agents[d.id].file === activeRel);
+    return (
+      <div style={{ flex: "none", height: 34, display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--w05)", background: "var(--bg-panel)" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "stretch", overflowX: "auto", minWidth: 0 }}>
+          {tabsHere.map(rel => {
+            const on = rel === activeRel;
+            const closingTab = s.closingTabs.includes(si + ":" + rel);
+            const dm = this.parseDiffKey(rel);
+            const dirty = !dm && s.paneDirty[rel];
+            const name = dm ? (dm.path.split("/").pop() + " ⇆") : rel.split("/").pop();
+            return (
+              <div key={rel} className={"hv04 " + (closingTab ? "sz-tab-out" : "sz-tab-in")} title={dm ? dm.path + " (diff)" : rel}
+                draggable={!closingTab}
+                onDragStart={() => { this._dragTab = { slot: si, rel }; }}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); this.reorderTab(si, rel); }}
+                onMouseDown={e => { e.stopPropagation(); if (closingTab) return; this._focusSlot = si; this.selectTab(si, rel); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 8px 0 11px", cursor: "pointer", minWidth: 0, maxWidth: 200, borderRight: "1px solid var(--w04)", background: on ? "var(--bg-editor)" : "transparent", transition: "background var(--dur) var(--ease)" }}>
+                {this.parseDiffKey(rel) ? <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: on ? "var(--accent)" : "var(--fg-dim3)" }} /> : <FileIcon rel={rel} size={13} />}
+                <span style={{ fontFamily: MONO, fontSize: 11.5, color: on ? "var(--fg)" : "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
+                <button className="hvDim" title={t("sc4.closeTab")}
+                  onMouseDown={e => { e.stopPropagation(); this.closeTab(si, rel); }}
+                  style={{ flex: "none", width: 17, height: 17, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+        {activeRel.endsWith(".md") && !this.parseDiffKey(activeRel) && s.workspace && (
+          <button className="hv05" title={t("editor.previewTitle")}
+            onClick={() => this.setState(st => ({ mdPreview: { ...st.mdPreview, [activeRel]: !st.mdPreview[activeRel] } }))}
+            style={{ flex: "none", alignSelf: "center", height: 20, marginRight: 8, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.mdPreview[activeRel] ? "var(--on-accent)" : "var(--fg-sub)", background: s.mdPreview[activeRel] ? "var(--accent)" : "var(--w05)", border: "none" }}>
+            {s.mdPreview[activeRel] ? t("editor.code") : t("editor.preview")}
+          </button>
+        )}
+        {lock && (
+          <span style={{ flex: "none", alignSelf: "center", display: "flex", alignItems: "center", gap: 5, marginRight: 10, fontSize: 10, color: lock.color, border: `1px solid ${lock.color}50`, borderRadius: 4, padding: "0 6px", lineHeight: "16px" }}>
+            <span style={{ width: 5, height: 5, borderRadius: "50%", background: lock.color, animation: "szPulse 1.1s ease-in-out infinite" }} />{t("sc4.agentWorking", { name: lock.name })}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  /** 데모(웹 프리뷰)·에이전트 diff 문서 본문 렌더 */
+  renderDemoBody(path: string) {
+    const s = this.state;
+    const lineColors = this._lineColors;
+    const doc = s.docs[path] || [];
+    const isMd = path.endsWith(".md");
+    const agColor = this.agentColorFor(path) || "#7D9183";
+    const hunkInfo: Record<string, { active: boolean; open: boolean }> = {};
+    doc.forEach(l => {
+      if (!l.hunk) return;
+      const h = hunkInfo[l.hunk] || (hunkInfo[l.hunk] = { active: false, open: false });
+      if (l.kind === "typing" || l.kind === "fresh") h.active = true;
+      if (l.kind === "pending" || l.kind === "removed") h.open = true;
+    });
+    const headSeen: Record<string, boolean> = {};
+    let num = 0;
+    return (
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        <div ref={el => { this._paneRefs[path] = el; }} style={{ position: "absolute", inset: 0, overflow: "auto", padding: "10px 0 50px", fontFamily: MONO }}>
+          {doc.map(l => {
+            const removed = l.kind === "removed";
+            if (!removed) num++;
+            const colorDef = lineColors[l.kind] || lineColors.base;
+            const rowBg = colorDef[0];
+            const barColor = (l.kind === "typing" || l.kind === "pending") ? agColor : colorDef[1];
+            const marked = ["pending", "removed", "fresh", "typing"].includes(l.kind);
+            const isHead = l.hunk && marked && !headSeen[l.hunk];
+            if (isHead) headSeen[l.hunk!] = true;
+            const chip = isHead && s.chips[l.hunk!] ? s.chips[l.hunk!] : null;
+            const info = l.hunk ? hunkInfo[l.hunk] : null;
+            const actions = !!(isHead && info && info.open && !info.active);
+            const hk = l.hunk!;
+            return (
+              <div key={l.id} style={{ position: "relative", display: "flex", alignItems: "flex-start", minHeight: 20, background: rowBg, transition: "background .7s ease", animation: l.kind === "fresh" ? "szFlash .7s var(--ease)" : undefined }}>
+                <div style={{ flex: "none", width: 46, textAlign: "right", paddingRight: 10, fontSize: 10.5, lineHeight: "20px", color: l.kind === "base" ? "var(--fg-dim3)" : "var(--fg-sub2)", userSelect: "none" }}>{removed ? "" : String(num)}</div>
+                <div style={{ flex: "none", width: 2.5, borderRadius: 2, alignSelf: "stretch", margin: "1px 0", background: barColor }} />
+                <div style={{ paddingLeft: 14, whiteSpace: "pre", lineHeight: "20px", fontSize: 12, color: "var(--fg-code)", textDecoration: removed ? "line-through" : "none", opacity: removed ? 0.5 : 1 }}>
+                  {this.hl(l.text, isMd)}
+                  {l.kind === "typing" && <span style={{ display: "inline-block", width: 2, height: 13, marginLeft: 1, background: agColor, verticalAlign: -2, animation: "szBlink 1s steps(1) infinite" }} />}
+                  {chip && (
+                    <span style={{ marginLeft: 14, fontFamily: SUIT, fontSize: 10, color: "#93A896", background: "rgba(125,145,131,.12)", borderRadius: 3, padding: "1px 6px", opacity: chip.op, transition: "opacity .9s ease", whiteSpace: "nowrap", verticalAlign: 1 }}>{chip.text}</span>
+                  )}
+                </div>
+                {actions && (
+                  <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
+                    <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#9DC4A3", background: "transparent", border: "none" }}>{t("sc4.accept")}</button>
+                    <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
+                    <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>{t("sc4.reject")}</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   // ── 우 패널: 에이전트 ──
   renderAgents() {
     const s = this.state;
-    const astMap: Record<string, [string, string]> = { idle: ["대기", "var(--fg-dim)"], plan: ["계획 수립 중", "#A3B5A6"], edit: ["작업 중", "#A3B5A6"], review: ["완료 · 검토 대기", "#C4A882"], stop: ["중지됨", "#C98A8A"] };
+    const astMap: Record<string, [string, string]> = { idle: [t("agent.statusIdle"), "var(--fg-dim)"], plan: [t("agent.statusPlan"), "#A3B5A6"], edit: [t("agent.statusEdit"), "#A3B5A6"], review: [t("agent.statusReview"), "#C4A882"], stop: [t("agent.statusStop"), "#C98A8A"] };
     return (
       <div style={{ flex: "none", borderBottom: "1px solid var(--w06)" }}>
         <div className="hvHead" onClick={() => this.setState(st => ({ agentsOpen: !st.agentsOpen }))}
           style={{ height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", cursor: "pointer", userSelect: "none" }}>
-          <span style={{ fontSize: 8.5, width: 10 }}>{s.agentsOpen ? "▾" : "▸"}</span>에이전트
-          <span style={{ fontSize: 10.5, fontWeight: 400, letterSpacing: 0, color: "var(--fg-dim2)" }}>{s.agentsOpen ? "동시 작업 · 파일 락 격리" : ""}</span>
+          <span style={{ fontSize: 8.5, width: 10, display: "inline-block", transform: s.agentsOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform var(--dur) var(--ease)" }}>▸</span>{t("agent.title")}
+          <span style={{ fontSize: 10.5, fontWeight: 400, letterSpacing: 0, color: "var(--fg-dim2)" }}>{s.agentsOpen ? t("agent.subtitle") : ""}</span>
         </div>
         {s.agentsOpen && (
-          <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="sz-in" style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
             {window.schutz && AGDEF.every(d => this.modelOf(d.id) === null) && (
               <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "2px 2px 4px", lineHeight: 1.6 }}>
-                연결된 에이전트가 없습니다. 설정(⚙) 또는 메뉴 AI → 모델 관리…에서 로그인하세요.
+                {t("agent.noneConnected")}
               </div>
             )}
             {AGDEF.filter(d => !window.schutz || this.modelOf(d.id) !== null).map(d => {
@@ -1871,16 +3958,31 @@ export class App extends React.Component<{}, S> {
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
                     {(() => { const m = this.modelOf(d.id); return m
                       ? <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{m}</span>
-                      : <span style={{ fontSize: 9.5, color: "var(--fg-dim2)", border: "1px solid var(--w08)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>미연결</span>; })()}
-                    {d.mgr && <span style={{ fontSize: 9.5, color: "var(--bg-root)", background: d.color, borderRadius: 3, padding: "0 5px", lineHeight: "15px", fontWeight: 700 }}>관리자</span>}
+                      : <span style={{ fontSize: 9.5, color: "var(--fg-dim2)", border: "1px solid var(--w08)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("agent.notConnected")}</span>; })()}
+                    {(() => {
+                      const isMgr = getManagerId() === d.id;
+                      const connected = this.modelOf(d.id) !== null;
+                      if (isMgr) return <span style={{ fontSize: 9.5, color: "var(--bg-root)", background: d.color, borderRadius: 3, padding: "0 5px", lineHeight: "15px", fontWeight: 700 }}>{t("agent.manager")}</span>;
+                      if (connected) return (
+                        <button className="hv07" title={t("agent.setManagerTitle")} onClick={() => { setManagerId(d.id); this.forceUpdate(); }}
+                          style={{ fontSize: 9.5, color: "var(--fg-dim)", background: "transparent", border: "1px solid var(--w10)", borderRadius: 3, padding: "0 5px", lineHeight: "14px", cursor: "pointer", fontFamily: "inherit" }}>{t("agent.setManager")}</button>
+                      );
+                      return null;
+                    })()}
                     <div style={{ flex: 1 }} />
                     {(a.status === "edit" || a.status === "plan") && <span style={{ ...spinner(d.color, d.color + "40"), flex: "none" }} />}
-                    <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: stColor }}>{stText}</span>
+                    <span key={a.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: stColor, background: stColor + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{stText}</span>
+                    {(a.status === "edit" || a.status === "plan") && (
+                      <button className="hvRed2" title={t("agent.stopAgentTitle")} onClick={() => this.stopAgent(d.id)}
+                        style={{ flex: "none", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "#C98A8A", background: "transparent", border: "none" }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 1.5, background: "#C98A8A" }} />
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: a.file ? d.color : "var(--fg-dim3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file ?? "—"}</span>
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>{this.isSubscription(d.id) ? "구독" : "$" + a.cost.toFixed(3)}</span></span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>{this.isSubscription(d.id) ? t("agent.subscription") : "$" + a.cost.toFixed(3)}</span></span>
                   </div>
                 </div>
               );
@@ -1895,37 +3997,38 @@ export class App extends React.Component<{}, S> {
   renderProposals() {
     const s = this.state;
     const pstMap: Record<string, [string, string]> = {
-      pending: ["검토 대기", "#C4A882"], accepted: ["수락됨", "#8BB292"],
-      rejected: ["거절됨", "#C97B7B"], failed: ["적용 실패", "#C97B7B"],
+      pending: [t("misc.statusPending"), "#C4A882"], accepted: [t("misc.statusAccepted"), "#8BB292"],
+      rejected: [t("misc.statusRejected"), "#C97B7B"], failed: [t("misc.statusFailed"), "#C97B7B"],
     };
     const pending = s.proposals.filter(p => p.status === "pending").length;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>변경 검토</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{t("agent.review")}</span>
           {s.proposals.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "var(--w06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.proposals.length}</span>}
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>Claude에게 작업을 요청하면 편집 제안이 여기에 표시됩니다.</div>}
+          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>{t("agent.reviewEmpty")}</div>}
           {pending > 1 && (
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>모두 수락</button>
-              <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>모두 거절</button>
+              <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("misc.acceptAll")}</button>
+              <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("misc.rejectAll")}</button>
             </div>
           )}
           {s.proposals.map(p => {
             const [sl, sc] = pstMap[p.status];
             return (
-              <div key={p.id} style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
-                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "var(--accent)", zIndex: 2 }} />
+              <div key={p.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
+                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "#8BB292" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
                 <div style={{ padding: "10px 13px 9px 16px" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
                     <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "var(--accent)", border: `1px solid ${(this.agDef(p.agent)?.color ?? "var(--accent)") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: sc }}>{sl}</span>
+                    {p.auto && <span style={{ flex: "none", fontSize: 9.5, color: "var(--accent)", background: "var(--accent-soft)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("misc.auto")}</span>}
+                    <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.rationale}</div>
+                  <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
                   {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
                 </div>
                 <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", maxHeight: 180, overflow: "auto", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
@@ -1936,7 +4039,7 @@ export class App extends React.Component<{}, S> {
                     </div>
                   ))}
                   {p.replace.split("\n").map((l, i) => (
-                    <div key={"n" + i} style={{ display: "flex", background: "rgba(139,178,146,.09)" }}>
+                    <div key={"n" + i} className={p.status === "pending" ? "sz-in" : undefined} style={{ display: "flex", background: "rgba(139,178,146,.09)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
                       <span style={{ flex: "none", width: 16, textAlign: "center", color: "#8BB292", userSelect: "none" }}>+</span>
                       <span style={{ whiteSpace: "pre", color: "#B7CBBA" }}>{l || " "}</span>
                     </div>
@@ -1944,8 +4047,8 @@ export class App extends React.Component<{}, S> {
                   {p.status === "pending" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w05)", fontFamily: SUIT }}>
                       <div style={{ flex: 1 }} />
-                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>수락</button>
-                      <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>거절</button>
+                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>{t("misc.accept")}</button>
+                      <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
                     </div>
                   )}
                 </div>
@@ -1961,23 +4064,23 @@ export class App extends React.Component<{}, S> {
   renderReview() {
     const s = this.state;
     if (s.workspace || window.schutz) return this.renderProposals();
-    const fstMap: Record<string, [string, string]> = { pending: ["검토 대기", "#C4A882"], accepted: ["수락됨", "#8BB292"], rejected: ["거절됨", "#C97B7B"] };
+    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "#C4A882"], accepted: [t("sc5.reviewAccepted"), "#8BB292"], rejected: [t("sc5.reviewRejected"), "#C97B7B"] };
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div onClick={() => this.setState(st => ({ reviewOpen: !st.reviewOpen }))}
           style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", cursor: "pointer", userSelect: "none" }}>
           <span style={{ fontSize: 8.5, width: 10, color: "var(--fg-dim)" }}>{s.reviewOpen ? "▾" : "▸"}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>변경 검토</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{t("agent.review")}</span>
           {s.files.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "var(--w06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.files.length}</span>}
         </div>
         {s.reviewOpen && (
           <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {s.files.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>검토할 변경이 없습니다.</div>}
+            {s.files.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>{t("sc5.reviewEmpty")}</div>}
             {pendingFiles > 0 && (
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="hvAccent" onClick={() => this.resolveAll(true)} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>모두 수락</button>
-                <button className="hv05" onClick={() => this.resolveAll(false)} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>모두 거절</button>
+                <button className="hvAccent" onClick={() => this.resolveAll(true)} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("sc5.acceptAll")}</button>
+                <button className="hv05" onClick={() => this.resolveAll(false)} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("sc5.rejectAll")}</button>
               </div>
             )}
             {s.files.map(f => {
@@ -2021,12 +4124,12 @@ export class App extends React.Component<{}, S> {
                           </div>
                         ))}
                       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 12px", borderTop: "1px solid var(--w05)" }}>
-                        <button className="hv05" onClick={e => { e.stopPropagation(); this.openFile(f.path); }} style={{ height: 23, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w12)" }}>에디터에서 열기</button>
+                        <button className="hv05" onClick={e => { e.stopPropagation(); this.openFile(f.path); }} style={{ height: 23, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w12)" }}>{t("sc5.openInEditor")}</button>
                         <div style={{ flex: 1 }} />
                         {f.status === "pending" && (
                           <>
-                            <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>수락</button>
-                            <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>거절</button>
+                            <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>{t("sc5.accept")}</button>
+                            <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("sc5.reject")}</button>
                           </>
                         )}
                       </div>
@@ -2041,121 +4144,341 @@ export class App extends React.Component<{}, S> {
     );
   }
 
-  // ── 터미널 독 ──
+  // ── 터미널 독 (xterm 멀티 탭 + AI 로그) ──
   renderTerm() {
     const s = this.state;
-    const DIM = "var(--fg-dim)", TXT = "var(--fg-code)", SUB = "var(--fg-sub)", OK = "#8BB292", AC = "var(--accent)";
-    let termLines: { key: string; segs: { t: string; c: string }[]; caret?: boolean }[];
-    if (s.termTab === "term") termLines = [
-      { key: "t1", segs: [{ t: "$ ", c: AC }, { t: "pnpm vitest run src/auth", c: TXT }] },
-      { key: "t2", segs: [{ t: "  ✓ ", c: OK }, { t: "src/auth/token-manager.spec.ts ", c: SUB }, { t: "(14 tests) 231ms", c: DIM }] },
-      { key: "t3", segs: [{ t: "  Tests  ", c: DIM }, { t: "14 passed", c: OK }, { t: " (14)", c: DIM }] },
-      { key: "t4", segs: [{ t: "$ ", c: AC }, { t: "git diff --stat", c: TXT }] },
-      { key: "t5", segs: [{ t: "  3 files changed, 23 insertions(+), 1 deletion(-)", c: DIM }] },
-      { key: "t6", segs: [{ t: "$ ", c: AC }], caret: true },
-    ];
-    else if (s.termTab === "prob") termLines = [
-      { key: "p1", segs: [{ t: "✓ 문제 없음 — 컴파일 · 린트 통과", c: OK }] },
-      { key: "p2", segs: [{ t: "  마지막 검사: 방금 전 · tsc --noEmit · eslint", c: DIM }] },
-    ];
-    else if (s.termTab === "out") termLines = [
-      { key: "o1", segs: [{ t: "[schutz] ", c: AC }, { t: "세션 시작 · 워크스페이스 인덱싱 완료 (1,204 files)", c: SUB }] },
-      { key: "o2", segs: [{ t: "[schutz] ", c: AC }, { t: "에이전트 3개 연결됨 · 파일 락 관리자 활성", c: SUB }] },
-      { key: "o3", segs: [{ t: "[lsp]    ", c: DIM }, { t: "typescript-language-server ready", c: DIM }] },
-    ];
-    else {
-      const times = ["14:02:07", "14:02:09", "14:02:12", "14:02:15", "14:02:18", "14:02:21"];
-      termLines = !s.tools.length
-        ? [{ key: "a0", segs: [{ t: "에이전트 활동이 여기에 기록됩니다.", c: DIM }] }]
-        : s.tools.map((t, i) => {
-          const d = this.agDef(t.agent);
-          return {
-            key: "a" + t.id, segs: [
-              { t: times[i % times.length] + "  ", c: DIM },
-              { t: d.name.padEnd(7), c: d.color },
-              { t: t.verb + "  ", c: SUB },
-              { t: t.path, c: TXT },
-              { t: t.st === "run" ? "  …" : "  " + (t.note || "완료"), c: t.st === "run" ? AC : DIM },
-            ],
-          };
-        });
-    }
-    const tabs: [string, string, string | null][] = [["term", "터미널", null], ["prob", "문제", "0"], ["out", "출력", null], ["ai", "AI 로그", null]];
+    this._termMounted = true; // 최초 렌더 시 래치 → 이후 접어도 언마운트되지 않게(셸 유지)
+    const DIM = "var(--fg-dim)", TXT = "var(--fg-code)", SUB = "var(--fg-sub)", AC = "var(--accent)";
+    const termCloseTitle = t("term.close"), toolDoneLabel = t("term.toolDone"); // 아래 map(t => …) 섀도잉 회피
+    const onAi = s.termTab === "ai";
+    const onProblems = s.termTab === "problems";
+    const errs = s.problems.filter(p => p.severity >= 8).length;
+    const warns = s.problems.length - errs;
     return (
-      <div style={{ flex: "none", height: 168, display: "flex", flexDirection: "column", background: "var(--bg-dock)", borderTop: "1px solid var(--w07)" }}>
-        <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 10px", borderBottom: "1px solid var(--w05)" }}>
-          {tabs.map(([k, label, badge]) => (
-            <button key={k} className="hvTermTab" onClick={() => this.setState({ termTab: k, termOpen: true }, () => this.ensureTerm())}
-              style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: s.termTab === k ? "var(--fg)" : "var(--fg-dim)", background: s.termTab === k ? "var(--w06)" : "transparent", border: "none" }}>
-              {label}
-              {badge && <span style={{ fontSize: 9.5, color: "var(--fg-sub2)", background: "var(--w07)", borderRadius: 7, padding: "0 5px", lineHeight: "13px" }}>{badge}</span>}
-            </button>
-          ))}
+      <div style={{ flex: "none", height: 210, display: s.termOpen ? "flex" : "none", flexDirection: "column", background: "var(--bg-dock)", borderTop: "1px solid var(--w07)" }}>
+        <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 8px 0 10px", borderBottom: "1px solid var(--w05)" }}>
+          {s.terms.map(t => {
+            const on = s.termTab === t.id;
+            return (
+              <div key={t.id} className="hvTermTab" onMouseDown={() => this.setState({ termTab: t.id, termOpen: true })}
+                style={{ height: 24, padding: "0 6px 0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
+                {t.title}
+                {s.terms.length > 1 && (
+                  <button className="hvDim" title={termCloseTitle} onMouseDown={e => { e.stopPropagation(); this.closeTerm(t.id); }}
+                    style={{ width: 15, height: 15, fontSize: 9, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
+                )}
+              </div>
+            );
+          })}
+          <button className="hvDim" title={t("misc.newTerminal")} onClick={() => this.addTerm()}
+            style={{ width: 22, height: 22, fontSize: 13, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>＋</button>
+          <div style={{ width: 1, height: 14, background: "var(--w07)", margin: "0 4px" }} />
+          <button className="hvTermTab" onMouseDown={() => this.setState({ termTab: "problems", termOpen: true })}
+            style={{ height: 24, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onProblems ? "var(--fg)" : "var(--fg-dim)", background: onProblems ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
+            {t("misc.problems")}
+            {(errs > 0 || warns > 0) && (
+              <span style={{ fontSize: 9.5, fontWeight: 700, color: errs > 0 ? "#CE9A9A" : "#CCB491", background: errs > 0 ? "rgba(201,123,123,.14)" : "rgba(196,168,130,.14)", borderRadius: 7, padding: "0 6px", lineHeight: "14px" }}>{errs + warns}</span>
+            )}
+          </button>
+          <button className="hvTermTab" onMouseDown={() => this.setState({ termTab: "ai", termOpen: true })}
+            style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onAi ? "var(--fg)" : "var(--fg-dim)", background: onAi ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>{t("misc.aiLog")}</button>
           <div style={{ flex: 1 }} />
-          <button className="hvDim" onClick={() => this.setState(st => ({ termOpen: !st.termOpen }))} title="독 접기" style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>⌄</button>
+          <button className="hvDim" onClick={() => this.setState({ termOpen: false })} title={t("misc.collapseDock")} style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>⌄</button>
         </div>
-        {window.schutz && s.termTab === "term" ? (
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "var(--fg-code)" }}>
-              {s.termReal || "셸을 시작하는 중…"}
+
+        {/* 본문 — 터미널들은 셸 유지를 위해 모두 마운트, 비활성은 숨김 */}
+        <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+          {window.schutz ? (
+            s.terms.map(t => (
+              <div key={t.id} style={{ position: "absolute", inset: 0, display: s.termTab === t.id ? "block" : "none" }}>
+                <XtermView id={t.id} cwd={s.workspace?.root} codeFont={getEditorPrefs().codeFont} fontSize={getEditorPrefs().fontSize} themeId={getThemeId()} />
+              </div>
+            ))
+          ) : (
+            <div style={{ position: "absolute", inset: 0, display: onAi ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--fg-dim)" }}>
+              {t("misc.terminalDesktopOnly")}
             </div>
-            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "4px 16px 8px" }}>
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--accent)" }}>$</span>
-              <input
-                value={s.termInput}
-                onChange={e => this.setState({ termInput: e.target.value })}
-                onKeyDown={e => {
-                  if (e.key === "Enter" && window.schutz) {
-                    window.schutz.termInput(s.termInput);
-                    this.setState(st => ({ termReal: (st.termReal + "\n$ " + st.termInput + "\n").slice(-60_000), termInput: "" }));
-                  }
-                }}
-                placeholder="명령 입력 (Enter)"
-                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "var(--fg)", fontFamily: MONO, fontSize: 11.5 }}
-              />
-            </div>
+          )}
+          {/* AI 로그 (실제 에이전트 도구 활동) */}
+          <div style={{ position: "absolute", inset: 0, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.75, display: onAi ? "block" : "none" }}>
+            {!s.tools.length && <div style={{ color: DIM }}>{t("misc.agentActivityHere")}</div>}
+            {s.tools.map(t => {
+              const d = this.agDef(t.agent);
+              return (
+                <div key={"al" + t.id} style={{ whiteSpace: "pre-wrap" }}>
+                  <span style={{ color: d.color }}>{d.name.padEnd(7)}</span>
+                  <span style={{ color: SUB }}>{t.verb + "  "}</span>
+                  <span style={{ color: TXT }}>{t.path}</span>
+                  <span style={{ color: t.st === "run" ? AC : DIM }}>{t.st === "run" ? "  …" : "  " + (t.note || toolDoneLabel)}</span>
+                </div>
+              );
+            })}
           </div>
-        ) : (
-          <div style={{ flex: 1, overflowY: "auto", padding: "9px 16px", fontFamily: MONO, fontSize: 11.5, lineHeight: 1.75 }}>
-            {termLines.map(tl => (
-              <div key={tl.key} style={{ whiteSpace: "pre-wrap" }}>
-                {tl.segs.map((sg, i) => <span key={i} style={{ color: sg.c }}>{sg.t}</span>)}
-                {tl.caret && <span style={{ display: "inline-block", width: 7, height: 12, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+          {/* 문제 패널 (Monaco 진단) */}
+          <div style={{ position: "absolute", inset: 0, overflowY: "auto", padding: "6px 0", display: onProblems ? "block" : "none" }}>
+            {s.problems.length === 0 && (
+              <div style={{ padding: "9px 16px", fontSize: 11.5, color: DIM }}>
+                {s.tsLargeProject ? t("misc.largeProjectDiag") : t("misc.noProblems")}
+              </div>
+            )}
+            {s.problems.slice(0, 500).map((p, i) => (
+              <div key={"pb" + i} className="hv04" onMouseDown={() => this.openProblem(p)}
+                style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "3px 16px", cursor: "pointer", fontFamily: MONO, fontSize: 11.5 }}>
+                <span style={{ flex: "none", color: p.severity >= 8 ? "#CE9A9A" : "#CCB491" }}>{p.severity >= 8 ? "✕" : "▲"}</span>
+                <span style={{ flex: "none", color: TXT, minWidth: 0, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel.split("/").pop()}</span>
+                <span style={{ flex: "none", color: DIM }}>:{p.line}:{p.col}</span>
+                <span style={{ color: SUB, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.message}</span>
               </div>
             ))}
           </div>
-        )}
+        </div>
       </div>
     );
   }
 
   // ── Ctrl+P 퀵오픈 ──
+  /** Ctrl+Tab MRU 탭 전환 오버레이 */
+  renderMru() {
+    const s = this.state;
+    if (!s.mruOpen) return null;
+    const list = this._tabMRU.filter(r => this.isOpen(r)).slice(0, 12);
+    if (list.length < 2) return null;
+    const sel = s.mruSel % list.length;
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 210, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.2)" }}>
+        <div className="sz-pop" style={{ minWidth: 320, maxWidth: 520, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 6 }}>
+          {list.map((rel, i) => (
+            <div key={rel} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 12px", borderRadius: 7, background: i === sel ? "var(--accent-soft)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
+              <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)" }}>{rel.split("/").pop()}</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rel}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  /** 토스트 스택 (우하단) */
+  renderToasts() {
+    const s = this.state;
+    if (!s.toasts.length) return null;
+    const col = { info: "var(--accent)", ok: "#8BB292", error: "#CE9A9A" };
+    return (
+      <div style={{ position: "fixed", right: 16, bottom: 40, zIndex: 300, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+        {s.toasts.map(t => (
+          <div key={t.id} onClick={() => this.dismissToast(t.id)}
+            style={{ maxWidth: 380, display: "flex", alignItems: "flex-start", gap: 8, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderLeft: `3px solid ${col[t.kind]}`, borderRadius: 9, boxShadow: "var(--shadow-pop)", padding: "9px 13px", cursor: "pointer", animation: t.leaving ? "szFadeOut .28s var(--ease) both" : "szFadeUp .25s var(--ease-emph) both" }}>
+            <span style={{ flex: "none", color: col[t.kind], fontSize: 12, lineHeight: 1.5 }}>{t.kind === "error" ? "⚠" : t.kind === "ok" ? "✓" : "•"}</span>
+            <span style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, fontFamily: SUIT }}>{t.text}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  /** 미저장 탭 닫기 확인 모달 */
+  renderAskClose() {
+    const a = this.state.askClose;
+    if (!a) return null;
+    const out = this.isClosing("askClose");
+    const closeAsk = () => this.closeOverlay("askClose", { askClose: null });
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeAsk}
+        style={{ position: "fixed", inset: 0, zIndex: 220, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(t("misc.unsavedTitle"))} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+          style={{ width: 380, maxWidth: "90%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{t("misc.unsavedTitle")}</div>
+          <div style={{ fontSize: 12, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 16 }}>
+            <span style={{ fontFamily: MONO, color: "var(--fg)" }}>{a.rel.split("/").pop()}</span>{t("misc.unsavedBodySuffix")}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="hv05" onClick={closeAsk}
+              style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("misc.cancel")}</button>
+            <button className="hvRed2" onClick={() => this.confirmCloseDiscard()}
+              style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.dontSave")}</button>
+            <button className="hvAccent" onClick={() => void this.confirmCloseSave()}
+              style={{ height: 32, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("misc.saveAndClose")}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  private _searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private onSearchInput(v: string) {
+    this.setState({ searchQuery: v });
+    if (this._searchTimer) clearTimeout(this._searchTimer);
+    this._searchTimer = setTimeout(() => void this.runSearch(v), 180);
+  }
+
+  /** 전역 텍스트 검색 오버레이 (Ctrl+Shift+F) */
+  renderSearch() {
+    const s = this.state;
+    if (!s.searchOpen && !this.isClosing("search")) return null;
+    const out = this.isClosing("search");
+    const closeSearch = () => this.closeOverlay("search", { searchOpen: false });
+    const hits = s.searchResults;
+    // 파일별 그룹핑 (렌더 순서 보존)
+    const groups: { rel: string; items: SearchHit[] }[] = [];
+    const idx: Record<string, number> = {};
+    hits.forEach(h => {
+      if (idx[h.rel] === undefined) { idx[h.rel] = groups.length; groups.push({ rel: h.rel, items: [] }); }
+      groups[idx[h.rel]].items.push(h);
+    });
+    const sel = Math.min(s.searchSel, Math.max(0, hits.length - 1));
+    const hitIdx = new Map(hits.map((h, i) => [h, i])); // O(1) 인덱스 조회 (O(N²) indexOf 회피)
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSearch}
+        style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 80 }}>
+        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+          style={{ width: 640, maxWidth: "92%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "70vh" }}>
+          <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--w08)" }}>
+            <button className="hvDim" title={s.replaceOpen ? t("palette.replaceClose") : t("palette.replaceOpen")} onClick={() => this.setState(st => ({ replaceOpen: !st.replaceOpen }))}
+              style={{ flex: "none", width: 26, height: 44, fontSize: 11, fontFamily: "inherit", cursor: "pointer", color: "var(--fg-dim)", background: "transparent", border: "none" }}>{s.replaceOpen ? "▾" : "▸"}</button>
+            <input autoFocus value={s.searchQuery}
+              onChange={e => this.onSearchInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ searchSel: (sel + 1) % Math.max(1, hits.length) }); }
+                else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ searchSel: (sel - 1 + hits.length) % Math.max(1, hits.length) }); }
+                else if (e.key === "Enter" && hits[sel]) { this.jumpToHit(hits[sel]); }
+                else if (e.key === "Escape") closeSearch();
+              }}
+              placeholder={t("palette.searchPlaceholder")}
+              style={{ flex: 1, background: "transparent", border: "none", height: 44, padding: "0 8px", color: "var(--fg)", fontSize: 13.5, fontFamily: `var(--font-ui, ${SUIT})`, outline: "none" }} />
+            {/* 옵션 토글 */}
+            {([["caseSensitive", "Aa", t("palette.optCaseSensitive")], ["wholeWord", "‹›", t("palette.optWholeWord")], ["regex", ".*", t("palette.optRegex")]] as [keyof S["searchOpts"], string, string][]).map(([key, label, title]) => (
+              <button key={key as string} title={title}
+                onClick={() => this.setState(st => ({ searchOpts: { ...st.searchOpts, [key]: !st.searchOpts[key] } }), () => this.onSearchInput(this.state.searchQuery))}
+                style={{ flex: "none", width: 26, height: 26, marginRight: 3, fontSize: 11, fontWeight: 700, fontFamily: MONO, cursor: "pointer", borderRadius: 6, color: s.searchOpts[key] ? "var(--on-accent)" : "var(--fg-dim)", background: s.searchOpts[key] ? "var(--accent)" : "var(--w05)", border: "none" }}>{label}</button>
+            ))}
+            <span style={{ flex: "none", marginRight: 14, marginLeft: 6, fontSize: 11, color: "var(--fg-dim)", fontFamily: MONO }}>
+              {s.searchBusy ? t("palette.searching") : hits.length > 0 ? t("palette.hitCount", { n: hits.length, plus: s.searchTruncated ? "+" : "" }) : ""}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, padding: "6px 14px 6px 26px", borderBottom: "1px solid var(--w08)" }}>
+            <input value={s.searchOpts.include} onChange={e => this.setState(st => ({ searchOpts: { ...st.searchOpts, include: e.target.value } }), () => this.onSearchInput(this.state.searchQuery))}
+              placeholder={t("palette.includeGlob")}
+              style={{ flex: 1, background: "var(--bg-root)", border: "1px solid var(--w08)", borderRadius: 6, height: 26, padding: "0 9px", color: "var(--fg-sub)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
+            <input value={s.searchOpts.exclude} onChange={e => this.setState(st => ({ searchOpts: { ...st.searchOpts, exclude: e.target.value } }), () => this.onSearchInput(this.state.searchQuery))}
+              placeholder={t("palette.excludeGlob")}
+              style={{ flex: 1, background: "var(--bg-root)", border: "1px solid var(--w08)", borderRadius: 6, height: 26, padding: "0 9px", color: "var(--fg-sub)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
+          </div>
+          {s.replaceOpen && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px 8px 26px", borderBottom: "1px solid var(--w08)" }}>
+              <input value={s.replaceVal} onChange={e => this.setState({ replaceVal: e.target.value })}
+                placeholder={t("palette.replaceWith")}
+                style={{ flex: 1, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 12.5, fontFamily: `var(--font-ui, ${SUIT})`, outline: "none" }} />
+              <button className="hvAccent" disabled={s.searchQuery.trim().length < 2 || hits.length === 0}
+                onClick={() => void this.doReplaceAll()}
+                style={{ flex: "none", height: 30, padding: "0 12px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: (s.searchQuery.trim().length >= 2 && hits.length > 0) ? "pointer" : "default", borderRadius: 7, color: "var(--on-accent)", background: (s.searchQuery.trim().length >= 2 && hits.length > 0) ? "var(--accent)" : "var(--w10)", border: "none" }}>{t("palette.replaceAll")}</button>
+            </div>
+          )}
+          <div style={{ flex: 1, overflowY: "auto", padding: 4 }}>
+            {!s.workspace && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.openProjectFirst")}</div>}
+            {s.workspace && !s.searchBusy && s.searchQuery.trim().length >= 2 && hits.length === 0 && (
+              <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.noResults")}</div>
+            )}
+            {groups.map(g => (
+              <div key={g.rel} style={{ marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px 3px" }}>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg)" }}>{g.rel.split("/").pop()}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.rel}</span>
+                  <span style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{g.items.length}</span>
+                </div>
+                {g.items.map(h => {
+                  const gi = hitIdx.get(h) ?? 0;
+                  return (
+                    <div key={h.rel + ":" + h.line + ":" + h.col} ref={gi === sel ? this._selRowRef : undefined}
+                      onMouseDown={e => { e.preventDefault(); this.jumpToHit(h); }}
+                      onMouseEnter={() => this.setState({ searchSel: gi })}
+                      style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "3px 12px 3px 20px", borderRadius: 6, cursor: "pointer", background: gi === sel ? "var(--accent-soft)" : "transparent" }}>
+                      <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim)", minWidth: 30, textAlign: "right" }}>{h.line}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--fg-sub)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.preview}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  renderCommandPalette() {
+    const s = this.state;
+    if (!s.cmdOpen && !this.isClosing("cmd")) return null;
+    const out = this.isClosing("cmd");
+    const closeCmd = () => this.closeOverlay("cmd", { cmdOpen: false });
+    const q = s.cmdQuery.toLowerCase().trim();
+    const all = this.commands();
+    const list = (!q ? all : all.filter(c => {
+      const l = c.label.toLowerCase();
+      if (l.includes(q)) return true;
+      let i = 0; for (const ch of l) if (ch === q[i]) i++; return i === q.length; // 서브시퀀스
+    })).slice(0, 40);
+    const sel = Math.min(s.cmdSel, Math.max(0, list.length - 1));
+    const runAt = (i: number) => { const c = list[i]; this.closeOverlay("cmd", { cmdOpen: false }); if (c) setTimeout(() => c.run(), 0); };
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeCmd}
+        style={{ position: "fixed", inset: 0, zIndex: 190, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 80 }}>
+        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+          style={{ width: 580, maxWidth: "92%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
+          <input autoFocus value={s.cmdQuery}
+            onChange={e => this.setState({ cmdQuery: e.target.value, cmdSel: 0 })}
+            onKeyDown={e => {
+              if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ cmdSel: (sel + 1) % Math.max(1, list.length) }); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ cmdSel: (sel - 1 + list.length) % Math.max(1, list.length) }); }
+              else if (e.key === "Enter") { e.preventDefault(); runAt(sel); }
+              else if (e.key === "Escape") closeCmd();
+            }}
+            placeholder={t("palette.cmdPlaceholder")}
+            style={{ width: "100%", background: "transparent", border: "none", borderBottom: "1px solid var(--w08)", height: 42, padding: "0 16px", color: "var(--fg)", fontSize: 13.5, fontFamily: `var(--font-ui, ${SUIT})`, outline: "none" }} />
+          <div style={{ maxHeight: 360, overflowY: "auto", padding: 4 }}>
+            {list.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.noCommands")}</div>}
+            {list.map((c, i) => (
+              <div key={c.id} ref={i === sel ? this._selRowRef : undefined}
+                onMouseDown={e => { e.preventDefault(); runAt(i); }}
+                onMouseEnter={() => this.setState({ cmdSel: i })}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 12px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
+                <span style={{ fontSize: 12.5, color: "var(--fg)", flex: 1 }}>{c.label}</span>
+                {c.hint && <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim)" }}>{c.hint}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   renderQuickOpen() {
     const s = this.state;
-    if (!s.quickOpen) return null;
+    if (!s.quickOpen && !this.isClosing("quick")) return null;
+    const out = this.isClosing("quick");
+    const closeQuick = () => this.closeOverlay("quick", { quickOpen: false });
     const list = this.quickList();
     const sel = Math.min(s.quickSel, Math.max(0, list.length - 1));
     return (
-      <div onClick={() => this.setState({ quickOpen: false })}
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeQuick}
         style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 90 }}>
-        <div onClick={e => e.stopPropagation()}
+        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
           style={{ width: 560, maxWidth: "90%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
           <input autoFocus value={s.quickQuery}
             onChange={e => this.setState({ quickQuery: e.target.value, quickSel: 0 })}
             onKeyDown={e => {
               if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ quickSel: (sel + 1) % Math.max(1, list.length) }); }
               else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ quickSel: (sel - 1 + list.length) % Math.max(1, list.length) }); }
-              else if (e.key === "Enter" && list[sel]) { this.openFile(list[sel].rel); this.setState({ quickOpen: false }); }
-              else if (e.key === "Escape") this.setState({ quickOpen: false });
+              else if (e.key === "Enter" && list[sel]) { this.openFile(list[sel].rel); closeQuick(); }
+              else if (e.key === "Escape") closeQuick();
             }}
-            placeholder="파일 이름으로 이동…"
+            placeholder={t("palette.quickPlaceholder")}
             style={{ width: "100%", background: "transparent", border: "none", borderBottom: "1px solid var(--w08)", height: 42, padding: "0 16px", color: "var(--fg)", fontSize: 13.5, fontFamily: SUIT, outline: "none" }} />
           <div style={{ maxHeight: 320, overflowY: "auto", padding: 4 }}>
-            {!this.state.workspace && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>먼저 프로젝트를 열어주세요.</div>}
-            {this.state.workspace && list.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>일치하는 파일이 없습니다.</div>}
+            {!this.state.workspace && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.openProjectFirst")}</div>}
+            {this.state.workspace && list.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.noFiles")}</div>}
             {list.map((f, i) => (
-              <div key={f.rel}
-                onMouseDown={e => { e.preventDefault(); this.openFile(f.rel); this.setState({ quickOpen: false }); }}
+              <div key={f.rel} ref={i === sel ? this._selRowRef : undefined}
+                onMouseDown={e => { e.preventDefault(); this.openFile(f.rel); closeQuick(); }}
                 onMouseEnter={() => this.setState({ quickSel: i })}
                 style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
                 <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)" }}>{f.name}</span>
@@ -2168,27 +4491,823 @@ export class App extends React.Component<{}, S> {
     );
   }
 
+  renderExt() {
+    const s = this.state;
+    const badge = (text: string, color: string) => <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "22", borderRadius: 4, padding: "1px 5px" }}>{text}</span>;
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* Open VSX 마켓플레이스 검색 */}
+        <div style={{ position: "relative" }}>
+          <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", opacity: 0.6 }}><SearchIcon /></span>
+          <input value={s.extSearch} onChange={e => void this.extMarketSearch(e.target.value)} placeholder={t("extui.searchPlaceholder")}
+            style={{ width: "100%", height: 32, padding: "0 10px 0 30px", fontSize: 11.5, fontFamily: SUIT, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8, color: "var(--fg)", outline: "none" }} />
+        </div>
+        {(s.extBusy || (!s.extResults.length && !s.extSearch)) && [0, 1, 2, 3].map(i => (
+          <div key={"sk" + i} style={{ display: "flex", gap: 9, padding: "8px 9px", opacity: 1 - i * 0.18 }}>
+            <div className="sz-skel" style={{ width: 34, height: 34, borderRadius: 6, flex: "none" }} />
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, justifyContent: "center" }}>
+              <div className="sz-skel" style={{ height: 11, width: "55%" }} />
+              <div className="sz-skel" style={{ height: 9, width: "85%" }} />
+            </div>
+          </div>
+        ))}
+        {s.extResults.map((r, ri) => {
+          const installed = s.extList.some(e => e.id === r.namespace + "." + r.name);
+          const installing = s.extInstalling.includes(r.namespace + "." + r.name);
+          const iconUrl = r.icon;
+          return (
+            <div key={r.namespace + "." + r.name} className="hv04 sz-in" onClick={() => void this.openExtDetail(r.namespace, r.name)} style={{ display: "flex", gap: 9, borderRadius: 8, padding: "8px 9px", cursor: "pointer", animationDelay: Math.min(ri, 12) * 28 + "ms" }}>
+              {iconUrl
+                ? <img src={iconUrl} width={34} height={34} style={{ flex: "none", borderRadius: 6, objectFit: "contain", background: "var(--w05)" }} alt="" onError={e => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                : <div style={{ flex: "none", width: 34, height: 34, borderRadius: 6, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent-hi)", fontSize: 15, fontWeight: 800 }}>{(r.displayName || r.name).slice(0, 1).toUpperCase()}</div>}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.displayName}</span>
+                  <span style={{ flex: "none", fontSize: 9.5, color: "var(--fg-dim)" }}>{r.namespace}</span>
+                </div>
+                <div style={{ fontSize: 10.5, color: "var(--fg-sub2)", marginTop: 1, lineHeight: 1.4, maxHeight: 28, overflow: "hidden" }}>{r.description}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 4 }}>
+                  <span style={{ fontSize: 9.5, color: "var(--fg-dim)", display: "flex", alignItems: "center", gap: 3 }}>⬇ {this.fmtCount(r.downloadCount)}</span>
+                  {r.rating > 0 && <span style={{ fontSize: 9.5, color: "var(--fg-dim)" }}>★ {r.rating.toFixed(1)}</span>}
+                  <div style={{ flex: 1 }} />
+                  {installed
+                    ? <span style={{ fontSize: 9.5, color: "var(--accent-hi)", fontWeight: 600 }}>{t("extui.installed")}</span>
+                    : <button className="hv08" disabled={installing} onClick={e => { e.stopPropagation(); void this.extInstall(r.namespace, r.name); }}
+                      style={{ flex: "none", padding: "3px 12px", fontSize: 10.5, fontWeight: 600, fontFamily: SUIT, cursor: installing ? "default" : "pointer", borderRadius: 6, border: "none", background: "var(--accent)", color: "var(--on-accent)", opacity: installing ? 0.6 : 1 }}>{installing ? t("extui.installing") : t("extui.install")}</button>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {!s.extBusy && !!s.extSearch.trim() && s.extResults.length === 0 && (
+          <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "10px 4px", textAlign: "center", lineHeight: 1.5 }}>
+            {t("extui.noResults1", { q: s.extSearch.trim() })}<br />{t("extui.noResults2")}
+          </div>
+        )}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+          <span style={sectHdr}>{t("extui.installedHdr")}</span>
+          <div style={{ flex: 1 }} />
+          <button className="hv08" onClick={() => void this.reloadExtensions()} style={{ padding: "3px 8px", fontSize: 10, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: "var(--fg-sub)" }}>{t("common.refresh")}</button>
+          <button className="hv08" onClick={() => void window.schutz?.extOpenDir()} style={{ padding: "3px 8px", fontSize: 10, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: "var(--fg-sub)" }}>{t("common.folder")}</button>
+        </div>
+        {s.extList.length === 0 && <div style={{ fontSize: 11, color: "var(--fg-dim)", padding: "6px 2px" }}>{t("extui.none")}</div>}
+        {s.extList.map(ext => {
+          const [ns, ...rest] = ext.id.split(".");
+          const clickable = ext.kind === "vscode" && rest.length > 0;
+          const limited = s.extLimited.find(l => l.id === ext.id);
+          return (
+          <div key={ext.id} onClick={clickable ? () => void this.openExtDetail(ns, rest.join(".")) : undefined} style={{ border: "1px solid var(--w08)", borderRadius: 8, padding: "8px 10px", background: "var(--bg-root)", cursor: clickable ? "pointer" : "default" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ext.name}</span>
+              {ext.kind === "vscode" ? badge("VS Code", "#4A90D0") : badge("Schutz", "#8FA893")}
+              <button className="hv08" onClick={e => { e.stopPropagation(); void this.toggleExtEnabled(ext.id, !ext.enabled); }}
+                style={{ marginLeft: "auto", flex: "none", padding: "2px 8px", fontSize: 10, fontFamily: SUIT, cursor: "pointer", borderRadius: 5, border: "1px solid var(--w10)", background: ext.enabled ? "var(--accent-soft)" : "transparent", color: ext.enabled ? "var(--accent-hi)" : "var(--fg-dim)" }}>{ext.enabled ? t("extui.enabled") : t("extui.disabled")}</button>
+            </div>
+            {ext.description && <div style={{ fontSize: 10.5, color: "var(--fg-sub2)", marginTop: 3, maxHeight: 30, overflow: "hidden" }}>{ext.description}</div>}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, alignItems: "center" }}>
+              <span style={{ fontSize: 9, color: "var(--fg-dim)", fontFamily: MONO }}>v{ext.version}</span>
+              {ext.contributes.map(c => badge(c, "#8B8F9E"))}
+              {ext.kind === "vscode" && ext.programmatic && !limited && <span style={{ fontSize: 9, color: "var(--fg-dim)" }}>{t("extui.programmatic")}</span>}
+            </div>
+            {limited && (
+              <div title={limited.reason} style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 5, fontSize: 9.5, color: "#C4A45A", lineHeight: 1.4 }}>
+                <span style={{ flex: "none" }}>ⓘ</span>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{t("sc5.extLimitedRuntime")}</span>
+              </div>
+            )}
+          </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  renderDebug() {
+    const s = this.state;
+    const d = s.debug;
+    const rel = s.active[this._focusSlot];
+    const btn = (label: string, onClick: () => void, disabled = false, primary = false) => (
+      <button className="hv08" disabled={disabled} onClick={onClick}
+        style={{ padding: "5px 9px", fontSize: 11, fontFamily: SUIT, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.4 : 1, borderRadius: 6, border: "1px solid var(--w10)", background: primary ? "var(--accent)" : "transparent", color: primary ? "var(--on-accent)" : "var(--fg-sub)" }}>{label}</button>
+    );
+    const stopped = d?.status === "stopped";
+    const bpEntries = Object.entries(s.breakpoints).filter(([, l]) => l.length);
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* 툴바 */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+          {!d && btn(t("dbg.run"), () => void this.startDebug(), !rel?.endsWith(".py"), true)}
+          {d && btn(t("dbg.continue"), this.dbgContinue, !stopped)}
+          {d && btn(t("dbg.stepOver"), this.dbgStepOver, !stopped)}
+          {d && btn(t("dbg.stepInto"), this.dbgStepIn, !stopped)}
+          {d && btn(t("dbg.stepOut"), this.dbgStepOut, !stopped)}
+          {d && btn(t("dbg.stop"), () => void this.stopDebug())}
+        </div>
+        {d && <div style={{ fontSize: 10.5, color: stopped ? "#E0B052" : "var(--fg-dim)", fontFamily: MONO }}>
+          {d.status === "starting" ? t("dbg.statusStarting") : d.status === "running" ? t("dbg.statusRunning") : t("dbg.statusStopped", { line: d.stoppedLine })}
+        </div>}
+
+        {/* 콜스택 */}
+        {d && d.frames.length > 0 && (
+          <div>
+            <div style={sectHdr}>{t("dbg.callStack")}</div>
+            {d.frames.map(f => (
+              <div key={f.id} onClick={() => void this.selectFrame(f.id)}
+                style={{ padding: "3px 6px", borderRadius: 5, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: f.id === d.frameId ? "var(--fg)" : "var(--fg-sub2)", background: f.id === d.frameId ? "var(--accent-soft)" : "transparent" }}>
+                {f.name} <span style={{ color: "var(--fg-dim)" }}>:{f.line}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 변수 */}
+        {d && d.scopes.length > 0 && (
+          <div>
+            <div style={sectHdr}>{t("dbg.variables")}</div>
+            {d.scopes.map((sc, i) => (
+              <div key={sc.name + i}>
+                <div onClick={() => void this.toggleScope(i)} style={{ cursor: "pointer", fontSize: 10.5, color: "var(--fg-sub)", fontFamily: MONO, padding: "2px 4px" }}>{sc.expanded ? "▾" : "▸"} {sc.name}</div>
+                {sc.expanded && sc.vars.map((v, j) => (
+                  <div key={v.name + j} style={{ padding: "1px 4px 1px 16px", fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <span style={{ color: "var(--accent-hi)" }}>{v.name}</span><span style={{ color: "var(--fg-dim)" }}> = </span><span style={{ color: "var(--fg-sub)" }}>{v.value}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 브레이크포인트 */}
+        <div>
+          <div style={sectHdr}>{t("dbg.breakpoints")}</div>
+          {bpEntries.length === 0 && <div style={{ fontSize: 10.5, color: "var(--fg-dim)", padding: "2px 4px" }}>{t("dbg.breakpointsEmpty")}</div>}
+          {bpEntries.map(([r, lines]) => lines.map(ln => (
+            <div key={r + ":" + ln} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", fontFamily: MONO, fontSize: 10.5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 4, background: "#E05252", flex: "none" }} />
+              <span onClick={() => { this.openFile(r); }} style={{ cursor: "pointer", color: "var(--fg-sub)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r}:{ln}</span>
+              <button className="hv08" onClick={() => this.toggleBreakpoint(r, ln)} style={{ marginLeft: "auto", border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 12 }}>×</button>
+            </div>
+          )))}
+        </div>
+
+        {/* 디버그 콘솔 */}
+        {s.debugConsole.length > 0 && (
+          <div>
+            <div style={sectHdr}>{t("dbg.console")}</div>
+            <div style={{ maxHeight: 160, overflowY: "auto", fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)", whiteSpace: "pre-wrap", background: "var(--bg-root)", borderRadius: 6, padding: "6px 8px" }}>{s.debugConsole.join("")}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /** 공용 모달 셸 (About/Usage/Keybindings) — renderExtPanel 패턴 */
+  /** 오버레이 닫기 — 나가는 애니메이션(~180ms) 후 실제 언마운트 */
+  isClosing(key: string): boolean { return this.state.closing.includes(key); }
+  // 오버레이별 전용 close 타이머 — this.qt(clearTimers로 지워질 수 있음)와 분리, 재열림 시 정확히 취소
+  private _closeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  closeOverlay(key: string, patch: Partial<S>, dur = 260) {
+    if (this.isClosing(key)) return;
+    this.setState(s => ({ closing: [...s.closing, key] }));
+    if (this._closeTimers[key]) clearTimeout(this._closeTimers[key]);
+    this._closeTimers[key] = setTimeout(() => {
+      delete this._closeTimers[key];
+      this.setState(s => ({ ...(patch as any), closing: s.closing.filter(k => k !== key) }));
+    }, dur);
+  }
+  /** 닫는 애니메이션 중 재열 때 호출 — 대기 중인 닫기 타이머를 취소하고 closing 해제 */
+  cancelClose(key: string) {
+    if (this._closeTimers[key]) { clearTimeout(this._closeTimers[key]); delete this._closeTimers[key]; }
+    if (this.isClosing(key)) this.setState(s => ({ closing: s.closing.filter(k => k !== key) }));
+  }
+  /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
+  private static OVERLAY_KEY: Record<string, string> = {
+    aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
+    settingsOpen: "settings", mcpOpen: "mcp", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
+    extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
+  };
+  /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
+  private openO(patch: Partial<S>) {
+    for (const flag of Object.keys(patch)) {
+      const key = App.OVERLAY_KEY[flag];
+      if (key && (patch as any)[flag]) this.cancelClose(key);
+    }
+    this.setState(patch as any);
+  }
+
+  /** 모달 접근성 — role/aria + 마운트 시 첫 포커스 + Tab 포커스 트랩 */
+  private dialogProps(title: string): any {
+    return {
+      role: "dialog", "aria-modal": true, "aria-label": title, tabIndex: -1,
+      ref: (el: HTMLElement | null) => {
+        if (el && !el.dataset.szf) {
+          el.dataset.szf = "1";
+          const f = el.querySelector<HTMLElement>('input:not([disabled]),button:not([disabled]),textarea,select,[tabindex]:not([tabindex="-1"])');
+          (f ?? el).focus();
+        }
+      },
+      onKeyDown: (e: React.KeyboardEvent) => this.trapTab(e),
+    };
+  }
+  private trapTab(e: React.KeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const root = e.currentTarget as HTMLElement;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(n => n.offsetParent !== null);
+    if (nodes.length < 2) return;
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    const active = document.activeElement as HTMLElement;
+    if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+  }
+
+  private modalShell(key: string, title: string, onClose: () => void, body: React.ReactNode, width = 560) {
+    const out = this.isClosing(key);
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 195, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(title)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width, maxWidth: "92%", maxHeight: "84%", overflow: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, outline: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", padding: "13px 16px", borderBottom: "1px solid var(--w06)", position: "sticky", top: 0, background: "var(--bg-card)" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{title}</span>
+            <button className="hvDim" onClick={onClose} style={{ marginLeft: "auto", width: 24, height: 24, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 15, borderRadius: 5 }}>✕</button>
+          </div>
+          <div style={{ padding: "16px 18px" }}>{body}</div>
+        </div>
+      </div>
+    );
+  }
+
+  renderAbout() {
+    if (!this.state.aboutOpen && !this.isClosing("about")) return null;
+    const env: string[] = [];
+    if (window.schutz) env.push(t("modal.envDesktop")); else env.push(t("modal.envWebPreview"));
+    return this.modalShell("about", t("modal.aboutTitle"), () => this.closeOverlay("about", { aboutOpen: false }), (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center", padding: "8px 0" }}>
+        <img src="./assets/logo-t.png" alt="Schutz" style={{ width: 44, height: 44, filter: "var(--logo-filter)" }} onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)", letterSpacing: -0.5 }}>Schutz</div>
+          <div style={{ fontSize: 12, color: "var(--fg-sub)", marginTop: 3 }}>{t("modal.aboutTagline", { version: APP_VERSION })}</div>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.7 }}>
+          {t("modal.aboutDesc")}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", marginTop: 4 }}>
+          {[["GitHub", "github.com/SchutzScript/Schutz"], [t("modal.aboutLicense"), "FSL-1.1-Apache-2.0"], [t("modal.aboutEnv"), env.join(" · ")], [t("modal.aboutEngine"), "Electron · Monaco · React"]].map(([k, v]) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, padding: "4px 0", borderTop: "1px solid var(--w05)" }}>
+              <span style={{ color: "var(--fg-dim)" }}>{k}</span><span style={{ color: "var(--fg-sub)", fontFamily: MONO }}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    ), 380);
+  }
+
+  renderUsage() {
+    if (!this.state.usageOpen && !this.isClosing("usage")) return null;
+    const connected = AGDEF.filter(d => this.modelOf(d.id) !== null);
+    let totIn = 0, totOut = 0, totCost = 0, hasKeyCost = false;
+    for (const d of AGDEF) { const a = this.state.agents[d.id]; totIn += a.tin; totOut += a.tout; if (!this.isSubscription(d.id)) { totCost += a.cost; hasKeyCost = true; } }
+    const body = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", gap: 10 }}>
+          {[[t("modal.usageInputTokens"), totIn.toLocaleString()], [t("modal.usageOutputTokens"), totOut.toLocaleString()], [t("modal.usageSessionCost"), hasKeyCost ? "$" + totCost.toFixed(4) : t("modal.subscription")]].map(([k, v]) => (
+            <div key={k} style={{ flex: 1, background: "var(--bg-root)", borderRadius: 10, padding: "12px 14px", border: "1px solid var(--w06)" }}>
+              <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 4 }}>{k}</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--fg)", fontFamily: MONO }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={sectHdr}>{t("modal.usageByAgent")}</div>
+        {connected.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim)" }}>{t("modal.usageNoAgents")}</div>}
+        {connected.map(d => {
+          const a = this.state.agents[d.id];
+          const sub = this.isSubscription(d.id);
+          const m = this.modelOf(d.id) ?? "?";
+          const price = sub ? t("modal.subscriptionIncluded") : (() => { const [pin, pout] = App.PRICING[m] ?? [3, 15]; return `$${pin}/${pout} /1M`; })();
+          return (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "var(--bg-root)", borderRadius: 9, border: "1px solid var(--w06)" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: d.color, flex: "none" }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, color: "var(--fg)" }}>{d.name} <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)" }}>{m}</span></div>
+                <div style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>{t("modal.usageAgentTokens", { tin: a.tin.toLocaleString(), tout: a.tout.toLocaleString(), price })}</div>
+              </div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: sub ? "var(--accent-hi)" : "var(--fg-sub)", fontFamily: MONO }}>{sub ? t("modal.subscription") : "$" + a.cost.toFixed(4)}</div>
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 10, color: "var(--fg-dim)" }}>{t("modal.usageFootnote")}</div>
+      </div>
+    );
+    return this.modalShell("usage", t("modal.usageTitle"), () => this.closeOverlay("usage", { usageOpen: false }), body, 520);
+  }
+
+  renderKeybindings() {
+    if (!this.state.keysOpen && !this.isClosing("keys")) return null;
+    const cmds = this.commands().filter(c => c.hint);
+    const extra: [string, string][] = [
+      [t("modal.kbWorkspaceSymbol"), "Ctrl+T"], [t("modal.kbCycleTabs"), "Ctrl+Tab"], [t("modal.kbGoToLine"), "Ctrl+G"],
+      [t("modal.kbDebugStart"), "F5"], [t("modal.kbStepOver"), "F10"], [t("modal.kbStepInto"), "F11"], [t("modal.kbStepOut"), "Shift+F11"], [t("modal.kbDebugStop"), "Shift+F5"],
+      [t("modal.kbInlineEdit"), "Ctrl+K"], [t("modal.kbToggleTerminal"), "Ctrl+`"],
+    ];
+    const rows: [string, string][] = [...cmds.map(c => [c.label, c.hint!] as [string, string]), ...extra];
+    const seen = new Set<string>();
+    const uniq = rows.filter(([, h]) => { if (seen.has(h)) return false; seen.add(h); return true; });
+    return this.modalShell("keys", t("modal.keysTitle"), () => this.closeOverlay("keys", { keysOpen: false }), (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {uniq.map(([label, hint], i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, background: i % 2 ? "var(--w03)" : "transparent" }}>
+            <span style={{ fontSize: 12, color: "var(--fg-sub)" }}>{label}</span>
+            <div style={{ flex: 1 }} />
+            <kbd style={{ fontSize: 10.5, fontFamily: MONO, color: "var(--fg)", background: "var(--w06)", border: "1px solid var(--w08)", borderRadius: 5, padding: "2px 7px" }}>{hint}</kbd>
+          </div>
+        ))}
+      </div>
+    ), 460);
+  }
+
+  // ── MCP 관리 ──
+  openMcp() { this.cancelClose("mcp"); this.setState({ mcpOpen: true }); void this.refreshMcp(); }
+
+  // ── 사용법 스포트라이트 투어 ─────────────────────────────────────────────
+  private _tourResize = () => { if (this.state.tourOpen) this.forceUpdate(); };
+  startTour() {
+    window.addEventListener("resize", this._tourResize);
+    // 다른 오버레이/모달은 모두 닫고 시작 — 투어(z240)가 덮어 가려진 채로 남지 않도록
+    this.setState({
+      tourOpen: true, tourStep: 0, openMenu: null, projOpen: false,
+      settingsOpen: false, cmdOpen: false, quickOpen: false, symOpen: false, searchOpen: false,
+      aboutOpen: false, commandsOpen: false, mcpOpen: false, usageOpen: false, keysOpen: false,
+      extDetail: null, extPanel: null, askClose: null, closing: [],
+    });
+  }
+  private tourStepTo(i: number) {
+    if (i < 0) return;
+    if (i >= TOUR_STEPS.length) { this.endTour(); return; }
+    this.setState({ tourStep: i });
+  }
+  endTour() {
+    window.removeEventListener("resize", this._tourResize);
+    try { localStorage.setItem("schutz.tutorialDone", "1"); } catch { /* ignore */ }
+    this.setState({ tourOpen: false });
+  }
+  renderTour() {
+    if (!this.state.tourOpen) return null;
+    const cur = Math.min(Math.max(0, this.state.tourStep), TOUR_STEPS.length - 1);
+    const step = TOUR_STEPS[cur];
+    const rect = anchorRect(step.anchor);
+    const cardW = 330, cardH = 168;
+    const pos = cardPos(rect, cardW, cardH);
+    const isLast = cur === TOUR_STEPS.length - 1;
+    const tourBtn: React.CSSProperties = { padding: "5px 14px", fontSize: 11.5, borderRadius: 7, cursor: "pointer", fontFamily: SUIT };
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 240 }} aria-modal="true" role="dialog"
+        onClick={e => { if (e.target === e.currentTarget) { /* 배경 클릭은 무시(오작동 방지) */ } }}>
+        {rect
+          ? <div className="sz-tour-hole" style={{ position: "fixed", left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderRadius: 9, pointerEvents: "none" }} />
+          : <div className="sz-backdrop" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.58)" }} />}
+        <div className="sz-pop" onClick={e => e.stopPropagation()} style={{ position: "fixed", left: pos.left, top: pos.top, width: cardW, background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16, fontFamily: SUIT }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--fg)", marginBottom: 7 }}>{t(step.titleKey)}</div>
+          <div style={{ fontSize: 12, color: "var(--fg-sub)", lineHeight: 1.6 }}>{t(step.bodyKey)}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 15 }}>
+            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              {TOUR_STEPS.map((_, i) => (
+                <span key={i} style={{ width: i === cur ? 16 : 6, height: 6, borderRadius: 3, background: i === cur ? "var(--accent)" : "var(--w12)", transition: "all var(--dur) var(--ease)" }} />
+              ))}
+            </div>
+            <div style={{ flex: 1 }} />
+            <button className="hvDim" onClick={() => this.endTour()} style={{ background: "transparent", border: "none", color: "var(--fg-dim)", fontSize: 11.5, cursor: "pointer", padding: "5px 8px", borderRadius: 6, fontFamily: SUIT }}>{t("common.skip")}</button>
+            {cur > 0 && <button className="hv08" onClick={() => this.tourStepTo(cur - 1)} style={{ ...tourBtn, background: "transparent", border: "1px solid var(--w10)", color: "var(--fg-sub)" }}>{t("common.prev")}</button>}
+            <button className="hvAccent" onClick={() => this.tourStepTo(cur + 1)} style={{ ...tourBtn, background: "var(--accent)", color: "var(--on-accent)", border: "none", fontWeight: 700 }}>{isLast ? t("common.done") : t("common.next")}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  async refreshMcp() {
+    const [servers, discovered] = await Promise.all([
+      mcp.listServers(),
+      mcp.discover(this.state.workspace?.root ?? null),
+    ]);
+    await mcp.refreshTools();
+    this.setState({ mcpServers: servers, mcpDiscovered: discovered });
+  }
+  private async mcpAct(name: string, fn: () => Promise<any>) {
+    this.setState({ mcpBusy: name });
+    try { await fn(); } finally { this.setState({ mcpBusy: "" }); await this.refreshMcp(); }
+  }
+  mcpStartServer(name: string) { void this.mcpAct(name, async () => { const r = await mcp.startServer(name); if (!r.ok) this.toast("error", t("sc5.mcpStartFail", { name, reason: r.reason || "" })); else this.toast("ok", t("sc5.mcpStarted", { name })); }); }
+  mcpStopServer(name: string) { void this.mcpAct(name, () => mcp.stopServer(name)); }
+  mcpRemoveServer(name: string) { void this.mcpAct(name, () => mcp.removeServer(name)); }
+  mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string> }) {
+    void this.mcpAct(d.name, async () => {
+      const r = await mcp.addServer(d.name, { command: d.command, args: d.args, env: d.env });
+      if (!r.ok) { this.toast("error", t("sc5.mcpAddFail", { error: r.error || "" })); return; }
+      const s = await mcp.startServer(d.name);
+      this.toast(s.ok ? "ok" : "error", s.ok ? t("sc5.mcpImportedStarted", { name: d.name }) : t("sc5.mcpAddedStartFail", { name: d.name }));
+    });
+  }
+  mcpAddJson() {
+    let parsed: any;
+    try { parsed = JSON.parse(this.state.mcpJson.trim()); } catch { this.toast("error", t("sc5.mcpJsonParseFail")); return; }
+    // { "name": {command,args,env} } 또는 { mcpServers: {...} } 또는 {command,args} 단일
+    let entries: [string, any][] = [];
+    if (parsed.mcpServers) entries = Object.entries(parsed.mcpServers);
+    else if (parsed.command) entries = [[parsed.name || "server", parsed]];
+    else entries = Object.entries(parsed);
+    if (!entries.length) { this.toast("error", t("sc5.mcpNoServerDef")); return; }
+    void this.mcpAct("", async () => {
+      for (const [name, cfg] of entries) {
+        if (!cfg || typeof cfg.command !== "string") continue;
+        await mcp.addServer(name, { command: cfg.command, args: cfg.args || [], env: cfg.env || {} });
+        await mcp.startServer(name);
+      }
+      this.setState({ mcpJson: "" });
+      this.toast("ok", t("sc5.mcpServersAdded", { n: entries.length }));
+    });
+  }
+
+  /** 프로그램 분석 → MCP 서버 생성 (분석 → AI 생성 → 기록 → 등록 → 시작) */
+  async mcpGenerate() {
+    const g = this.state.mcpGen;
+    if (!g || !window.schutz) return;
+    const configured = this.configuredAgents();
+    const pref = getManagerId();
+    const managerId = configured.includes(pref) ? pref : (configured.includes("claude") ? "claude" : configured[0]);
+    if (!managerId) { this.toast("error", t("sc5.mcpNeedAi")); return; }
+    const provider = this.providers[managerId];
+
+    const setStatus = (status: string) => this.setState(s => ({ mcpGen: s.mcpGen ? { ...s.mcpGen, status } : null }));
+    this.setState({ mcpBusy: "__gen" });
+    try {
+      // 1) 분석
+      setStatus(t("sc5.mcpAnalyzing"));
+      let analysis = "", name = "custom";
+      if (g.mode === "cli") {
+        const cmd = g.input.trim();
+        name = mcpGen.slug(cmd);
+        const h = await window.schutz.cliHelp(cmd);
+        if (!h.ok && !h.text) { this.toast("error", t("sc5.mcpCliAnalyzeFail", { error: h.error || "" })); return; }
+        analysis = `명령: ${cmd}\n\n--help 출력:\n${h.text || ""}`;
+      } else if (g.mode === "project") {
+        const root = g.input.trim() || this.state.workspace?.root;
+        if (!root) { this.toast("error", t("sc5.mcpNeedProject")); return; }
+        name = mcpGen.slug(root.split(/[\\/]/).pop() || "project");
+        const tree = await window.schutz.readTree(root);
+        const files = tree.entries.filter(e => !e.dir).slice(0, 60).map(e => e.rel).join("\n");
+        let key = "";
+        for (const f of ["package.json", "README.md", "pyproject.toml", "Cargo.toml"]) {
+          if (tree.entries.some(e => e.rel === f)) { try { key += `\n--- ${f} ---\n` + (await window.schutz.readFile(root, f)).slice(0, 4000); } catch { /* */ } }
+        }
+        analysis = `프로젝트: ${tree.name}\n\n파일:\n${files}\n${key}`;
+      } else if (g.mode === "openapi") {
+        const src = g.input.trim();
+        name = mcpGen.slug("api-" + (src.replace(/^https?:\/\//, "").split(/[\/?]/)[0] || "openapi"));
+        let spec = "";
+        if (/^https?:/i.test(src)) { const r = await window.schutz.mcpFetchSpec(src); if (!r.ok) { this.toast("error", t("sc5.mcpSpecFetchFail", { error: r.error || r.status })); return; } spec = r.text || ""; }
+        else if (this.state.workspace) { try { spec = await window.schutz.readFile(this.state.workspace.root, src); } catch { this.toast("error", t("sc5.mcpLocalSpecFail")); return; } }
+        analysis = `OpenAPI 스펙 (원본: ${src}):\n${spec}`;
+      } else {
+        name = mcpGen.slug(g.input.trim().split(/\s+/).slice(0, 3).join("-") || "custom");
+        analysis = g.input.trim();
+      }
+
+      // 2) AI 생성 (단발, 도구 없음)
+      setStatus(t("sc5.mcpGenerating", { name }));
+      const system = mcpGen.genSystem();
+      const transcript: NeutralMsg[] = [{ role: "user", text: mcpGen.genUser(g.mode, name, analysis) }];
+      const abort = new AbortController();
+      this.abortCtls.set("__mcpgen", abort);
+      let out = "";
+      for await (const ev of provider.streamAgentTurn({ transcript, system, tools: undefined, signal: abort.signal })) {
+        if (ev.type === "text") out += ev.delta;
+        else if (ev.type === "usage") this.bumpAgent(managerId, ev.inputTokens, ev.outputTokens);
+        else if (ev.type === "error") { this.toast("error", t("sc5.mcpGenError", { message: ev.message })); return; }
+      }
+      this.abortCtls.delete("__mcpgen");
+      const code = mcpGen.extractCode(out);
+      if (!code || code.length < 80) { this.toast("error", t("sc5.mcpEmptyCode")); return; }
+
+      // 3) 기록 → 4) 등록 → 5) 시작
+      setStatus(t("sc5.mcpWritingStarting"));
+      const w = await window.schutz.mcpWriteServer(name, code);
+      if (!w.ok || !w.path) { this.toast("error", t("sc5.mcpWriteFail", { error: w.error || "" })); return; }
+      // overwrite:true — 같은 이름 재생성은 의도된 교체(mcpAdd 가 실행 중 옛 인스턴스 kill → 새 코드로 respawn)
+      const added = await mcp.addServer(name, { command: "node", args: [w.path], overwrite: true });
+      if (!added.ok) { this.toast("error", t("sc5.mcpAddFail", { error: added.error || "" })); return; }
+      const started = await mcp.startServer(name);
+      await this.refreshMcp();
+      if (started.ok) this.toast("ok", t("sc5.mcpCreatedStarted", { name, count: started.tools?.length ?? 0 }));
+      else this.toast("error", t("sc5.mcpCreatedStartFail", { name, reason: started.reason || "" }));
+      this.setState({ mcpGen: null });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") this.toast("info", t("sc5.mcpGenCancelled"));
+      else this.toast("error", t("sc5.mcpGenFail", { error: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      this.abortCtls.delete("__mcpgen");
+      this.setState({ mcpBusy: "" });
+    }
+  }
+
+  /** MCP 관리 모달 — 설치된 서버 · 가져오기 · JSON 추가 · 생성 */
+  renderMcp() {
+    if (!this.state.mcpOpen && !this.isClosing("mcp")) return null;
+    const s = this.state;
+    const busy = (n: string) => s.mcpBusy === n;
+    const srcLabel: Record<string, string> = { "claude:user": "Claude", "claude:project": t("mcpui.srcClaudeProject"), "mcp.json": ".mcp.json", "codex": "Codex" };
+    const toImport = s.mcpDiscovered.filter(d => !d.added && !s.mcpServers.some(x => x.name === d.name));
+    return this.modalShell("mcp", t("mcpui.title"), () => this.closeOverlay("mcp", { mcpOpen: false }), (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.5 }}>
+          {t("mcpui.intro")}
+        </div>
+
+        {/* 생성 */}
+        <div>
+          <div style={sectHdr}>{t("mcpui.createNew")}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+            {([["cli", t("mcpui.modeCli")], ["project", t("mcpui.modeProject")], ["openapi", "OpenAPI"], ["generic", t("mcpui.modeGeneric")]] as const).map(([mode, label]) => (
+              <button key={mode} className="hv08" onClick={() => this.setState({ mcpGen: { mode, input: mode === "project" && s.workspace ? s.workspace.root : "", status: "" } })}
+                style={{ padding: "5px 12px", fontSize: 11.5, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "1px solid var(--w10)", background: s.mcpGen?.mode === mode ? "var(--accent-soft)" : "transparent", color: "var(--fg-sub)" }}>{label}</button>
+            ))}
+          </div>
+          {s.mcpGen && this.renderMcpGen()}
+        </div>
+
+        {/* 설치된 서버 */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={sectHdr}>{t("mcpui.installedServers")}</span><div style={{ flex: 1 }} />
+            <button className="hv08" onClick={() => void this.refreshMcp()} style={{ padding: "3px 8px", fontSize: 10, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: "var(--fg-sub)" }}>{t("common.refresh")}</button>
+          </div>
+          {s.mcpServers.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "6px 2px" }}>{t("mcpui.noInstalled")}</div>}
+          {s.mcpServers.map(sv => (
+            <div key={sv.name} className="sz-in" style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderRadius: 8, background: "var(--bg-card)", border: "1px solid var(--w06)", marginTop: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: sv.running ? "#8BB292" : "var(--fg-dim3)", flex: "none", boxShadow: sv.running ? "0 0 6px rgba(139,178,146,.6)" : "none" }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{sv.name}</div>
+                <div style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sv.command} {sv.args.join(" ")}</div>
+              </div>
+              {sv.running && <span style={{ flex: "none", fontSize: 10, color: "var(--accent-hi)" }}>{t("mcpui.toolCount", { n: sv.tools })}</span>}
+              <button className="hv08" disabled={busy(sv.name)} onClick={() => sv.running ? this.mcpStopServer(sv.name) : this.mcpStartServer(sv.name)}
+                style={{ flex: "none", padding: "3px 11px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: sv.running ? "#CE9A9A" : "var(--accent-hi)" }}>{busy(sv.name) ? "…" : sv.running ? t("mcpui.stop") : t("mcpui.start")}</button>
+              <button className="hvDim" title={t("mcpui.remove")} onClick={() => this.mcpRemoveServer(sv.name)} style={{ flex: "none", width: 22, height: 22, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 13, borderRadius: 5 }}>✕</button>
+            </div>
+          ))}
+        </div>
+
+        {/* 가져오기 */}
+        <div>
+          <div style={sectHdr}>{t("mcpui.importFrom")}</div>
+          {toImport.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "6px 2px" }}>{t("mcpui.noImport")}</div>}
+          {toImport.map(d => (
+            <div key={d.source + d.name} className="sz-in" style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, marginTop: 6 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
+                  <span style={{ fontSize: 9, color: "var(--fg-dim)", border: "1px solid var(--w10)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{srcLabel[d.source] || d.source}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.command} {d.args.join(" ")}</div>
+              </div>
+              <button className="hv08" disabled={busy(d.name)} onClick={() => this.mcpImport(d)} style={{ flex: "none", padding: "4px 12px", fontSize: 11.5, fontWeight: 600, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "none", background: "var(--accent)", color: "var(--on-accent)" }}>{busy(d.name) ? "…" : t("mcpui.import")}</button>
+            </div>
+          ))}
+        </div>
+
+        {/* JSON 추가 */}
+        <div>
+          <div style={sectHdr}>{t("mcpui.addJson")}</div>
+          <textarea value={s.mcpJson} onChange={e => this.setState({ mcpJson: e.target.value })}
+            placeholder={'{ "my-server": { "command": "npx", "args": ["-y", "some-mcp"] } }'}
+            style={{ width: "100%", height: 68, marginTop: 6, resize: "vertical", background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8, padding: "8px 10px", color: "var(--fg)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
+          <button className="hvAccent" onClick={() => this.mcpAddJson()} disabled={!s.mcpJson.trim()} style={{ marginTop: 6, height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: s.mcpJson.trim() ? "pointer" : "default", borderRadius: 8, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("mcpui.addStart")}</button>
+        </div>
+      </div>
+    ), 600);
+  }
+
+  /** 생성 마법사 — P32D 에서 실제 분석·생성 로직 채움 */
+  renderMcpGen(): React.ReactNode {
+    const g = this.state.mcpGen!;
+    const ph: Record<string, string> = { cli: t("mcpui.phCli"), project: t("mcpui.phProject"), openapi: t("mcpui.phOpenapi"), generic: t("mcpui.phGeneric") };
+    return (
+      <div style={{ marginTop: 8, padding: "10px 12px", background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+        {g.mode === "generic" || g.mode === "project"
+          ? <textarea value={g.input} onChange={e => this.setState({ mcpGen: { ...g, input: e.target.value } })} placeholder={ph[g.mode]} style={{ width: "100%", height: 54, resize: "vertical", background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 7, padding: "7px 10px", color: "var(--fg)", fontSize: 12, fontFamily: g.mode === "project" ? MONO : SUIT, outline: "none" }} />
+          : <input value={g.input} onChange={e => this.setState({ mcpGen: { ...g, input: e.target.value } })} placeholder={ph[g.mode]} style={{ width: "100%", height: 32, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 7, padding: "0 11px", color: "var(--fg)", fontSize: 12, fontFamily: MONO, outline: "none" }} />}
+        {g.status && <div style={{ fontSize: 11, color: "var(--fg-sub2)" }}>{g.status}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="hvAccent" onClick={() => void this.mcpGenerate()} disabled={!!this.state.mcpBusy || (g.mode !== "project" && !g.input.trim())}
+            style={{ height: 30, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("mcpui.analyzeGenerate")}</button>
+          <button className="hv05" onClick={() => this.setState({ mcpGen: null })} style={{ height: 30, padding: "0 12px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("mcpui.cancel")}</button>
+        </div>
+      </div>
+    );
+  }
+
+  /** 명령어 레퍼런스 모달 (/help) — 슬래시 명령을 오리진별로 (내장 + 발견된 커스텀) */
+  renderCommands() {
+    if (!this.state.commandsOpen && !this.isClosing("commands")) return null;
+    const ca = this.state.cliAgents;
+    const originOk = (o: string) => o === "schutz" || (o === "claude" && !!ca.claude?.ok) || (o === "codex" && !!ca.codex?.ok);
+    const builtin = SLASH_COMMANDS.filter(c => originOk(c.origin));
+    const discovered = (this.state.agentCommands ?? []).filter(c => originOk(c.origin));
+    const groups: { title: string; color: string; items: { cmd: string; desc: string; badge?: string }[] }[] = [
+      { title: "Schutz", color: ORIGIN_COLOR.schutz, items: builtin.filter(c => c.origin === "schutz").map(c => ({ cmd: c.cmd + (c.argHint ? " " + t(c.argHint) : ""), desc: t(c.desc) })) },
+      { title: "Claude Code", color: ORIGIN_COLOR.claude, items: [
+        ...builtin.filter(c => c.origin === "claude").map(c => ({ cmd: c.cmd, desc: t(c.desc) })),
+        ...discovered.filter(c => c.origin === "claude").map(c => ({ cmd: "/" + c.name + (c.argHint ? " " + c.argHint : ""), desc: c.description || t("cmds.customCommand"), badge: c.scope === "project" ? t("cmds.scopeProject") : t("cmds.scopeUser") })),
+      ] },
+      { title: "Codex", color: ORIGIN_COLOR.codex, items: [
+        ...builtin.filter(c => c.origin === "codex").map(c => ({ cmd: c.cmd, desc: t(c.desc) })),
+        ...discovered.filter(c => c.origin === "codex").map(c => ({ cmd: "/" + c.name + (c.argHint ? " " + c.argHint : ""), desc: c.description || t("cmds.customPrompt"), badge: t("cmds.scopeUser") })),
+      ] },
+    ];
+    return this.modalShell("commands", t("cmds.title"), () => this.closeOverlay("commands", { commandsOpen: false }), (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.5 }}>{t("cmds.hintBefore")}<code style={{ fontFamily: MONO, background: "var(--w06)", borderRadius: 4, padding: "1px 5px" }}>/</code>{t("cmds.hintAfter")}</div>
+        {groups.filter(g => g.items.length).map(g => (
+          <div key={g.title}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 4, background: g.color }} />
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{g.title.toUpperCase()}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {g.items.map((it, i) => (
+                <div key={it.cmd + i} style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "5px 8px", borderRadius: 6, background: i % 2 ? "var(--w03)" : "transparent" }}>
+                  <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", flex: "none", minWidth: 150 }}>{it.cmd}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--fg-sub2)", flex: 1 }}>{it.desc}</span>
+                  {it.badge && <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", border: "1px solid var(--w10)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{it.badge}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    ), 560);
+  }
+
+  /** 확장 상세(정보) 뷰 — VS Code 마켓 상세처럼 (아이콘·통계·README) */
+  renderExtDetail() {
+    const d = this.state.extDetail;
+    if (!d) return null;
+    const out = this.isClosing("extDetail");
+    const closeDetail = () => this.closeOverlay("extDetail", { extDetail: null });
+    const id = d.namespace + "." + d.name;
+    const installed = this.state.extList.some(e => e.id === id);
+    const installing = this.state.extInstalling.includes(id);
+    const stat = (label: string, val: string) => (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 9.5, color: "var(--fg-dim)" }}>{label}</span>
+        <span style={{ fontSize: 12, color: "var(--fg-sub)", fontFamily: MONO }}>{val}</span>
+      </div>
+    );
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeDetail} style={{ position: "fixed", inset: 0, zIndex: 196, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(d.displayName || d.name)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width: 720, maxWidth: "92%", height: "84%", display: "flex", flexDirection: "column", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, overflow: "hidden" }}>
+          {/* 헤더 */}
+          <div style={{ display: "flex", gap: 14, padding: "18px 20px", borderBottom: "1px solid var(--w06)" }}>
+            {d.icon
+              ? <img src={d.icon} width={56} height={56} style={{ flex: "none", borderRadius: 10, objectFit: "contain", background: "var(--w05)" }} alt="" onError={e => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+              : <div style={{ flex: "none", width: 56, height: 56, borderRadius: 10, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent-hi)", fontSize: 24, fontWeight: 800 }}>{(d.displayName || d.name).slice(0, 1).toUpperCase()}</div>}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "var(--fg)" }}>{d.displayName}</div>
+              <div style={{ fontSize: 11.5, color: "var(--fg-dim)", marginTop: 2, fontFamily: MONO }}>{d.namespace}.{d.name}{d.version ? " · v" + d.version : ""}</div>
+              {!d.loading && <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                {installed
+                  ? <span style={{ fontSize: 11.5, color: "var(--accent-hi)", fontWeight: 700, alignSelf: "center" }}>{t("extui.installed")}</span>
+                  : <button className="hv08" disabled={installing} onClick={() => void this.extInstall(d.namespace, d.name)} style={{ padding: "6px 18px", fontSize: 12, fontWeight: 600, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "none", background: "var(--accent)", color: "var(--on-accent)", opacity: installing ? 0.6 : 1 }}>{installing ? t("extui.installing") : t("extui.install")}</button>}
+              </div>}
+            </div>
+            <button className="hvDim" onClick={closeDetail} style={{ flex: "none", width: 26, height: 26, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 16, borderRadius: 6, alignSelf: "flex-start" }}>✕</button>
+          </div>
+          {d.loading
+            ? <div style={{ flex: 1, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+              {[70, 92, 60, 88, 80, 40].map((w, i) => <div key={i} className="sz-skel" style={{ height: i === 0 ? 18 : 12, width: w + "%" }} />)}
+            </div>
+            : <>
+              {/* 통계 */}
+              <div style={{ display: "flex", gap: 26, padding: "12px 20px", borderBottom: "1px solid var(--w05)", flexWrap: "wrap" }}>
+                {stat(t("extd.download"), this.fmtCount(d.downloadCount))}
+                {d.rating > 0 && stat(t("extd.rating"), "★ " + d.rating.toFixed(1) + (d.reviewCount ? ` (${d.reviewCount})` : ""))}
+                {d.license && stat(t("extd.license"), d.license)}
+                {stat(t("extd.publisher"), d.publishedBy || d.namespace)}
+                {d.repository && stat(t("extd.repository"), String(d.repository).replace(/^https?:\/\//, "").slice(0, 34))}
+              </div>
+              {(d.categories?.length || d.tags?.length) ? <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "10px 20px 0" }}>
+                {[...(d.categories || []), ...(d.tags || [])].slice(0, 10).map((t: string, i: number) => <span key={i} style={{ fontSize: 9.5, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 4, padding: "2px 7px" }}>{t}</span>)}
+              </div> : null}
+              {/* README */}
+              <div className="ext-readme" style={{ flex: 1, overflowY: "auto", padding: "14px 22px", color: "var(--fg-sub)", fontSize: 13, lineHeight: 1.65 }}
+                dangerouslySetInnerHTML={{ __html: d.readme ? mdToHtml(d.readme) : `<p style='color:var(--fg-dim)'>${t("extd.noReadme")}</p>` }} />
+            </>}
+        </div>
+      </div>
+    );
+  }
+
+  /** 확장 기여 패널 (ui.showPanel) — 확장은 신뢰 코드로 간주 */
+  renderExtPanel() {
+    const p = this.state.extPanel;
+    if (!p && !this.isClosing("extPanel")) return null;
+    const out = this.isClosing("extPanel");
+    const closeExtPanel = () => this.closeOverlay("extPanel", { extPanel: null });
+    if (!p) return null;
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeExtPanel}
+        style={{ position: "fixed", inset: 0, zIndex: 190, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(p.title)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+          style={{ width: 520, maxWidth: "90%", maxHeight: "80%", overflow: "auto", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)" }}>
+          <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--w08)" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.title}</span>
+            <button onClick={closeExtPanel} style={{ marginLeft: "auto", border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 16 }}>×</button>
+          </div>
+          <div style={{ color: "var(--fg)" }} dangerouslySetInnerHTML={{ __html: p.html }} />
+        </div>
+      </div>
+    );
+  }
+
+  renderSymbolPalette() {
+    const s = this.state;
+    if (!s.symOpen && !this.isClosing("sym")) return null;
+    const out = this.isClosing("sym");
+    const closeSym = () => this.closeOverlay("sym", { symOpen: false });
+    const list = s.symResults;
+    const sel = Math.min(s.symSel, Math.max(0, list.length - 1));
+    const kindName = (k: number) => monaco.languages.SymbolKind[k] ?? "";
+    return (
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSym}
+        style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 90 }}>
+        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+          style={{ width: 620, maxWidth: "90%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
+          <input autoFocus value={s.symQuery}
+            onChange={e => this.runSymbolSearch(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ symSel: (sel + 1) % Math.max(1, list.length) }); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ symSel: (sel - 1 + list.length) % Math.max(1, list.length) }); }
+              else if (e.key === "Enter" && list[sel]) { this.jumpToSymbol(list[sel]); }
+              else if (e.key === "Escape") closeSym();
+            }}
+            placeholder={t("palette.symPlaceholder")}
+            style={{ width: "100%", background: "transparent", border: "none", borderBottom: "1px solid var(--w08)", height: 42, padding: "0 16px", color: "var(--fg)", fontSize: 13.5, fontFamily: SUIT, outline: "none" }} />
+          <div style={{ maxHeight: 340, overflowY: "auto", padding: 4 }}>
+            {s.symLoading && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.searching")}</div>}
+            {!s.symLoading && s.symQuery.trim() && list.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.noSymbols")}</div>}
+            {!s.symQuery.trim() && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.symPrompt")}</div>}
+            {list.map((sym, i) => (
+              <div key={sym.uri + ":" + sym.range.startLineNumber + ":" + i} ref={i === sel ? this._selRowRef : undefined}
+                onMouseDown={e => { e.preventDefault(); this.jumpToSymbol(sym); }}
+                onMouseEnter={() => this.setState({ symSel: i })}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
+                <span style={{ fontFamily: MONO, fontSize: 9.5, color: "var(--fg-dim)", minWidth: 62 }}>{kindName(sym.kind)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)" }}>{sym.name}</span>
+                {sym.container && <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim)" }}>{sym.container}</span>}
+                <span style={{ marginLeft: "auto", fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{this.uriToRel(sym.uri)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /** 에디터 설정 변경 → 저장 + 열린 페인 재생성(폰트/키맵 반영) */
+  private applyEditorPref(patch: Partial<EditorPrefs>) {
+    setEditorPrefs(patch);
+    if (patch.uiFont || patch.codeFont) applyUiFont(); // 저장 후 --font-ui/--font-code 재적용(전 UI 전파)
+    this.setState(s => {
+      const paneVer: Record<string, number> = { ...s.paneVer };
+      for (const p of this.allOpen(s)) paneVer[p] = (paneVer[p] ?? 0) + 1;
+      return { paneVer } as any;
+    });
+  }
+  private applyAutonomy(patch: any) { setAutonomy(patch); this.forceUpdate(); }
+
   // ── 설정 모달 (프로바이더 API 키) ──
   renderSettings() {
     const s = this.state;
-    if (!s.settingsOpen) return null;
+    if (!s.settingsOpen && !this.isClosing("settings")) return null;
+    const out = this.isClosing("settings");
+    const closeSettings = () => this.closeOverlay("settings", { settingsOpen: false });
+    const ed = getEditorPrefs();
+    const au = getAutonomy();
+    const segBtn = (on: boolean): React.CSSProperties => ({ flex: 1, height: 30, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: on ? "var(--fg)" : "var(--fg-sub2)", background: on ? "var(--accent-soft)" : "transparent", border: `1px solid ${on ? "var(--accent)" : "var(--w10)"}` });
     return (
-      <div onClick={() => this.setState({ settingsOpen: false })}
+      <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSettings}
         style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div onClick={e => e.stopPropagation()}
-          style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
+        <div {...this.dialogProps(t("settings.title"))} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+          style={{ width: 480, maxWidth: "92%", maxHeight: "88vh", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-            <span style={{ fontSize: 15, fontWeight: 700 }}>설정</span>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>{t("settings.title")}</span>
             <div style={{ flex: 1 }} />
-            <button className="hvDim" onClick={() => this.setState({ settingsOpen: false })}
+            <button className="hvDim" onClick={closeSettings}
               style={{ width: 24, height: 24, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
           </div>
           {window.schutz && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>구독 계정 로그인 (권장 · API 키 불필요)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>{t("settings.subLogin")}</div>
               {[
-                { id: "claude", label: "Claude (Pro/Max 구독)" },
-                { id: "codex", label: "ChatGPT (Plus/Pro 구독)" },
+                { id: "claude", label: t("settings.planClaude") },
+                { id: "codex", label: t("settings.planCodex") },
               ].map(c => {
                 const connected = !!getOAuth(c.id);
                 return (
@@ -2196,37 +5315,37 @@ export class App extends React.Component<{}, S> {
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#8BB292" : "var(--fg-dim)", flex: "none" }} />
                       <span style={{ fontSize: 12, fontWeight: 600, color: connected ? "var(--fg)" : "var(--fg-sub2)", flex: 1 }}>
-                        {c.label} {connected ? "· 연결됨" : "· 미연결"}
+                        {c.label} {connected ? t("settings.connectedTag") : t("settings.disconnectedTag")}
                       </span>
                       {connected ? (
                         <button className="hv05" onClick={() => { setOAuth(c.id, null); this.setState(st => ({ oauthTick: st.oauthTick + 1 })); }}
-                          style={{ flex: "none", height: 25, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "transparent", border: "1px solid var(--w14)" }}>해제</button>
+                          style={{ flex: "none", height: 25, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "transparent", border: "1px solid var(--w14)" }}>{t("settings.disconnect")}</button>
                       ) : (
                         <button className="hvAccent" onClick={() => void this.startOauth(c.id)}
-                          style={{ flex: "none", height: 25, padding: "0 12px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>로그인</button>
+                          style={{ flex: "none", height: 25, padding: "0 12px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("settings.login")}</button>
                       )}
                     </div>
                     {!connected && s.oauthPasteFor === c.id && (
                       <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                        <input value={s.oauthPasteVal} placeholder="브라우저 승인 후 코드를 붙여넣으세요"
+                        <input value={s.oauthPasteVal} placeholder={t("settings.oauthPaste")}
                           onChange={e => this.setState({ oauthPasteVal: e.target.value })}
                           onKeyDown={e => { if (e.key === "Enter") void this.submitOauthPaste(); }}
                           style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid rgba(143,168,147,.35)", borderRadius: 6, height: 28, padding: "0 10px", color: "var(--fg)", fontSize: 11, fontFamily: MONO, outline: "none" }} />
                         <button className="hvAccent" onClick={() => void this.submitOauthPaste()}
-                          style={{ height: 28, padding: "0 11px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>연결</button>
+                          style={{ height: 28, padding: "0 11px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("settings.connect")}</button>
                       </div>
                     )}
                     {!connected && c.id === "codex" && s.oauthWait && (
-                      <div style={{ fontSize: 10.5, color: "var(--fg-sub2)", marginTop: 7 }}>브라우저에서 승인하면 자동으로 연결됩니다…</div>
+                      <div style={{ fontSize: 10.5, color: "var(--fg-sub2)", marginTop: 7 }}>{t("settings.oauthWaitMsg")}</div>
                     )}
                   </div>
                 );
               })}
               {s.oauthMsg && <div style={{ fontSize: 10.5, color: "#CE9A9A" }}>⚠️ {s.oauthMsg}</div>}
-              <div style={{ fontSize: 10, color: "var(--fg-dim2)" }}>Grok·GLM은 구독 로그인 미제공 — API 키 방식만 지원됩니다.</div>
+              <div style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{t("settings.noSubNote")}</div>
             </div>
           )}
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>AI 프로바이더 API 키 {window.schutz && (s.cliAgents.claude?.ok || s.cliAgents.codex?.ok) ? "(선택 — 구독 인증이 우선)" : ""}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.apiKeysTitle")} {window.schutz && (s.cliAgents.claude?.ok || s.cliAgents.codex?.ok) ? t("settings.apiKeysOptional") : ""}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {AGDEF.map(d => (
               <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -2235,11 +5354,11 @@ export class App extends React.Component<{}, S> {
                   type="password"
                   defaultValue={getStoredKey(d.id as any)}
                   onChange={e => setStoredKey(d.id as any, e.target.value.trim())}
-                  placeholder="API 키 (비우면 미사용)"
+                  placeholder={t("settings.apiKeyPlaceholder")}
                   style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
                 />
                 <button className="hv05" onClick={() => void this.testConn(d.id)}
-                  style={{ flex: "none", height: 30, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>테스트</button>
+                  style={{ flex: "none", height: 30, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("settings.test")}</button>
               </div>
             ))}
           </div>
@@ -2251,8 +5370,154 @@ export class App extends React.Component<{}, S> {
             ))}
           </div>
           <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", marginTop: 10, lineHeight: 1.6 }}>
-            키는 이 기기(localStorage)에만 저장됩니다. [테스트]는 실제 API를 1회 호출해 연결을 검증합니다.
+            {t("settings.keysNote")}
           </div>
+
+          {/* ── 언어 / Language ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.language")}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {LANGS.map(([code, name]) => (
+              <button key={code} onClick={() => setLang(code)} style={segBtn(getLang() === code)}>{name}</button>
+            ))}
+          </div>
+
+          {/* ── 에디터 ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.editor")}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeFont")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {Object.entries(CODE_FONTS).map(([k, f]) => (
+                  <button key={k} onClick={() => this.applyEditorPref({ codeFont: k })} style={{ ...segBtn(ed.codeFont === k), fontFamily: f.stack }}>{f.name}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.uiFont")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {Object.entries(UI_FONTS).map(([k, f]) => (
+                  <button key={k} onClick={() => this.applyEditorPref({ uiFont: k })} style={{ ...segBtn(ed.uiFont === k), fontFamily: f.stack }}>{f.name}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeSize")}</span>
+              <input type="range" min={11} max={16} step={1} value={ed.fontSize}
+                onChange={e => this.applyEditorPref({ fontSize: +e.target.value })}
+                style={{ flex: 1, accentColor: "var(--accent)", background: "transparent" }} />
+              <span style={{ flex: "none", width: 34, textAlign: "right", fontSize: 11.5, fontFamily: MONO, color: "var(--fg-sub2)" }}>{ed.fontSize}px</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.keymap")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {KEYMAPS.map(([k, name]) => (
+                  <button key={k} onClick={() => this.applyEditorPref({ keymap: k })} style={segBtn(ed.keymap === k)}>{name}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+              {([["wordWrap", t("settings.wordWrap")], ["minimap", t("settings.minimap")], ["formatOnSave", t("settings.formatOnSave")], ["lineNumbers", t("settings.lineNumbers")], ["renderWhitespace", t("settings.renderWhitespace")]] as [keyof typeof ed, string][]).map(([key, label]) => (
+                <div key={key as string} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, color: "var(--fg-sub)" }}>{label}</span>
+                  <button onClick={() => this.applyEditorPref({ [key]: !ed[key] } as any)}
+                    style={{ width: 36, height: 20, borderRadius: 10, cursor: "pointer", border: "none", background: ed[key] ? "var(--accent)" : "var(--w12)", position: "relative", transition: "background var(--dur) var(--ease)" }}>
+                    <span style={{ position: "absolute", top: 2.5, left: ed[key] ? 18.5 : 2.5, width: 15, height: 15, borderRadius: "50%", background: ed[key] ? "var(--on-accent)" : "var(--fg-sub2)", transition: "left var(--dur) var(--ease)" }} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.autoSave")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {([["off", t("settings.autoSaveOff")], ["afterDelay", t("settings.autoSaveDelay")], ["onFocusChange", t("settings.autoSaveFocus")]] as [EditorPrefs["autoSave"], string][]).map(([v, label]) => (
+                  <button key={v} onClick={() => this.applyEditorPref({ autoSave: v })} style={segBtn(ed.autoSave === v)}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.tabSize")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {[2, 4, 8].map(n => (<button key={n} onClick={() => this.applyEditorPref({ tabSize: n })} style={segBtn(ed.tabSize === n)}>{n}</button>))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.cursor")}</span>
+              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+                {([["line", t("settings.cursorLine")], ["block", t("settings.cursorBlock")], ["underline", t("settings.cursorUnderline")]] as [EditorPrefs["cursorStyle"], string][]).map(([v, label]) => (
+                  <button key={v} onClick={() => this.applyEditorPref({ cursorStyle: v })} style={segBtn(ed.cursorStyle === v)}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", lineHeight: 1.6 }}>{t("settings.editorNote")}</div>
+          </div>
+
+          {/* ── 테마 ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.theme")}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {Object.entries(THEME_TOKENS).map(([id, t]) => (
+              <button key={id} onClick={() => this.setTheme(id)} style={{ ...segBtn(getThemeId() === id), display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: t.bgEditor, border: `1px solid ${t.accent}`, flex: "none" }} />{t.name}
+              </button>
+            ))}
+          </div>
+          {this.state.extThemes.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 5 }}>{t("settings.importedThemes")}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {this.state.extThemes.map(t => (
+                  <button key={t.id} onClick={() => this.selectVsxTheme(t)}
+                    style={{ padding: "4px 10px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "1px solid var(--w10)", background: getActiveVsxTheme() === t.id ? "var(--accent-soft)" : "transparent", color: "var(--fg-sub)" }}>{t.label}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {this.state.extIconThemes.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 5 }}>{t("settings.iconThemes")}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                <button onClick={() => void this.applyIconTheme(null)} style={{ padding: "4px 10px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "1px solid var(--w10)", background: iconTheme.isIconThemeActive() ? "transparent" : "var(--accent-soft)", color: "var(--fg-sub)" }}>{t("settings.builtinIcon")}</button>
+                {this.state.extIconThemes.map(t => (
+                  <button key={t.extId + t.path} onClick={() => void this.applyIconTheme(t)}
+                    style={{ padding: "4px 10px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "1px solid var(--w10)", background: iconTheme.iconThemeLabel() === t.label ? "var(--accent-soft)" : "transparent", color: "var(--fg-sub)" }}>{t.label}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── 단축키 ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.shortcuts")}</div>
+          <button onClick={() => this.openO({ settingsOpen: false, keysOpen: true })} style={{ ...segBtn(false), flex: "none", padding: "0 14px", width: "auto" }}>{t("settings.viewAllKeys")}</button>
+
+          {/* ── 자율성 ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.autonomy")}</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {[["manual", t("settings.autoManual")], ["balanced", t("settings.autoBalanced")], ["auto", t("settings.autoAuto")]].map(([k, name]) => (
+              <button key={k} onClick={() => this.applyAutonomy({ policy: k })} style={segBtn(au.policy === k)}>{name}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", lineHeight: 1.6, marginBottom: au.policy === "balanced" ? 10 : 0 }}>
+            {au.policy === "manual" ? t("settings.autoManualDesc") : au.policy === "balanced" ? t("settings.autoBalancedDesc") : t("settings.autoAutoDesc")}
+          </div>
+          {au.policy === "balanced" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[["docs", t("settings.ruleDocs"), "*.md, docs/"], ["tests", t("settings.ruleTests"), "*.test.*, *.spec.*"], ["deps", t("settings.ruleDeps"), "package.json, lockfile"]].map(([k, label, hint]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ fontSize: 12, color: "var(--fg-code)" }}>{label}</span>
+                  <span style={{ fontSize: 10.5, color: "var(--fg-dim2)", fontFamily: MONO }}>{hint}</span>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => this.applyAutonomy({ rules: { ...au.rules, [k]: !(au.rules as any)[k] } })}
+                    style={{ width: 36, height: 20, borderRadius: 10, cursor: "pointer", border: "none", background: (au.rules as any)[k] ? "var(--accent)" : "var(--w12)", position: "relative", transition: "background var(--dur) var(--ease)" }}>
+                    <span style={{ position: "absolute", top: 2.5, left: (au.rules as any)[k] ? 18.5 : 2.5, width: 15, height: 15, borderRadius: "50%", background: (au.rules as any)[k] ? "var(--on-accent)" : "var(--fg-sub2)", transition: "left var(--dur) var(--ease)" }} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2260,5 +5525,7 @@ export class App extends React.Component<{}, S> {
 }
 
 const iconBtn: React.CSSProperties = { width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", borderRadius: 6, cursor: "pointer" };
-const railBtn: React.CSSProperties = { width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", borderRadius: 7, cursor: "pointer" };
+const railBtn: React.CSSProperties = { width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", borderRadius: 7, cursor: "pointer", transition: "background var(--dur) var(--ease)" };
+const sectHdr: React.CSSProperties = { fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)", textTransform: "uppercase", margin: "4px 0 3px" };
+const gitIconBtn: React.CSSProperties = { flex: "none", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" };
 const spinner = (color: string, track: string): React.CSSProperties => ({ width: 9, height: 9, borderRadius: "50%", border: `1.5px solid ${track}`, borderTopColor: color, animation: "szSpin .9s linear infinite", display: "block" });

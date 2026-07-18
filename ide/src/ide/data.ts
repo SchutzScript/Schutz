@@ -1,5 +1,7 @@
 /** Schutz IDE — 상태 모델·데모 데이터 (디자인 핸드오프 프로토타입의 상태 모델을 그대로 포팅) */
 
+import { t } from "../i18n";
+
 export const TM = "src/auth/token-manager.ts";
 export const TY = "src/auth/types.ts";
 export const MD = "docs/auth.md";
@@ -140,7 +142,7 @@ export function hunkDefs(): Record<string, HunkDef> {
     A: {
       path: TM, agent: "claude", afterId: "tm5",
       lines: ["  private refreshTimer: ReturnType<typeof setTimeout> | null = null;"],
-      chip: "Claude · 갱신 타이머 필드 추가",
+      chip: t("data.chipAddRefreshTimer"),
     },
     C: {
       path: TM, agent: "claude", removeId: "tm14", afterId: "tm14",
@@ -148,7 +150,7 @@ export function hunkDefs(): Record<string, HunkDef> {
         "      this.tokens = await this.client.refresh();",
         "      this.scheduleRefresh();",
       ],
-      chip: "Claude · 갱신 예약 연결",
+      chip: t("data.chipWireRefreshSchedule"),
     },
     B: {
       path: TM, agent: "claude", afterId: "tm17",
@@ -164,7 +166,7 @@ export function hunkDefs(): Record<string, HunkDef> {
         "    this.refreshTimer = setTimeout(() => void this.getAccessToken(), Math.max(delay, 0));",
         "  }",
       ],
-      chip: "Claude · 자동 갱신 스케줄러",
+      chip: t("data.chipAutoRefreshScheduler"),
     },
     T: {
       path: TY, agent: "gpt", afterId: "ty7",
@@ -174,7 +176,7 @@ export function hunkDefs(): Record<string, HunkDef> {
         "  /** Invoked after every successful refresh. */",
         "  onRefresh?: (tokens: TokenPair) => void;",
       ],
-      chip: "GPT · 옵션 타입 확장",
+      chip: t("data.chipExtendOptionsType"),
     },
     D: {
       path: MD, agent: "grok", afterId: "md10",
@@ -186,18 +188,19 @@ export function hunkDefs(): Record<string, HunkDef> {
         "",
         "토큰은 만료 60초 전에 자동으로 갱신됩니다.",
       ],
-      chip: "Grok · 문서 갱신",
+      chip: t("data.chipUpdateDocs"),
     },
   };
 }
 
-export const MENUS: [string, string, ([string, string] | null)[]][] = [
-  ["file", "파일", [["새 파일", "⌘N"], ["새 창", "⇧⌘N"], ["프로젝트 열기…", "⌘O"], null, ["저장", "⌘S"], ["모두 저장", "⇧⌘S"], null, ["설정…", "⌘,"]]],
-  ["edit", "편집", [["실행 취소", "⌘Z"], ["다시 실행", "⇧⌘Z"], null, ["잘라내기", "⌘X"], ["복사", "⌘C"], ["붙여넣기", "⌘V"], null, ["찾기", "⌘F"]]],
-  ["view", "보기", [["분할 해제", "⌥⌘1"], ["에디터 2분할", "⌥⌘2"], ["에디터 4분할", "⌥⌘4"], null, ["터미널", "⌘`"]]],
-  ["nav", "이동", [["파일로 이동", "⌘P"]]],
-  ["ai", "AI", [["모델 관리…", ""], ["사용량 대시보드", ""]]],
-  ["help", "도움말", [["단축키 목록", ""], ["Schutz 정보", ""]]],
+// [메뉴키, 항목[[액션키, 단축키] | null]] — 라벨은 i18n t("menu."+키)로 렌더, 디스패치는 안정 액션키로.
+export const MENUS: [string, ([string, string] | null)[]][] = [
+  ["file", [["file.new", "⌘N"], ["file.newWindow", "⇧⌘N"], ["file.openProject", "⌘O"], null, ["file.save", "⌘S"], ["file.saveAll", "⇧⌘S"], null, ["file.settings", "⌘,"]]],
+  ["edit", [["edit.undo", "⌘Z"], ["edit.redo", "⇧⌘Z"], null, ["edit.cut", "⌘X"], ["edit.copy", "⌘C"], ["edit.paste", "⌘V"], null, ["edit.find", "⌘F"]]],
+  ["view", [["view.splitReset", "⌥⌘1"], ["view.split2", "⌥⌘2"], ["view.split4", "⌥⌘4"], null, ["view.format", "⇧⌥F"], ["view.wordWrap", ""], ["view.minimap", ""], null, ["view.problems", ""], ["view.terminal", "⌘`"]]],
+  ["nav", [["nav.quickOpen", "⌘P"], ["nav.commandPalette", "⇧⌘P"], ["nav.symbol", "⇧⌘O"]]],
+  ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""]]],
+  ["help", [["help.replayTutorial", ""], ["help.keys", ""], ["help.about", ""]]],
 ];
 
 export const PROJECTS = [
