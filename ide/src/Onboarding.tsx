@@ -451,8 +451,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
                   return (
                     <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: connected ? "rgba(143,168,147,.08)" : "rgba(255,255,255,.03)", border: `1px solid ${connected ? "rgba(143,168,147,.4)" : "rgba(255,255,255,.08)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#8BB292" : "#5A635C", flex: "none" }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: connected ? "#9DC4A3" : "#8B948C" }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "var(--ok)" : "#5A635C", flex: "none" }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: connected ? "var(--ok-hi)" : "#8B948C" }}>
                           {subName} {connected ? t("ob.accountConnected") : t("ob.accountNotConnected")}
                         </span>
                         <div style={{ flex: 1 }} />

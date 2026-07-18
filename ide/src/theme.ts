@@ -8,6 +8,9 @@ export interface ThemeTokens {
   fgDim: string; fgDim2: string; fgDim3: string;
   accent: string; accentHi: string;
   onAccent: string;
+  /** 시맨틱 — 추가/수락/성공. 브랜드 액센트(세이지)와 색상을 20°+ 벌려
+   *  "탈색된 세이지 = 크롬, 선명한 초록 = 실제 의미"가 되도록 분리한다. */
+  ok: string; okHi: string;
   /** 헤어라인/호버 오버레이 (다크=흰 알파, 라이트=검정 알파) */
   w03: string; w04: string; w05: string; w06: string; w07: string;
   w08: string; w10: string; w12: string; w14: string;
@@ -27,6 +30,7 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     fgDim: "#88918A", fgDim2: "#727B74", fgDim3: "#5C645E",
     accent: "#8FA893", accentHi: "#A9BCA9",
     onAccent: "#0C0E0D",
+    ok: "#5CB98A", okHi: "#7ACCA2",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
     w10: "rgba(255,255,255,.1)", w12: "rgba(255,255,255,.12)", w14: "rgba(255,255,255,.14)",
@@ -42,6 +46,7 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     fg: "#E0E2E8", fgCode: "#CCCFD6", fgSub: "#AEB2BC", fgSub2: "#9DA1AC",
     fgDim: "#868A93", fgDim2: "#71757D", fgDim3: "#5A5D65",
     accent: "#9AA3B2", accentHi: "#B4BCC9",
+    ok: "#5CB98A", okHi: "#7ACCA2",
     onAccent: "#0F1013",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
@@ -58,6 +63,8 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     bgPopup: "#FFFFFF", bdPopup: "#D3D7CD",
     fg: "#161A15", fgCode: "#1F241F", fgSub: "#3E443B", fgSub2: "#525849",
     fgDim: "#6A7166", fgDim2: "#828978", fgDim3: "#9AA091",
+    // 라이트에선 흰 배경 대비를 위해 어둡게(4.5+), 호버(okHi)는 더 어두운 방향
+    ok: "#227A53", okHi: "#1A6544",
     accent: "#3F6B4E", accentHi: "#2E5A3D",
     onAccent: "#FFFFFF",
     w03: "rgba(30,40,25,.035)", w04: "rgba(30,40,25,.05)", w05: "rgba(30,40,25,.065)",
@@ -104,6 +111,8 @@ export function applyTheme(id: string): void {
   r.setProperty("--fg-dim2", t.fgDim2);
   r.setProperty("--fg-dim3", t.fgDim3);
   r.setProperty("--accent", t.accent);
+  r.setProperty("--ok", t.ok);
+  r.setProperty("--ok-hi", t.okHi);
   r.setProperty("--accent-hi", t.accentHi);
   r.setProperty("--on-accent", t.onAccent);
   r.setProperty("--w03", t.w03); r.setProperty("--w04", t.w04); r.setProperty("--w05", t.w05);

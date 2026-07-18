@@ -18,7 +18,7 @@ export const SearchIcon = () => (
 
 export const PlayIcon = () => (
   <svg width="13" height="13" viewBox="0 0 16 16">
-    <path d="M4.5 2.8 L13 8 L4.5 13.2 Z" fill="none" stroke="#8BB292" strokeWidth="1.4" strokeLinejoin="round" />
+    <path d="M4.5 2.8 L13 8 L4.5 13.2 Z" fill="none" stroke="var(--ok)" strokeWidth="1.4" strokeLinejoin="round" />
   </svg>
 );
 

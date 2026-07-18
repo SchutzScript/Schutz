@@ -2974,7 +2974,7 @@ export class App extends React.Component<{}, S> {
       prevIncluded = true;
       let sign = " ", bg = "transparent", color = "var(--fg-sub2)", signColor = "transparent";
       if (l.kind === "removed") { sign = "−"; bg = "rgba(201,123,123,.1)"; color = "#C99A9A"; signColor = "#C97B7B"; }
-      else if (marked[i]) { sign = "+"; bg = "rgba(139,178,146,.09)"; color = "#B7CBBA"; signColor = "#8BB292"; }
+      else if (marked[i]) { sign = "+"; bg = "color-mix(in srgb, var(--ok) 9%, transparent)"; color = "#B7CBBA"; signColor = "var(--ok)"; }
       rows.push({
         key: "d" + i, sep: false,
         oldN: isOld ? String(oldN) : "", newN: isNew ? String(newN) : "",
@@ -3277,7 +3277,7 @@ export class App extends React.Component<{}, S> {
 
   // ── 좌 패널: 소스 컨트롤 (Git) ──
   private gitCodeColor(code: string): string {
-    if (code === "A" || code === "?") return "#8BB292";
+    if (code === "A" || code === "?") return "var(--ok)";
     if (code === "M") return "#CCB491";
     if (code === "D") return "#C97B7B";
     if (code === "R" || code === "C") return "#8FA8C0";
@@ -3446,7 +3446,7 @@ export class App extends React.Component<{}, S> {
   // ── 좌 패널: 작업 흐름 ──
   renderFlow() {
     const s = this.state;
-    const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "#8BB292"], stopped: ["–", "#C97B7B"] };
+    const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "var(--ok)"], stopped: ["–", "#C97B7B"] };
     const doneLabel = t("flowtree.done"); // 아래 s.tools.map(t => …) 에서 t 가 섀도잉되므로 미리 계산
     const editVerb = t("sc3.verbEdit"); // verb 는 번역값(1973) → 편집 하이라이트 비교를 리터럴 대신 번역값으로
     return (
@@ -3756,7 +3756,7 @@ export class App extends React.Component<{}, S> {
     fresh: ["rgba(196,168,130,.16)", "#C4A882"],
     pending: ["rgba(125,145,131,.07)", ""],
     removed: ["rgba(201,123,123,.08)", "#C97B7B"],
-    accepted: ["rgba(139,178,146,.13)", "#8BB292"],
+    accepted: ["color-mix(in srgb, var(--ok) 13%, transparent)", "var(--ok)"],
     base: ["transparent", "transparent"],
   };
 
@@ -3918,7 +3918,7 @@ export class App extends React.Component<{}, S> {
                 </div>
                 {actions && (
                   <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
-                    <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#9DC4A3", background: "transparent", border: "none" }}>{t("sc4.accept")}</button>
+                    <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--ok-hi)", background: "transparent", border: "none" }}>{t("sc4.accept")}</button>
                     <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
                     <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>{t("sc4.reject")}</button>
                   </div>
@@ -3997,7 +3997,7 @@ export class App extends React.Component<{}, S> {
   renderProposals() {
     const s = this.state;
     const pstMap: Record<string, [string, string]> = {
-      pending: [t("misc.statusPending"), "#C4A882"], accepted: [t("misc.statusAccepted"), "#8BB292"],
+      pending: [t("misc.statusPending"), "#C4A882"], accepted: [t("misc.statusAccepted"), "var(--ok)"],
       rejected: [t("misc.statusRejected"), "#C97B7B"], failed: [t("misc.statusFailed"), "#C97B7B"],
     };
     const pending = s.proposals.filter(p => p.status === "pending").length;
@@ -4019,7 +4019,7 @@ export class App extends React.Component<{}, S> {
             const [sl, sc] = pstMap[p.status];
             return (
               <div key={p.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
-                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "#8BB292" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
+                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "var(--ok)" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
                 <div style={{ padding: "10px 13px 9px 16px" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
@@ -4039,15 +4039,15 @@ export class App extends React.Component<{}, S> {
                     </div>
                   ))}
                   {p.replace.split("\n").map((l, i) => (
-                    <div key={"n" + i} className={p.status === "pending" ? "sz-in" : undefined} style={{ display: "flex", background: "rgba(139,178,146,.09)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
-                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "#8BB292", userSelect: "none" }}>+</span>
+                    <div key={"n" + i} className={p.status === "pending" ? "sz-in" : undefined} style={{ display: "flex", background: "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
+                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "var(--ok)", userSelect: "none" }}>+</span>
                       <span style={{ whiteSpace: "pre", color: "#B7CBBA" }}>{l || " "}</span>
                     </div>
                   ))}
                   {p.status === "pending" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w05)", fontFamily: SUIT }}>
                       <div style={{ flex: 1 }} />
-                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>{t("misc.accept")}</button>
+                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
                       <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
                     </div>
                   )}
@@ -4064,7 +4064,7 @@ export class App extends React.Component<{}, S> {
   renderReview() {
     const s = this.state;
     if (s.workspace || window.schutz) return this.renderProposals();
-    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "#C4A882"], accepted: [t("sc5.reviewAccepted"), "#8BB292"], rejected: [t("sc5.reviewRejected"), "#C97B7B"] };
+    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "#C4A882"], accepted: [t("sc5.reviewAccepted"), "var(--ok)"], rejected: [t("sc5.reviewRejected"), "#C97B7B"] };
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -4101,10 +4101,10 @@ export class App extends React.Component<{}, S> {
                       <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: "#8BB292" }}>+{f.add}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--ok)" }}>+{f.add}</span>
                       <span style={{ fontFamily: MONO, fontSize: 11, color: "#C97B7B" }}>−{f.del}</span>
                       <div style={{ flex: 1, display: "flex", gap: 2, height: 4, borderRadius: 2, overflow: "hidden" }}>
-                        <span style={{ height: "100%", background: "#8BB292", opacity: .75, width: Math.round((f.add / tot) * 60) + "%" }} />
+                        <span style={{ height: "100%", background: "var(--ok)", opacity: .75, width: Math.round((f.add / tot) * 60) + "%" }} />
                         <span style={{ height: "100%", background: "#C97B7B", opacity: .75, width: Math.round((f.del / tot) * 60) + "%" }} />
                         <span style={{ height: "100%", background: "var(--w07)", flex: 1 }} />
                       </div>
@@ -4128,7 +4128,7 @@ export class App extends React.Component<{}, S> {
                         <div style={{ flex: 1 }} />
                         {f.status === "pending" && (
                           <>
-                            <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#9DC4A3", background: "rgba(139,178,146,.1)", border: "1px solid rgba(139,178,146,.3)" }}>{t("sc5.accept")}</button>
+                            <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("sc5.accept")}</button>
                             <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("sc5.reject")}</button>
                           </>
                         )}
@@ -4262,7 +4262,7 @@ export class App extends React.Component<{}, S> {
   renderToasts() {
     const s = this.state;
     if (!s.toasts.length) return null;
-    const col = { info: "var(--accent)", ok: "#8BB292", error: "#CE9A9A" };
+    const col = { info: "var(--accent)", ok: "var(--ok)", error: "#CE9A9A" };
     return (
       <div style={{ position: "fixed", right: 16, bottom: 40, zIndex: 300, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
         {s.toasts.map(t => (
@@ -5041,7 +5041,7 @@ export class App extends React.Component<{}, S> {
           {s.mcpServers.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "6px 2px" }}>{t("mcpui.noInstalled")}</div>}
           {s.mcpServers.map(sv => (
             <div key={sv.name} className="sz-in" style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderRadius: 8, background: "var(--bg-card)", border: "1px solid var(--w06)", marginTop: 6 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 4, background: sv.running ? "#8BB292" : "var(--fg-dim3)", flex: "none", boxShadow: sv.running ? "0 0 6px rgba(139,178,146,.6)" : "none" }} />
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: sv.running ? "var(--ok)" : "var(--fg-dim3)", flex: "none", boxShadow: sv.running ? "0 0 6px color-mix(in srgb, var(--ok) 60%, transparent)" : "none" }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{sv.name}</div>
                 <div style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sv.command} {sv.args.join(" ")}</div>
@@ -5313,7 +5313,7 @@ export class App extends React.Component<{}, S> {
                 return (
                   <div key={c.id} style={{ padding: "8px 12px", borderRadius: 8, background: connected ? "rgba(143,168,147,.08)" : "var(--w03)", border: `1px solid ${connected ? "rgba(143,168,147,.35)" : "var(--w08)"}` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#8BB292" : "var(--fg-dim)", flex: "none" }} />
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "var(--ok)" : "var(--fg-dim)", flex: "none" }} />
                       <span style={{ fontSize: 12, fontWeight: 600, color: connected ? "var(--fg)" : "var(--fg-sub2)", flex: 1 }}>
                         {c.label} {connected ? t("settings.connectedTag") : t("settings.disconnectedTag")}
                       </span>
@@ -5364,7 +5364,7 @@ export class App extends React.Component<{}, S> {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
             {AGDEF.filter(d => s.testMsg[d.id]).map(d => (
-              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "#8BB292" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "var(--fg-sub2)" }}>
+              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "var(--ok)" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "var(--fg-sub2)" }}>
                 {d.name}: {s.testMsg[d.id]}
               </div>
             ))}

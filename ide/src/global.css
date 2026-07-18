@@ -104,8 +104,8 @@ button:disabled { opacity: .55; cursor: default !important; }
 .hv08:hover { background: var(--w08); }
 .hvMenuItem:hover { background: var(--accent-soft); }
 .hvAccent:hover { background: var(--accent-hi) !important; }
-.hvGreen:hover { background: rgba(139, 178, 146, .12); }
-.hvGreen2:hover { background: rgba(139, 178, 146, .2); }
+.hvGreen:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.hvGreen2:hover { background: color-mix(in srgb, var(--ok) 20%, transparent); }
 .hvRed:hover { background: rgba(201, 123, 123, .12); }
 .hvRed2:hover { background: rgba(201, 123, 123, .16); }
 .hvMenuBtn:hover { background: var(--w06); color: var(--fg) !important; }
