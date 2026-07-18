@@ -2,45 +2,57 @@
 
 ## [0.0.2]
 
-에디터 코어·Git·AI·터미널을 실사용 가능한 수준으로 끌어올린 릴리스.
+The release that brought the editor core, Git, AI, and the terminal up to everyday-usable quality.
 
-### 온보딩 · 설정
-- 온보딩에서 고른 **코드 폰트·크기·UI 폰트·키맵·자율성 정책**이 실제로 앱에 적용됩니다 (이전에는 테마만 반영).
-- **키맵**: Vim(모드 상태줄 포함), IntelliJ 핵심 바인딩, VS Code 기본.
-- 설정 창에 에디터·자율성 섹션 추가 — 변경 즉시 반영, 재시작 후에도 유지.
-- **자율성 정책**: 균형 모드는 문서·테스트·의존성 규칙에 맞는 저위험 변경을 자동 수락(“자동” 배지로 표시), 자율 모드는 전부 자동 적용 후 사후 검토.
+### Onboarding & settings
+- The **code font, size, UI font, keymap, and autonomy policy** picked during onboarding are now actually applied (previously only the theme was).
+- **Keymaps**: Vim (with a mode indicator in the status bar), core IntelliJ bindings, and VS Code defaults.
+- New editor and autonomy sections in Settings — changes apply immediately and survive a restart.
+- **Autonomy policy**: Balanced mode auto-accepts low-risk changes that match the docs/tests/dependency rules (marked with an "auto" badge); Autonomous mode applies everything and leaves it for post-hoc review.
+- **Localization**: the full UI is available in Korean, English, German, and Japanese.
+- A spotlight tour walks through the main features on first run and can be replayed from the Help menu.
 
-### 에디터
-- **탭**: 한 편집 그룹에 여러 파일을 탭으로 열고 전환. 편집 그룹은 1·2·4 분할.
-- **미저장 가드**: 탭을 닫거나 앱을 종료할 때 저장/버리기/취소 확인.
-- **전역 텍스트 검색** (Ctrl+Shift+F): 프로젝트 전체 내용 검색 → 해당 파일·라인으로 이동.
+### Editor
+- **Tabs**: open and switch between multiple files in an edit group; groups split 1/2/4 ways.
+- **Unsaved guards**: save/discard/cancel confirmation when closing a tab or quitting the app.
+- **Project-wide text search** (`Ctrl+Shift+F`) with jump-to-file-and-line, plus replace across files.
+- **TypeScript intelligence**: completion, hover, go-to-definition, rename, and a problems panel.
+- **Command palette**, symbol outline, quick open, and workspace symbol search (`Ctrl+T`).
+- **Language servers** for other languages (Python via pyright, plus a bridge for custom servers), covering formatting, code actions, folding, highlights, and inlay hints.
+- **TextMate grammars** and VS Code icon themes for syntax highlighting and file icons.
 
-### Git 통합
-- **소스 컨트롤 패널**: 변경 파일 스테이지/해제/취소, 커밋, 푸시, 브랜치·ahead/behind 표시.
-- **Diff 뷰**: 변경 파일을 열면 HEAD와 워킹트리를 좌우 비교.
-- 에디터 좌측 **거터 변경 표시**(추가/수정/삭제), 상태바 브랜치 클릭으로 패널 열기.
+### Git
+- **Source control panel**: stage/unstage/discard changed files, commit, push, and see branch and ahead/behind status.
+- **Diff view**: opening a changed file compares `HEAD` against the working tree side by side.
+- **Gutter change markers** (added/modified/deleted) in the editor, plus `blame` and `stash`. Clicking the branch in the status bar opens the panel.
 
 ### AI
-- **Ctrl+K 인라인 편집**: 코드를 선택하고 지시하면 그 부분만 고친 제안을 diff로 생성.
-- **컨텍스트 첨부**: 채팅에 파일(@)·에디터 선택 영역(✂)을 붙여 함께 전달.
-- **대화 세션 저장/복원**: 프로젝트별로 대화가 유지됩니다.
-- **에이전트 개별 중지**: 여러 에이전트 중 하나만 멈출 수 있습니다.
+- **Inline edit** (`Ctrl+K`): select code, describe the change, and get a proposal as a diff limited to that range.
+- **Context attachment**: attach files (`@`) and the editor selection (`✂`) to a chat message.
+- **Conversation persistence**: chats are saved and restored per project.
+- **Per-agent stop**: halt one agent without stopping the others.
+- **MCP host**: import existing Model Context Protocol servers or generate one from a program, manage them from the title bar, and expose their tools to the agent loop.
 
-### 터미널
-- **xterm.js 터미널**: ANSI 색상·스크롤백을 갖춘 실 터미널 렌더링, **멀티 탭**.
-- 실제 에이전트 활동을 보여주는 AI 로그 탭. 장식용 탭(문제·출력 고정값) 제거.
-- 참고: 완전한 PTY(대화형 TTY 앱)는 네이티브 모듈(node-pty)이 필요하며 후속 과제입니다.
+### Terminal
+- **Real PTY terminal** (xterm.js + node-pty) with ANSI color, scrollback, and **multiple tabs** — interactive TTY apps work.
+- An AI log tab showing live agent activity. The decorative placeholder tabs were removed.
 
-## [0.0.1] - Phase 1 프로토타입
+### Debugging
+- **DAP debugging** (Python via debugpy): breakpoints, call stack, variables, and stepping.
 
-첫 동작 뼈대. 백엔드 없이 `mock` 프로바이더로 네 기둥 UX를 전부 데모할 수 있습니다.
+### Extensions
+- Install VS Code extensions from **Open VSX**, with both declarative and programmatic extension hosts.
 
-### 추가됨
-- **AI Provider 추상화** (`AIProvider`) — 벤더 무관 인터페이스 + 레지스트리
-- **MockProvider** — API 키 없이 에이전트 루프(계획→도구→텍스트→편집)를 스트리밍으로 흉내
-- **ClaudeProvider** (실험적) — 텍스트 스트리밍 전용, 인터페이스 실증용
-- **편집 트랜잭션 모델** — pending / accept / reject
-- **오케스트레이터** — 스트림을 소비해 편집을 트랜잭션화하고 UI 이벤트 방출
-- **에디터 시각화** — 타이핑 애니메이션, 글로우 데코레이션, diff CodeLens(수락/거절)
-- **Webview 3종 (Astro)** — 채팅 / Agent 활동 / 멀티파일 오버뷰
-- 스모크 테스트, 데모 샘플 파일, 설계 문서
+## [0.0.1] — Phase 1 prototype
+
+The first working skeleton. All four UX pillars could be demoed with the `mock` provider, no backend required.
+
+### Added
+- **AI provider abstraction** (`AIProvider`) — a vendor-neutral interface plus a registry
+- **MockProvider** — streams a simulated agent loop (plan → tool → text → edit) without an API key
+- **ClaudeProvider** (experimental) — text streaming only, to validate the interface
+- **Edit transaction model** — pending / accept / reject
+- **Orchestrator** — consumes the stream, turns edits into transactions, and emits UI events
+- **Editor visualization** — typing animation, glow decorations, and diff CodeLens (accept/reject)
+- **Three webviews (Astro)** — chat, agent activity, and multi-file overview
+- Smoke tests, demo sample files, and the design document
