@@ -3,7 +3,7 @@
 
 #define MyAppName "Schutz"
 #ifndef MyAppVersion
-#define MyAppVersion "0.0.1"
+#define MyAppVersion "0.0.2"
 #endif
 #define MyAppPublisher "SchutzScript"
 #define MyAppURL "https://github.com/SchutzScript/Schutz"

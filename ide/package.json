@@ -7,8 +7,9 @@
     "type": "git",
     "url": "https://github.com/SchutzScript/Schutz.git"
   },
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
+  "license": "FSL-1.1-Apache-2.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -37,7 +38,13 @@
     "files": [
       "dist/**",
       "electron/**",
-      "public/assets/**"
+      "public/assets/**",
+      "node_modules/pyright/**",
+      "node_modules/@lydell/**"
+    ],
+    "asarUnpack": [
+      "node_modules/pyright/**",
+      "node_modules/@lydell/**"
     ],
     "win": {
       "target": [
@@ -91,10 +98,21 @@
     }
   },
   "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.12",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "adm-zip": "^0.5.16",
     "electron-updater": "^6.8.9",
     "monaco-editor": "^0.55.1",
+    "monaco-editor-textmate": "^4.0.0",
+    "monaco-textmate": "^3.0.1",
+    "monaco-vim": "^0.4.1",
+    "onigasm": "^2.2.5",
+    "pyright": "^1.1.400",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-protocol": "^3.17.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
