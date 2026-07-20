@@ -131,6 +131,8 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.edit.cut": { ko: "잘라내기", en: "Cut", de: "Ausschneiden", ja: "切り取り" },
   "menu.edit.copy": { ko: "복사", en: "Copy", de: "Kopieren", ja: "コピー" },
   "menu.edit.paste": { ko: "붙여넣기", en: "Paste", de: "Einfügen", ja: "貼り付け" },
+  "menu.edit.replace": { ko: "바꾸기", en: "Replace", de: "Ersetzen", ja: "置換" },
+  "menu.edit.findInFiles": { ko: "파일에서 찾기", en: "Find in Files", de: "In Dateien suchen", ja: "ファイル内を検索" },
   "menu.edit.find": { ko: "찾기", en: "Find", de: "Suchen", ja: "検索" },
   "menu.view.splitReset": { ko: "분할 해제", en: "Single Layout", de: "Teilung aufheben", ja: "分割解除" },
   "menu.view.split2": { ko: "에디터 2분할", en: "Split Editor: 2", de: "Editor 2-fach teilen", ja: "エディタ2分割" },

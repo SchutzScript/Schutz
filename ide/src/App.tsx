@@ -658,21 +658,61 @@ export class App extends React.Component<{}, S> {
   }
 
   /** 편집 메뉴 → 포커스된 Monaco 액션 */
+  /**
+   * 지금 활성 탭의 Monaco 페인. paneRegistry.focused 만 보면 안 된다 —
+   * 그 값은 사용자가 에디터 안을 **직접 클릭**해야만 채워지는데, openFile 과
+   * 워크스페이스 복원은 포커스를 주지 않는다. 그래서 "앱 켜고 → 트리에서 파일
+   * 클릭 → 편집 메뉴" 라는 가장 흔한 흐름에서 null 이었고, 찾기·되돌리기·저장·
+   * 서식이 모두 조용히 아무 일도 안 했다. 활성 탭을 먼저 보고 focused 는 폴백.
+   */
+  private activePane() {
+    const rel = this.state.active[Math.min(Math.max(0, this._focusSlot), this.state.active.length - 1)];
+    return (rel ? paneRegistry.panes.get(rel) : undefined) ?? paneRegistry.focused ?? null;
+  }
+
+  /** 이벤트가 Monaco 안에서 났는가. 안이면 Monaco 키바인딩을 그대로 두어야 한다 —
+   *  가로채면 찾기 위젯 안에서 Ctrl+F 를 다시 눌러도 아무 일이 안 난다. */
+  private inEditorDom(target: EventTarget | null): boolean {
+    return target instanceof Element && !!target.closest(".monaco-editor");
+  }
+
   editorAction(kind: string) {
-    const ed = paneRegistry.focused?.editor;
-    if (!ed) return;
+    const pane = this.activePane();
+    if (!pane) { this.toast("info", t("sc1.noEditorForAction")); return; } // 조용히 삼키지 않는다
+    const ed = pane.editor;
     ed.focus();
-    if (kind === "undo") ed.trigger("menu", "undo", null);
-    else if (kind === "redo") ed.trigger("menu", "redo", null);
-    else if (kind === "cut") ed.trigger("menu", "editor.action.clipboardCutAction", null);
-    else if (kind === "copy") ed.trigger("menu", "editor.action.clipboardCopyAction", null);
-    else if (kind === "find") ed.trigger("menu", "actions.find", null);
-    else if (kind === "paste") {
+    if (kind === "paste") {
       void navigator.clipboard.readText().then(text => {
         const sel = ed.getSelection();
         if (sel && text) ed.executeEdits("paste", [{ range: sel, text, forceMoveMarkers: true }]);
       }).catch(() => { /* 클립보드 권한 없음 */ });
+      return;
     }
+    const ID: Record<string, string> = {
+      undo: "undo", redo: "redo",
+      cut: "editor.action.clipboardCutAction", copy: "editor.action.clipboardCopyAction",
+      find: "actions.find", replace: "editor.action.startFindReplaceAction",
+      findNext: "editor.action.nextMatchFindAction", findPrev: "editor.action.previousMatchFindAction",
+    };
+    const id = ID[kind];
+    if (id) this.runEditorAction(ed, id);
+  }
+
+  /**
+   * Monaco 액션을 한 틱 뒤에 돌린다. actions.find 류는 editorFocus 컨텍스트 키를
+   * 전제조건으로 갖고, 전제조건이 안 맞으면 **예외 없이 조용히 no-op** 이다.
+   * 바로 앞의 focus() 는 모델이 아직 로딩 중이면(readFile 이 비동기) 먹지 않아서,
+   * 프레임을 하나 넘겨 포커스가 실제로 자리잡은 뒤에 실행한다.
+   */
+  private runEditorAction(ed: import("monaco-editor").editor.IStandaloneCodeEditor, id: string) {
+    requestAnimationFrame(() => {
+      try {
+        ed.focus();
+        const act = ed.getAction(id);
+        if (act) void act.run();
+        else ed.trigger("menu", id, null);   // undo/redo 는 액션이 아니라 핸들러다
+      } catch { /* 페인이 그 사이 언마운트 */ }
+    });
   }
 
   // ── 최근 프로젝트 ──
@@ -1586,6 +1626,13 @@ export class App extends React.Component<{}, S> {
       const tabs = s.tabs.map((t, i) => (i === slot ? [...t, path] : t));
       const active = s.active.map((a, i) => (i === slot ? path : a));
       return { tabs, active } as any;
+    }, () => {
+      // selectTab 과 같은 이유로 포커스를 준다 — 이게 없어서 트리에서 연 파일은
+      // paneRegistry.focused 가 null 인 채였다. 새 페인은 마운트가 한 박자 늦어
+      // 다음 프레임에 다시 시도한다.
+      const focus = () => { try { paneRegistry.panes.get(path)?.editor.focus(); } catch { /* */ } };
+      focus();
+      requestAnimationFrame(focus);
     });
   }
 
@@ -3098,6 +3145,14 @@ ${(r.output || "").slice(0, 2000)}`;
       if (e.key === "F5") { e.preventDefault(); if (this.state.debug) { if (this.state.debug.status === "stopped") this.dbgContinue(); } else void this.startDebug(); return; }
       if (e.key === "F10" && this.state.debug?.status === "stopped") { e.preventDefault(); this.dbgStepOver(); return; }
       if (e.key === "F11" && this.state.debug?.status === "stopped") { e.preventDefault(); if (e.shiftKey) this.dbgStepOut(); else this.dbgStepIn(); return; }
+      // F3 / Shift+F3 — 다음/이전 찾기 (VS Code 와 동일). 에디터 안이면 Monaco 가
+      // 자체 키바인딩으로 처리하므로 밖에서 눌렀을 때만 넘긴다.
+      if (e.key === "F3" && !this.inEditorDom(e.target)) {
+        if (!this.activePane()) return;
+        e.preventDefault();
+        this.editorAction(e.shiftKey ? "findPrev" : "findNext");
+        return;
+      }
     }
     if (e.key === "F5" && e.shiftKey && this.state.debug) { e.preventDefault(); void this.stopDebug(); return; }
     if (!mod) return; // Escape 는 위에서 처리됨
@@ -3106,6 +3161,15 @@ ${(r.output || "").slice(0, 2000)}`;
     else if (k === "p" && !e.shiftKey) { e.preventDefault(); this.cancelClose("quick"); this.setState(s => ({ quickOpen: !s.quickOpen, quickQuery: "", quickSel: 0 })); }
     else if (k === "t" && !e.shiftKey) { e.preventDefault(); this.cancelClose("sym"); this.openSymbolPalette(); }
     else if (k === "f" && e.shiftKey) { e.preventDefault(); this.cancelClose("search"); this.setState(s => ({ searchOpen: !s.searchOpen, searchSel: 0 })); }
+    // 에디터 밖(트리·대화·터미널)에서 누른 Ctrl+F / Ctrl+H 를 활성 에디터로 보낸다.
+    // VS Code 는 editorIsOpen 컨텍스트로 이걸 처리하는데 standalone Monaco 엔 그 키가
+    // 없어서, 예전엔 에디터에 DOM 포커스가 이미 있을 때만 동작했다.
+    // 에디터 안이면 건드리지 않는다 — 가로채면 찾기 위젯 안의 Ctrl+F 가 깨진다.
+    else if ((k === "f" || k === "h") && !e.shiftKey && !this.inEditorDom(e.target)) {
+      if (!this.activePane()) return;              // 열린 파일이 없으면 브라우저 기본 동작
+      e.preventDefault();
+      this.editorAction(k === "f" ? "find" : "replace");
+    }
     else if (k === "o" && e.shiftKey) { e.preventDefault(); this.triggerOutline(); }
     else if (k === "s" && e.shiftKey) { e.preventDefault(); void this.saveAll(); }
     else if (k === "n" && !e.shiftKey) { e.preventDefault(); void this.newFileAt(""); }
@@ -3702,6 +3766,8 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "edit.copy": this.setState({ openMenu: null }); this.editorAction("copy"); return;
                                 case "edit.paste": this.setState({ openMenu: null }); this.editorAction("paste"); return;
                                 case "edit.find": this.setState({ openMenu: null }); this.editorAction("find"); return;
+                                case "edit.replace": this.setState({ openMenu: null }); this.editorAction("replace"); return;
+                                case "edit.findInFiles": this.setState({ openMenu: null }); this.cancelClose("search"); this.setState({ searchOpen: true, searchSel: 0 }); return;
                                 case "help.replayTutorial": this.setState({ openMenu: null }); this.startTour(); return;
                                 case "help.keys": this.openO({ openMenu: null, keysOpen: true }); return;
                                 case "help.about": this.openO({ openMenu: null, aboutOpen: true }); return;

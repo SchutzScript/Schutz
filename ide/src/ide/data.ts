@@ -201,7 +201,7 @@ export function hunkDefs(): Record<string, HunkDef> {
 // [메뉴키, 항목[[액션키, 단축키] | null]] — 라벨은 i18n t("menu."+키)로 렌더, 디스패치는 안정 액션키로.
 export const MENUS: [string, ([string, string] | null)[]][] = [
   ["file", [["file.new", "⌘N"], ["file.newWindow", "⇧⌘N"], ["file.openProject", "⌘O"], null, ["file.save", "⌘S"], ["file.saveAll", "⇧⌘S"], null, ["file.settings", "⌘,"]]],
-  ["edit", [["edit.undo", "⌘Z"], ["edit.redo", "⇧⌘Z"], null, ["edit.cut", "⌘X"], ["edit.copy", "⌘C"], ["edit.paste", "⌘V"], null, ["edit.find", "⌘F"]]],
+  ["edit", [["edit.undo", "⌘Z"], ["edit.redo", "⇧⌘Z"], null, ["edit.cut", "⌘X"], ["edit.copy", "⌘C"], ["edit.paste", "⌘V"], null, ["edit.find", "⌘F"], ["edit.replace", "⌘H"], null, ["edit.findInFiles", "⇧⌘F"]]],
   ["view", [["view.splitReset", "⌥⌘1"], ["view.split2", "⌥⌘2"], ["view.split4", "⌥⌘4"], null, ["view.format", "⇧⌥F"], ["view.wordWrap", ""], ["view.minimap", ""], null, ["view.problems", ""], ["view.terminal", "⌘`"]]],
   ["nav", [["nav.quickOpen", "⌘P"], ["nav.commandPalette", "⇧⌘P"], ["nav.symbol", "⇧⌘O"]]],
   ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""]]],
