@@ -5,6 +5,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   // 편집 중에 디스크가 바뀐 경우 — 그냥 저장하면 외부 편집이 사라진다
   "sc1.externalChangedOverwrite": { ko: "'{rel}' 이(가) 편집하는 사이 디스크에서 변경되었습니다.\n내 편집으로 덮어쓸까요? (취소하면 저장하지 않습니다)", en: "'{rel}' changed on disk while you were editing.\nOverwrite it with your version? (Cancel leaves it unsaved)", de: "'{rel}' wurde während der Bearbeitung auf der Festplatte geändert.\nMit Ihrer Version überschreiben? (Abbrechen speichert nicht)", ja: "編集中に '{rel}' がディスク上で変更されました。\n自分の内容で上書きしますか？(キャンセルすると保存しません)" },
   "sc1.externalChangedSkipped": { ko: "디스크에서 변경됨 — 저장 안 함", en: "changed on disk — not saved", de: "auf der Festplatte geändert — nicht gespeichert", ja: "ディスク上で変更 — 未保存" },
+  "sc1.noEditorForAction": { ko: "먼저 파일을 여세요.", en: "Open a file first.", de: "Öffnen Sie zuerst eine Datei.", ja: "先にファイルを開いてください。" },
   "sc1.put_cursor_on_symbol": { ko: "먼저 편집기에서 심볼에 커서를 두세요.", en: "First place the cursor on a symbol in the editor.", de: "Setzen Sie zuerst den Cursor im Editor auf ein Symbol.", ja: "まずエディターでシンボルにカーソルを置いてください。" },
   "sc1.new_file_name": { ko: "새 파일 이름", en: "New file name", de: "Neuer Dateiname", ja: "新しいファイル名" },
   "sc1.file_created": { ko: "파일 생성: ", en: "File created: ", de: "Datei erstellt: ", ja: "ファイル作成: " },
