@@ -19,6 +19,7 @@ import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, se
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
 import { PreviewPane } from "./editor/PreviewPane";
+import { createEngine } from "./engine";
 import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco from "./editor/monacoSetup";
@@ -345,9 +346,22 @@ export class App extends React.Component<{}, S> {
   /** 에이전트 id → 프로바이더 (Claude/GPT/Grok/GLM) */
   private providers: Record<string, AgentProvider> = PROVIDERS_MAP;
   private history: Message[] = [];
-  /** 에이전트별 진행 중 턴 취소 컨트롤러 */
+  /**
+   * 위임 엔진 — 실행 레지스트리 + 위임 원장 + 정책.
+   * 순수 모듈이라 여기서 상태만 얹어 쓴다 (src/engine, 테스트는 npm test).
+   */
+  private engine = createEngine();
+  /**
+   * 진행 중 턴 취소 컨트롤러 — **runId 로 키잉**한다.
+   * 예전엔 agentId 키였고 그게 중지→재위임 레이스의 뿌리였다: stopAgent 가
+   * 컨트롤러를 먼저 지우면 죽어가는 루프의 finally 가 같은 agentId 로 새로 시작된
+   * 실행을 정리해 버렸다(락 해제·상태 덮어쓰기). 이제 실행마다 고유 키를 갖는다.
+   */
   private abortCtls = new Map<string, AbortController>();
-  /** 파일 락: rel → 잡고 있는 에이전트 id */
+  /**
+   * 파일 락: rel → 잡고 있는 **runId**.
+   * agentId 로 잡으면 낡은 실행의 정리가 같은 에이전트의 새 실행 락을 풀어 버린다.
+   */
   private fileLocks = new Map<string, string>();
 
   state: S = {
@@ -643,6 +657,7 @@ export class App extends React.Component<{}, S> {
       document.title = tree.name + " — Schutz";
       this._focusSlot = 0;
       this.history = [];
+      this.engine.reset(); // 실행·원장이 프로젝트를 넘어 새지 않게
       lspClient.shutdownAll();
       projectModels.disposeAll();
       lspClient.setRoot(tree.root);
@@ -1440,13 +1455,19 @@ export class App extends React.Component<{}, S> {
 
   /** 특정 에이전트만 중지 */
   stopAgent(id: string) {
-    const a = this.abortCtls.get(id);
-    if (!a) return;
-    a.abort();
-    this.abortCtls.delete(id);
-    for (const [rel, holder] of [...this.fileLocks.entries()]) if (holder === id) this.fileLocks.delete(rel);
+    // 레지스트리가 agentId → 현재 runId 를 풀어 취소 훅을 부른다.
+    // 컨트롤러를 여기서 지우지 않는 게 요점 — 레코드가 남아 있어야 그 실행의 finally 가
+    // "내가 아직 현재인가" 를 물어볼 수 있다(밀려났으면 정리를 건너뛴다).
+    const runId = this.engine.runs.cancelAgent(id);
+    if (!runId) return;
+    // 승인 대기는 abort 로 안 깨진다(answerRun 만 resolve 한다). 중지가 그걸 거절로 풀어주지
+    // 않으면 그 실행의 finally 가 영영 안 오고, running 이 모달을 답할 때까지 잡힌다.
+    if (this.state.askRun?.agent === id) this.answerRun(false);
+    for (const [rel, holder] of [...this.fileLocks.entries()]) if (holder === runId) this.fileLocks.delete(rel);
     this.setAgent(id, { status: "stop", file: null });
-    if (this.abortCtls.size === 0) this.setState({ running: false, statusKey: "stopped" });
+    // 인라인 편집·MCP 생성은 세지 않는다 — 예전엔 abortCtls.size 라 그것들까지 셌고,
+    // 루프 쪽 판정(아래 finally)과 서로 달랐다. 두 곳을 같은 기준으로 맞춘다.
+    if (!this.engine.runs.hasActiveAgentRuns()) this.setState({ running: false, statusKey: "stopped" });
   }
 
   stopRun() {
@@ -1456,7 +1477,10 @@ export class App extends React.Component<{}, S> {
     // 이후 모든 Enter 가 조용히 무시되고 재시작 말곤 복구가 없었다
     this.setState({ cliBusy: false });
     if (this.state.cliBusy && window.schutz) window.schutz.cliStop();
-    for (const a of this.abortCtls.values()) a.abort();
+    // 전역 중지 — 역할을 가리지 않고 전부(인라인 편집·MCP 생성 포함).
+    // 레코드는 남긴다: 각 루프의 finally 가 finish() 로 자기 정리를 마무리한다.
+    this.engine.runs.cancelAll();
+    if (this._askRunResolve) this.answerRun(false);
     this.abortCtls.clear();
     this.fileLocks.clear();
     this.clearTimers();
@@ -1755,6 +1779,7 @@ export class App extends React.Component<{}, S> {
       case "/clear":
       case "/new":
         this.history = [];
+        this.engine.reset();
         this._cliSession = null;
         this._codexSession = null;
         this.clearSession();
@@ -1958,7 +1983,24 @@ export class App extends React.Component<{}, S> {
     }));
   }
 
-  private async execTool(agentId: string, call: ToolCall): Promise<string> {
+  /**
+   * 사이드플로(인라인 편집·MCP 생성) 실행 종료. 에이전트 루프와 달리 락·상태 정리가 없어서
+   * 컨트롤러 해제와 레코드 종료만 하면 된다. runId 가 비어 있으면(시작 전 실패) 무시한다.
+   */
+  private endInlineRun(runId: string, status: "done" | "aborted") {
+    if (!runId) return;
+    this.abortCtls.delete(runId);
+    this.engine.runs.finish(runId, status);
+  }
+
+  /** 락 소유 runId → 표시용 에이전트 이름. 레코드가 사라졌으면 id 를 그대로 보여준다. */
+  private lockHolderName(holderRunId: string): string {
+    const rec = this.engine.runs.get(holderRunId);
+    return rec ? this.agDef(rec.agentId).name : holderRunId;
+  }
+
+  /** runId 는 파일 락 소유자로 기록된다 — 낡은 실행이 새 실행의 락을 풀지 않게. */
+  private async execTool(agentId: string, call: ToolCall, runId: string): Promise<string> {
     // MCP 도구 — 워크스페이스와 무관하게 실행
     if (mcp.isMcpToolName(call.name)) {
       const r = mcp.resolveMcpTool(call.name);
@@ -1995,11 +2037,11 @@ export class App extends React.Component<{}, S> {
         const rel = String(call.input?.path ?? "");
         this.addTool(toolId, agentId, t("sc2.verbCreate"), rel);
         const holder = this.fileLocks.get(rel);
-        if (holder && holder !== agentId) {
+        if (holder && holder !== runId) {
           this.setTool(toolId, { st: "done", note: t("sc2.noteLockConflict") });
-          return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락).`;
+          return `오류: ${rel} 은(는) ${this.lockHolderName(holder)}이(가) 작업 중입니다 (파일 락).`;
         }
-        this.fileLocks.set(rel, agentId);
+        this.fileLocks.set(rel, runId);
         this.setAgent(agentId, { file: rel });
         const auto = autoAcceptFor(rel, getAutonomy());
         const p: Proposal = {
@@ -2028,11 +2070,11 @@ export class App extends React.Component<{}, S> {
         }
         // 파일 락: 다른 에이전트가 잡고 있으면 거부
         const holder = this.fileLocks.get(rel);
-        if (holder && holder !== agentId) {
+        if (holder && holder !== runId) {
           this.setTool(toolId, { st: "done", note: t("sc2.noteLockConflict") });
-          return `오류: ${rel} 은(는) ${this.agDef(holder).name}이(가) 작업 중입니다 (파일 락). 다른 파일을 작업하세요.`;
+          return `오류: ${rel} 은(는) ${this.lockHolderName(holder)}이(가) 작업 중입니다 (파일 락). 다른 파일을 작업하세요.`;
         }
-        this.fileLocks.set(rel, agentId);
+        this.fileLocks.set(rel, runId);
         this.setAgent(agentId, { file: rel });
         const autoE = autoAcceptFor(rel, getAutonomy());
         const p: Proposal = {
@@ -2116,8 +2158,8 @@ ${(r.output || "").slice(0, 2000)}`;
           this.setTool(toolId, { st: "done", note: t("sc2.notConnected") });
           return `오류: ${this.agDef(target).name}이(가) 연결되어 있지 않습니다 (API 키 없음).`;
         }
-        // 이미 실행 중인 에이전트에 중복 위임 금지 — abortCtls/fileLocks 키 클로버 방지(중지·락 꼬임)
-        if (this.abortCtls.has(target)) {
+        // 이미 실행 중인 에이전트에 중복 위임 금지 (Stage 3 에서 정책으로 이관 예정)
+        if (this.engine.runs.isAgentBusy(target)) {
           this.setTool(toolId, { st: "done", note: t("sc2.noteTargetError") });
           return `오류: ${this.agDef(target).name}이(가) 이미 다른 작업을 진행 중입니다.`;
         }
@@ -2139,12 +2181,25 @@ ${(r.output || "").slice(0, 2000)}`;
    * 범용 에이전트 루프 — 어떤 프로바이더든 도구를 돌며 작업.
    * 관리자(첫 진입)는 delegate_task로 다른 에이전트를 병렬 가동할 수 있다.
    */
-  async runAgentLoop(agentId: string, seed: NeutralMsg[], opts: { isManager: boolean }) {
+  async runAgentLoop(
+    agentId: string,
+    seed: NeutralMsg[],
+    opts: { isManager: boolean; parentRunId?: string; delegationId?: string },
+  ) {
     const provider = this.providers[agentId];
     const d = this.agDef(agentId);
     const who = d.name + (opts.isManager ? t("sc2.managerSuffix") : "");
     const abort = new AbortController();
-    this.abortCtls.set(agentId, abort);
+    // 실행 레코드를 만들고 그 runId 로 키잉한다. 이 id 가 아래 finally 의 "내가 아직
+    // 현재 실행인가" 판정 기준이 된다.
+    const run = this.engine.runs.start({
+      agentId,
+      role: opts.isManager ? "manager" : "sub",
+      parentRunId: opts.parentRunId ?? null,
+      delegationId: opts.delegationId ?? null,
+      cancel: () => abort.abort(),
+    });
+    this.abortCtls.set(run.runId, abort);
     this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
 
     const useTools = !!(this.state.workspace && window.schutz);
@@ -2208,7 +2263,7 @@ ${(r.output || "").slice(0, 2000)}`;
         for (const c of calls) {
           if (abort.signal.aborted) break; // 중지 시 남은 도구 실행/파일쓰기 중단
           if (c.name === "delegate_task") delegated = true;
-          const out = await this.execTool(agentId, c);
+          const out = await this.execTool(agentId, c, run.runId);
           results.push({ id: c.id, content: out.slice(0, 40_000) });
         }
         transcript.push({ role: "user", results });
@@ -2242,20 +2297,25 @@ ${(r.output || "").slice(0, 2000)}`;
           }],
         }));
       }
-      // 이 에이전트의 파일 락 해제
-      for (const [rel, holder] of [...this.fileLocks.entries()]) {
-        if (holder === agentId) this.fileLocks.delete(rel);
-      }
-      this.abortCtls.delete(agentId);
-      const mine = this.state.proposals.some(p => p.agent === agentId && p.status === "pending");
-      this.setAgent(agentId, { status: mine ? "review" : "idle", file: null });
-      if (opts.isManager && finalText) this.history.push({ role: "assistant", content: finalText });
-      // 모든 에이전트 루프가 끝났을 때만 running 해제 (인라인/mcp생성 사이드플로 컨트롤러는 무시)
-      if ([...this.abortCtls.keys()].every(k => k === "__mcpgen" || k.startsWith("__inline"))) {
-        this.setState(s => ({
-          running: false,
-          statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
-        }), () => this.saveSession());
+      this.abortCtls.delete(run.runId);
+      // 이 실행이 아직 이 에이전트의 현재 실행일 때만 정리한다.
+      // 중지 직후 같은 에이전트로 새 실행이 시작됐다면 여기 도착한 시점엔 밀려나 있고,
+      // 그대로 진행하면 남의 락을 풀고 남의 상태를 덮어쓴다. 그게 그 레이스였다.
+      if (this.engine.runs.finish(run.runId, abort.signal.aborted ? "aborted" : "done")) {
+        // 이 **실행**의 파일 락 해제 (에이전트 기준이 아니다)
+        for (const [rel, holder] of [...this.fileLocks.entries()]) {
+          if (holder === run.runId) this.fileLocks.delete(rel);
+        }
+        const mine = this.state.proposals.some(p => p.agent === agentId && p.status === "pending");
+        this.setAgent(agentId, { status: mine ? "review" : "idle", file: null });
+        if (opts.isManager && finalText) this.history.push({ role: "assistant", content: finalText });
+        // 모든 에이전트 루프가 끝났을 때만 running 해제 (인라인/mcp생성 사이드플로는 세지 않는다)
+        if (!this.engine.runs.hasActiveAgentRuns()) {
+          this.setState(s => ({
+            running: false,
+            statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
+          }), () => this.saveSession());
+        }
       }
     }
   }
@@ -2690,7 +2750,15 @@ ${(r.output || "").slice(0, 2000)}`;
     const system = "당신은 코드 편집기입니다. 사용자가 파일에서 코드 조각을 선택했습니다. 지시에 따라 그 조각을 수정하고, 그 조각을 대체할 코드만 출력하세요. 설명·주석·마크다운 코드펜스 없이 순수 코드만 반환합니다. 들여쓰기는 원본 문맥을 유지하세요.";
     const transcript: NeutralMsg[] = [{ role: "user", text: `파일: ${rel}\n\n선택된 코드:\n${selection}\n\n지시: ${instruction}\n\n이 코드를 대체할 코드만 반환하세요.` }];
     const abort = new AbortController();
-    const inlineKey = "__inline:" + aiId; // 요청별 고유 키 — 동시 인라인 편집이 서로의 컨트롤러를 덮어쓰지 않게
+    // role "inline" 으로 등록 — 예전의 "__inline:" 키 접두어를 대체한다.
+    // agentId 를 aiId 로 두는 이유: 동시 인라인 편집이 서로의 실행을 밀어내지 않아야 한다
+    // (레지스트리는 agentId 당 현재 실행 하나만 들고 있으므로 요청별로 달라야 한다).
+    const inlineRun = this.engine.runs.start({
+      agentId: "__inline:" + aiId,
+      role: "inline",
+      cancel: () => abort.abort(),
+    });
+    const inlineKey = inlineRun.runId;
     this.abortCtls.set(inlineKey, abort);
     let out = "";
     try {
@@ -2700,10 +2768,10 @@ ${(r.output || "").slice(0, 2000)}`;
         else if (ev.type === "error") out = out || "⚠️ " + ev.message;
       }
     } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") { this.setMsg(aiId, { text: t("sc3.inlineEditCancelled"), streaming: false }); this.abortCtls.delete(inlineKey); return; }
-      this.setMsg(aiId, { text: "⚠️ " + (e instanceof Error ? e.message : String(e)), streaming: false }); this.abortCtls.delete(inlineKey); return;
+      if (e instanceof DOMException && e.name === "AbortError") { this.setMsg(aiId, { text: t("sc3.inlineEditCancelled"), streaming: false }); this.endInlineRun(inlineKey, "aborted"); return; }
+      this.setMsg(aiId, { text: "⚠️ " + (e instanceof Error ? e.message : String(e)), streaming: false }); this.endInlineRun(inlineKey, "aborted"); return;
     }
-    this.abortCtls.delete(inlineKey);
+    this.endInlineRun(inlineKey, "done");
     let code = out.trim();
     // 코드펜스 제거
     if (code.startsWith("```")) code = code.replace(/^```[^\n]*\n/, "").replace(/\n?```\s*$/, "").trim();
@@ -2855,9 +2923,10 @@ ${(r.output || "").slice(0, 2000)}`;
       else if (s.extPanel) this.closeOverlay("extPanel", { extPanel: null });
       else if (s.askClose) this.closeOverlay("askClose", { askClose: null });
       else if (s.openMenu || s.projOpen) this.setState({ openMenu: null, projOpen: false });
-      else if ([...this.abortCtls.keys()].some(k => k.startsWith("__inline"))) {
-        // 진행 중 인라인 편집(Ctrl+K)을 Escape 로 취소 — 등록된 AbortController 의 유일한 도달 가능 트리거
-        for (const [k, ac] of this.abortCtls) if (k.startsWith("__inline")) ac.abort();
+      else if (this.engine.runs.activeRuns(["inline"]).length > 0) {
+        // 진행 중 인라인 편집(Ctrl+K)을 Escape 로 취소 — 도달 가능한 유일한 트리거.
+        // 예전엔 abortCtls 키의 "__inline" 접두어를 스니핑했다.
+        this.engine.runs.cancelAll(["inline"]);
       }
       else return; // 닫을 오버레이 없음 → 다른 핸들러에 위임
       return;
@@ -5551,6 +5620,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
     const setStatus = (status: string) => this.setState(s => ({ mcpGen: s.mcpGen ? { ...s.mcpGen, status } : null }));
     this.setState({ mcpBusy: "__gen" });
+    let mcpGenRunId = "";
     try {
       // 1) 분석
       setStatus(t("sc5.mcpAnalyzing"));
@@ -5589,14 +5659,17 @@ ${(r.output || "").slice(0, 2000)}`;
       const system = mcpGen.genSystem();
       const transcript: NeutralMsg[] = [{ role: "user", text: mcpGen.genUser(g.mode, name, analysis) }];
       const abort = new AbortController();
-      this.abortCtls.set("__mcpgen", abort);
+      // role "system" 으로 등록 — 예전의 "__mcpgen" 매직 키를 대체한다
+      const genRun = this.engine.runs.start({ agentId: "__mcpgen", role: "system", cancel: () => abort.abort() });
+      mcpGenRunId = genRun.runId;
+      this.abortCtls.set(mcpGenRunId, abort);
       let out = "";
       for await (const ev of provider.streamAgentTurn({ transcript, system, tools: undefined, signal: abort.signal })) {
         if (ev.type === "text") out += ev.delta;
         else if (ev.type === "usage") this.bumpAgent(managerId, ev.inputTokens, ev.outputTokens);
         else if (ev.type === "error") { this.toast("error", t("sc5.mcpGenError", { message: ev.message })); return; }
       }
-      this.abortCtls.delete("__mcpgen");
+      this.endInlineRun(mcpGenRunId, "done");
       const code = mcpGen.extractCode(out);
       if (!code || code.length < 80) { this.toast("error", t("sc5.mcpEmptyCode")); return; }
 
@@ -5616,7 +5689,7 @@ ${(r.output || "").slice(0, 2000)}`;
       if (e instanceof DOMException && e.name === "AbortError") this.toast("info", t("sc5.mcpGenCancelled"));
       else this.toast("error", t("sc5.mcpGenFail", { error: e instanceof Error ? e.message : String(e) }));
     } finally {
-      this.abortCtls.delete("__mcpgen");
+      this.endInlineRun(mcpGenRunId, "done");
       this.setState({ mcpBusy: "" });
     }
   }
