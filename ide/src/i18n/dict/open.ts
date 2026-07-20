@@ -3,34 +3,42 @@
 // 이 화면은 사람이 이 앱을 처음 보는 자리라 문장이 곧 첫인상이다. 기능을 설명하지
 // 않고 약속을 말한다 — 무엇이 어디 있는지는 그 다음(15단계 투어)이 한다.
 //
-// open.say 의 *별표* 로 감싼 낱말은 강조로 렌더된다. 언어마다 강조할 자리가 다르니
-// 번역할 때 위치를 그대로 옮기지 말고 그 언어에서 힘이 실리는 낱말에 붙인다.
+// open.say 는 **언어와 무관하게 독일어**로 둔다. Schutz·Feldgrau 가 이미 독일어라
+// 브랜드의 목소리이고, 짧고 대구가 맞아 뜻을 몰라도 리듬이 읽힌다. 대신 바로 아래에
+// open.saySub 로 사용자 언어 번역을 작게 깐다 — 멋만 부리고 뜻을 안 주면 안 된다.
+// *별표* 로 감싼 낱말은 강조로 렌더된다.
 export const dict: Record<string, Record<string, string>> = {
   "open.aria": {
     ko: "Schutz 시작 안내", en: "Schutz opening", de: "Schutz-Einführung", ja: "Schutz のはじめに",
   },
   "open.skip": { ko: "건너뛰기", en: "Skip", de: "Überspringen", ja: "スキップ" },
 
+  // 전 언어 동일 — 이건 번역 대상이 아니라 상표에 가깝다.
   "open.say": {
-    ko: "코드를 고치는 건 *AI* 지만, 반영할지는 *당신이* 정합니다.",
-    en: "The *AI* rewrites the code. *You* decide what lands.",
-    de: "Die *KI* schreibt den Code um. *Sie* entscheiden, was bleibt.",
-    ja: "コードを直すのは *AI* ですが、反映するかは *あなた* が決めます。",
+    ko: "Die *KI* schreibt. *Du* entscheidest.",
+    en: "Die *KI* schreibt. *Du* entscheidest.",
+    de: "Die *KI* schreibt. *Du* entscheidest.",
+    ja: "Die *KI* schreibt. *Du* entscheidest.",
+  },
+  "open.saySub": {
+    ko: "AI 가 씁니다. 당신이 정합니다.",
+    en: "The AI writes. You decide.",
+    de: "Die KI schreibt den Code — Sie entscheiden, was davon bleibt.",
+    ja: "AI が書きます。あなたが決めます。",
   },
 
   // ── 세팅 (오프닝에서 유일하게 멈추는 지점) ─────────────────────────
   "open.setup.title": {
-    ko: "먼저, 어떤 모습으로 쓸까요",
-    en: "First — how should it look?",
-    de: "Zuerst: Wie soll es aussehen?",
-    ja: "はじめに、どんな見た目にしますか",
+    ko: "시작하기 전에", en: "Before we start", de: "Bevor es losgeht", ja: "はじめる前に",
   },
   "open.setup.hint": {
-    ko: "고른 테마로 편집기가 만들어집니다. 나중에 설정에서 언제든 바꿀 수 있어요.",
-    en: "Your editor gets built in the theme you pick. You can change it anytime in settings.",
-    de: "Ihr Editor wird im gewählten Theme aufgebaut. Sie können es jederzeit in den Einstellungen ändern.",
-    ja: "選んだテーマでエディタが組み上がります。設定からいつでも変更できます。",
+    ko: "설정에서 언제든 바꿀 수 있어요.",
+    en: "You can change both anytime in settings.",
+    de: "Beides lässt sich jederzeit in den Einstellungen ändern.",
+    ja: "どちらも設定からいつでも変更できます。",
   },
+  "open.setup.lang":  { ko: "언어", en: "Language", de: "Sprache", ja: "言語" },
+  "open.setup.theme": { ko: "테마", en: "Theme", de: "Theme", ja: "テーマ" },
   "open.setup.go": { ko: "이걸로 시작", en: "Start with this", de: "Damit starten", ja: "これで始める" },
 
   // ── 조립되는 패널 라벨 ─────────────────────────────────────────────
