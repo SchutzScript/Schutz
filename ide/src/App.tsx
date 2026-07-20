@@ -19,7 +19,8 @@ import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, se
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
 import { PreviewPane } from "./editor/PreviewPane";
-import { createEngine } from "./engine";
+import { createEngine, DEFAULT_POLICY } from "./engine";
+import type { DelegationOutcome, RejectReason, RunRecord, StopCause } from "./engine";
 import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco from "./editor/monacoSetup";
@@ -2146,30 +2147,8 @@ ${(r.output || "").slice(0, 2000)}`;
           return "명령 실행 실패: " + (e instanceof Error ? e.message : String(e));
         }
       }
-      if (call.name === "delegate_task") {
-        const target = String(call.input?.agent ?? "");
-        const task = String(call.input?.task ?? "");
-        this.addTool(toolId, agentId, t("sc2.verbDelegate"), target);
-        if (!this.providers[target] || target === agentId) {
-          this.setTool(toolId, { st: "done", note: t("sc2.noteTargetError") });
-          return "오류: 알 수 없는 에이전트 " + target;
-        }
-        if (!this.providers[target].isConfigured()) {
-          this.setTool(toolId, { st: "done", note: t("sc2.notConnected") });
-          return `오류: ${this.agDef(target).name}이(가) 연결되어 있지 않습니다 (API 키 없음).`;
-        }
-        // 이미 실행 중인 에이전트에 중복 위임 금지 (Stage 3 에서 정책으로 이관 예정)
-        if (this.engine.runs.isAgentBusy(target)) {
-          this.setTool(toolId, { st: "done", note: t("sc2.noteTargetError") });
-          return `오류: ${this.agDef(target).name}이(가) 이미 다른 작업을 진행 중입니다.`;
-        }
-        this.setTool(toolId, { st: "done", note: t("sc2.noteDelegated") });
-        // 병렬 실행 — 관리자 턴을 막지 않는다
-        void this.runAgentLoop(target, [
-          { role: "user", text: `관리자 Claude가 위임한 작업입니다:\n\n${task}` },
-        ], { isManager: false });
-        return `${this.agDef(target).name}에게 위임했습니다. 병렬로 진행되며 결과는 변경 검토에 나타납니다.`;
-      }
+      // delegate_task 는 여기 없다 — startDelegation 으로 들어냈다. execTool 은
+      // "항상 문자열, 항상 순차" 계약을 지키고, 위임만 라운드 안에서 병렬로 뜬다.
       return "알 수 없는 도구: " + call.name;
     } catch (e) {
       this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
@@ -2184,21 +2163,28 @@ ${(r.output || "").slice(0, 2000)}`;
   async runAgentLoop(
     agentId: string,
     seed: NeutralMsg[],
-    opts: { isManager: boolean; parentRunId?: string; delegationId?: string },
-  ) {
+    opts: {
+      isManager: boolean; parentRunId?: string; delegationId?: string;
+      /** 위임 경로에서는 엔진이 이미 하위 실행 레코드를 만들어 뒀다 — 두 번 만들지 않는다. */
+      run?: RunRecord;
+      /** 그 레코드의 cancel 훅은 AbortController 보다 먼저 등록돼서, 뒤늦게 연결한다. */
+      onCancel?: (fn: () => void) => void;
+    },
+  ): Promise<DelegationOutcome> {
     const provider = this.providers[agentId];
     const d = this.agDef(agentId);
     const who = d.name + (opts.isManager ? t("sc2.managerSuffix") : "");
     const abort = new AbortController();
     // 실행 레코드를 만들고 그 runId 로 키잉한다. 이 id 가 아래 finally 의 "내가 아직
     // 현재 실행인가" 판정 기준이 된다.
-    const run = this.engine.runs.start({
+    const run = opts.run ?? this.engine.runs.start({
       agentId,
       role: opts.isManager ? "manager" : "sub",
       parentRunId: opts.parentRunId ?? null,
       delegationId: opts.delegationId ?? null,
       cancel: () => abort.abort(),
     });
+    opts.onCancel?.(() => abort.abort());
     this.abortCtls.set(run.runId, abort);
     this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
 
@@ -2218,10 +2204,14 @@ ${(r.output || "").slice(0, 2000)}`;
 
     const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
-    let delegated = false; // 이번 실행에서 delegate_task 가 실제로 불렸는가
+    // 결과를 구조체로 돌려준다 — 부모가 이걸 t() 로 렌더한다(엔진은 산문을 만들지 않는다).
+    let rounds = 0;
+    let stopCause: StopCause = "end";
+    let failMsg = "";
 
     try {
-      for (let round = 0; round < 8; round++) {
+      for (let round = 0; round < DEFAULT_POLICY.maxRoundsPerRun; round++) {
+        rounds = round + 1;
         const aiId = "a" + (this._uid++);
         this.setState(s => ({
           messages: [...s.messages, { id: aiId, role: "ai" as const, who, agent: agentId, text: "", streaming: true }],
@@ -2259,37 +2249,56 @@ ${(r.output || "").slice(0, 2000)}`;
         if (stopReason !== "tool_use" || calls.length === 0) break;
 
         transcript.push({ role: "assistant", text: turnText || undefined, calls });
-        const results: { id: string; content: string }[] = [];
-        for (const c of calls) {
+        // 라운드 안에서 산개 → 수집. 위임을 먼저 전부 띄우고(비차단), 나머지 도구는
+        // 예전처럼 순차 실행한 뒤, 결과를 **원래 호출 순서대로** 합친다.
+        // 조인 라운드로 미루지 않는 이유: tool_use 하나당 tool_result 하나가 같은 요청
+        // 안에 있어야 벤더 규약이 지켜지고, 라운드 상한도 건드리지 않는다.
+        const slots: (string | undefined)[] = new Array(calls.length);
+        const flying: Promise<unknown>[] = [];
+        calls.forEach((c, i) => {
+          if (c.name !== "delegate_task") return;
+          flying.push(this.startDelegation(run.runId, agentId, c).then(out => { slots[i] = out; }));
+        });
+        for (let i = 0; i < calls.length; i++) {
+          if (calls[i].name === "delegate_task") continue;
           if (abort.signal.aborted) break; // 중지 시 남은 도구 실행/파일쓰기 중단
-          if (c.name === "delegate_task") delegated = true;
-          const out = await this.execTool(agentId, c, run.runId);
-          results.push({ id: c.id, content: out.slice(0, 40_000) });
+          slots[i] = await this.execTool(agentId, calls[i], run.runId);
         }
-        transcript.push({ role: "user", results });
+        await Promise.allSettled(flying);
+        // 빈 칸을 남기면 tool_use 1:1 tool_result 규약이 깨져 다음 요청이 400 이 된다.
+        transcript.push({
+          role: "user",
+          results: calls.map((c, i) => ({ id: c.id, content: (slots[i] ?? t("engine.notRun")).slice(0, 40_000) })),
+        });
+        // 여기까지 왔는데 마지막 라운드면 할 일이 남은 채 상한에 걸린 것이다. 자연 종료는
+        // 위쪽 break 로 빠지므로 여기 도달하지 않는다 — 예전엔 이 구분이 아예 없었다.
+        if (rounds === DEFAULT_POLICY.maxRoundsPerRun) stopCause = "cap";
       }
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        stopCause = "abort";
+      } else {
+        stopCause = "error";
+        failMsg = e instanceof Error ? e.message : String(e);
         this.setState(s => ({
-          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who, agent: agentId, text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who, agent: agentId, text: "⚠️ " + failMsg }],
         }));
       }
     } finally {
-      // 관리자가 "위임했다"고 말만 하고 delegate_task 를 부르지 않으면, 사용자는 오지 않을 결과를
-      // 기다리게 된다. 앱이 그 거짓 주장을 조용히 통과시키지 않는다.
-      // '위임' 이라는 낱말만 보고 경고하면 "제 도구는 위임뿐이라 실행은 못 합니다" 같은
-      // 설명문에도 잘못 뜬다. 위임을 했다/하겠다는 주장일 때만, 그리고 같은 메시지에
-      // 부정 표현이 없을 때만 경고한다.
+      // 관리자가 위임했다고 말만 하고 실제로는 하위 실행이 안 뜬 경우를 경고한다.
+      // 판정 입력이 바뀌었다: 예전엔 execTool 호출 **전에** 켜지는 지역 플래그라
+      // 알 수 없는 에이전트·미연결·이미 작업 중 — 거절 셋 다 "위임함"으로 셌다.
+      // 사용자가 가장 방치되기 쉬운 경우가 정확히 거기였다. 이제 원장에 물어본다:
+      // didDelegate 는 하위 실행이 실제로 떴을 때만 참이다.
       //
-      // 한국어일 때만 켠다. 두 정규식이 비대칭이라 다른 언어에선 신뢰할 수 없다:
-      // claimsDelegation 에는 영어(delegated|delegating)가 있는데 hasNegation 은
-      // 한국어 전용이라, "I am not delegating this" 가 부정 표현을 못 만나 오탐이 된다.
-      // 독일어·일본어는 주장 쪽 표현이 아예 없어 조용히 한 번도 안 뜬다.
-      // 4개 언어 부정 표현을 채우는 대신 범위를 좁혔다 — Stage 3 에서 위임 결과가
-      // 정직해지면 이 가드 자체가 원장 조회로 대체된다.
+      // 정규식은 아직 남긴다. 위임 결과가 정직해졌으니 이 경고는 이제 거의 안 떠야
+      // 정상이고, 그 빈도가 Stage 5 에서 이걸 지울 근거가 된다.
+      // 한국어일 때만 켜는 이유는 그대로 — 두 정규식이 비대칭이라 다른 언어에선
+      // "I am not delegating this" 가 부정 표현을 못 만나 오탐이 된다.
       const claimsDelegation = /(위임(했|하겠|할게|합니다)|맡겼|맡기겠|시켰)/.test(finalText);
       const hasNegation = /(없습니다|없어요|없습니다만|불가능|할 수 없|못 하|못합니다|뿐(이라|입니다)|지원하지 않)/.test(finalText);
-      if (getLang() === "ko" && opts.isManager && !delegated && claimsDelegation && !hasNegation) {
+      const reallyDelegated = this.engine.ledger.didDelegate(run.runId);
+      if (getLang() === "ko" && opts.isManager && !reallyDelegated && claimsDelegation && !hasNegation) {
         this.setState(s => ({
           messages: [...s.messages, {
             id: "a" + (this._uid++), role: "ai" as const, who: t("sc2.systemNote"), agent: "schutz",
@@ -2318,6 +2327,115 @@ ${(r.output || "").slice(0, 2000)}`;
         }
       }
     }
+
+    // 부모(또는 위임 호출자)에게 돌려주는 구조체. 산문은 여기서 만들지 않는다.
+    if (stopCause === "abort") return { status: "aborted" };
+    if (stopCause === "error") return { status: "failed", message: failMsg };
+    return finalText.trim()
+      ? { status: "completed", text: finalText, rounds, stopCause }
+      : { status: "empty", rounds, stopCause };
+  }
+
+  /**
+   * 하위 에이전트에게 건너가는 건 위임 프롬프트 문자열뿐이다 — 부모의 대화 기록은
+   * 넘어가지 않는다(구조적 한계). 최소한 부모가 지금까지 손댄 파일이라도 실어보낸다.
+   */
+  private delegationContext(fromAgent: string): string {
+    const rels: string[] = [];
+    for (const p of this.state.proposals) {
+      if (p.agent === fromAgent && !rels.includes(p.rel)) rels.push(p.rel);
+    }
+    return rels.length ? rels.slice(-8).join("\n") : "";
+  }
+
+  /** 거절 태그를 사용자 언어의 문장으로. 엔진은 태그만 알고 문장은 여기서 만든다. */
+  private rejectText(reason: RejectReason, target: string): string {
+    return t("engine.reject." + reason, {
+      target,
+      name: this.agDef(target).name,
+      roster: this.configuredAgents().map(a => this.agDef(a).name).join(", "),
+      max: reason === "per-turn-cap"
+        ? DEFAULT_POLICY.maxDelegationsPerTurn
+        : DEFAULT_POLICY.maxConcurrentDelegations,
+    });
+  }
+
+  /**
+   * 위임 하나를 시작하고 **실제 결과**를 기다린다.
+   *
+   * execTool 에서 들어낸 이유: execTool 은 "항상 문자열, 항상 순차" 계약이고 위임은
+   * 라운드 안에서 병렬로 떠 있어야 한다.
+   *
+   * 예전엔 하위가 토큰 하나 내기도 전에 상수 성공 문자열을 동기로 돌려줬다. 모델은
+   * 그걸 성공으로 읽고 사실대로 요약했고, 그 요약이 거짓말 취급을 받았다. 채널이
+   * 정직하지 않았던 것이지 모델이 거짓말한 게 아니다.
+   */
+  private startDelegation(parentRunId: string, fromAgent: string, call: ToolCall): Promise<string> {
+    const toolId = "t" + (this._uid++);
+    const target = String(call.input?.agent ?? "");
+    const task = String(call.input?.task ?? "");
+    this.addTool(toolId, fromAgent, t("sc2.verbDelegate"), target);
+
+    // cancel 훅은 하위 루프의 AbortController 보다 먼저 등록돼야 해서 상자로 전달한다.
+    const box: { cancel: () => void } = { cancel: () => { /* 아직 안 떴다 */ } };
+    const res = this.engine.requestDelegation(
+      { parentRunId, fromAgent, toAgent: target, task },
+      {
+        knownAgents: Object.keys(this.providers),
+        configuredAgents: this.configuredAgents(),
+        busyAgents: this.engine.runs.activeRuns(["manager", "sub"]).map(r => r.agentId),
+      },
+      () => box.cancel(),
+    );
+
+    // 거절도 원장에 남는다. 모델에는 이유와 "그래서 뭘 하라"를 돌려준다 —
+    // 조용히 실패하면 같은 위임을 그대로 다시 시도한다.
+    if (res.kind === "rejected") {
+      this.setTool(toolId, { st: "done", note: t("engine.noteRejected") });
+      return Promise.resolve(this.rejectText(res.reason, target));
+    }
+
+    const name = this.agDef(target).name;
+    this.setTool(toolId, { st: "done", note: t("sc2.noteDelegated") });
+
+    const ctx = this.delegationContext(fromAgent);
+    const seedText =
+      t("engine.seed", { manager: this.agDef(fromAgent).name, task }) +
+      (ctx ? t("engine.seedContext", { context: ctx }) : "");
+
+    const child = this.runAgentLoop(target, [{ role: "user", text: seedText }], {
+      isManager: false,
+      parentRunId,
+      delegationId: res.delegationId,
+      run: res.childRun,
+      onCancel: fn => { box.cancel = fn; },
+    });
+
+    const ms = DEFAULT_POLICY.delegationTimeoutMs;
+    let timer = 0;
+    const timeout = new Promise<DelegationOutcome>(resolve => {
+      timer = window.setTimeout(() => resolve({ status: "timeout", afterMs: ms }), ms);
+    });
+
+    return Promise.race([child, timeout]).then(outcome => {
+      window.clearTimeout(timer);
+      this.engine.ledger.settle(res.delegationId, outcome);
+      switch (outcome.status) {
+        case "timeout":
+          // 만료돼도 자식은 계속 둔다 — 제안은 여전히 검토 패널에 도착한다.
+          this.setTool(toolId, { st: "done", note: t("engine.noteTimeout") });
+          return t("engine.resultTimeout", { name, sec: Math.round(ms / 1000) });
+        case "failed":
+          this.setTool(toolId, { st: "done", note: t("engine.noteFailed") });
+          return t("engine.resultFailed", { name, message: outcome.message });
+        case "aborted":
+          return t("engine.resultAborted", { name });
+        case "empty":
+          return t("engine.resultEmpty", { name });
+        default:
+          return t("engine.result", { name, text: outcome.text });
+      }
+    });
   }
 
   /** Claude Code CLI(구독 인증) 턴 — 편집은 CLI가 직접 수행(acceptEdits), 종료 후 트리·페인 갱신 */
