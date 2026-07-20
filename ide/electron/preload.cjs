@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:fsChange", h);
   },
   mkdir: (root, rel) => ipcRenderer.invoke("schutz:mkdir", root, rel),
+  // 첫 실행 데모용 샘플 프로젝트를 만들고 그 경로를 돌려준다 (경로는 메인이 정한다)
+  demoProject: () => ipcRenderer.invoke("schutz:demoProject"),
   reveal: (root, rel) => ipcRenderer.invoke("schutz:reveal", root, rel),
   replaceInFiles: (root, query, replacement, opts) => ipcRenderer.invoke("schutz:replaceInFiles", root, query, replacement, opts),
 

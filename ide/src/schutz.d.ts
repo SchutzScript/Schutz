@@ -79,6 +79,8 @@ interface SchutzApi {
   watchStop(): void;
   onFsChange(cb: () => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
+  /** 첫 실행 데모용 샘플 프로젝트를 만들고 루트 경로를 돌려준다. 경로는 메인이 정한다. */
+  demoProject(): Promise<string>;
   reveal(root: string, rel: string): Promise<boolean>;
   /** 에이전트 셸 명령 실행 — 워크스페이스 안에서, 타임아웃·출력 상한 있음 */
   runCommand(opts: { id?: string; command: string; cwd: string; background?: boolean }):
