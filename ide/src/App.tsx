@@ -2154,7 +2154,11 @@ ${(r.output || "").slice(0, 2000)}`;
       : undefined;
     const system =
       schutzSystemPrompt() +
-      (opts.isManager ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
+      // 위임 안내는 delegate_task 를 실제로 줄 때만 붙인다 — 도구 조건(others.length)과
+      // 반드시 같아야 한다. 예전엔 여기만 조건이 없어서, 프로바이더가 하나뿐일 때
+      // "delegate_task 로 위임하세요, 이번 턴에 도구를 부르세요" + 빈 로스터를 주고
+      // 정작 그 도구는 안 줬다. 앱이 환각을 만들어 놓고 아래 가드로 모델을 나무라던 셈.
+      (opts.isManager && others.length ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
       (useTools ? "\n현재 워크스페이스: " + this.state.workspace!.name : "");
 
     const transcript: NeutralMsg[] = [...seed];
@@ -2221,9 +2225,16 @@ ${(r.output || "").slice(0, 2000)}`;
       // '위임' 이라는 낱말만 보고 경고하면 "제 도구는 위임뿐이라 실행은 못 합니다" 같은
       // 설명문에도 잘못 뜬다. 위임을 했다/하겠다는 주장일 때만, 그리고 같은 메시지에
       // 부정 표현이 없을 때만 경고한다.
-      const claimsDelegation = /(위임(했|하겠|할게|합니다)|맡겼|맡기겠|시켰|delegated|delegating)/i.test(finalText);
+      //
+      // 한국어일 때만 켠다. 두 정규식이 비대칭이라 다른 언어에선 신뢰할 수 없다:
+      // claimsDelegation 에는 영어(delegated|delegating)가 있는데 hasNegation 은
+      // 한국어 전용이라, "I am not delegating this" 가 부정 표현을 못 만나 오탐이 된다.
+      // 독일어·일본어는 주장 쪽 표현이 아예 없어 조용히 한 번도 안 뜬다.
+      // 4개 언어 부정 표현을 채우는 대신 범위를 좁혔다 — Stage 3 에서 위임 결과가
+      // 정직해지면 이 가드 자체가 원장 조회로 대체된다.
+      const claimsDelegation = /(위임(했|하겠|할게|합니다)|맡겼|맡기겠|시켰)/.test(finalText);
       const hasNegation = /(없습니다|없어요|없습니다만|불가능|할 수 없|못 하|못합니다|뿐(이라|입니다)|지원하지 않)/.test(finalText);
-      if (opts.isManager && !delegated && claimsDelegation && !hasNegation) {
+      if (getLang() === "ko" && opts.isManager && !delegated && claimsDelegation && !hasNegation) {
         this.setState(s => ({
           messages: [...s.messages, {
             id: "a" + (this._uid++), role: "ai" as const, who: t("sc2.systemNote"), agent: "schutz",
