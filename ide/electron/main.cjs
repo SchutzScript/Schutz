@@ -598,6 +598,161 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
   return { changed, files };
 });
 
+// ── 에이전트 명령 실행 ─────────────────────────────────────────────────────
+// Claude Code / Codex CLI 는 명령을 직접 실행하는데 Schutz 자체 에이전트는 못 해서
+// "npm run dev 띄워줘" 같은 요청에 손도 못 댔다. 여기서 실행을 붙인다.
+// 안전장치: 워크스페이스 안에서만, 타임아웃, 출력 상한, 중지 가능.
+const runProcs = new Map(); // id → child
+
+const RUN_TIMEOUT_MS = 120_000;
+const RUN_OUTPUT_CAP = 20_000; // 모델 컨텍스트를 잡아먹지 않도록
+
+ipcMain.handle("schutz:runCommand", async (e, opts) => {
+  const root = String(opts?.cwd || "");
+  const command = String(opts?.command || "").trim();
+  if (!command) return { ok: false, error: "빈 명령" };
+  let rootOk = false;
+  try { rootOk = !!root && require("fs").existsSync(root); } catch { rootOk = false; }
+  if (!rootOk) return { ok: false, error: "워크스페이스가 없습니다" };
+
+  const id = String(opts.id || ("run" + Date.now()));
+  // background: dev 서버처럼 계속 떠 있어야 하는 명령. 종료를 기다리지 않고,
+  // 초반 출력에서 접속 URL 을 찾아 돌려준 뒤 프로세스는 계속 살려 둔다.
+  const background = !!opts.background;
+  // dev 서버 출력은 대개 색이 입혀져 있다. 지우지 않으면 URL 뒤에 리셋 시퀀스([39m)가
+  // 그대로 붙어 잘못된 주소가 되고, 모델 컨텍스트에도 제어문자가 섞인다.
+  const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)/g;
+  const stripAnsi = (x) => x.replace(ANSI_RE, "");
+  const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?[^\s"'`]*/i;
+  const BG_SETTLE_MS = 12_000;
+
+  return await new Promise((resolve) => {
+    let out = "";
+    let truncated = false;
+    let settled = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // 백그라운드는 프로세스를 살려 두므로 runProcs 에서 지우지 않는다(중지 위해 필요)
+      if (!background) runProcs.delete(id);
+      resolve(r);
+    };
+
+    let child;
+    try {
+      // shell:true — 사용자가 터미널에 치는 것과 같은 해석. cwd 로 워크스페이스에 가둔다.
+      child = spawn(command, { cwd: root, shell: true, env: process.env, windowsHide: true });
+    } catch (err) {
+      return finish({ ok: false, error: err && err.message ? err.message : String(err) });
+    }
+    runProcs.set(id, child);
+
+    const push = (buf, stream) => {
+      if (truncated) return;
+      const s = stripAnsi(buf.toString());
+      if (out.length + s.length > RUN_OUTPUT_CAP) { out += s.slice(0, Math.max(0, RUN_OUTPUT_CAP - out.length)); truncated = true; }
+      else out += s;
+      // 살아있는 출력도 흘려보낸다 — 사용자가 진행 상황을 볼 수 있게
+      try { if (!e.sender.isDestroyed()) e.sender.send("schutz:runOutput", JSON.stringify({ id, stream, chunk: s.slice(0, 4000) })); } catch { /* */ }
+      // 서버 주소가 보이면 바로 돌려준다(12초를 다 기다릴 필요 없음)
+      if (background && !settled) {
+        const m = URL_RE.exec(out);
+        if (m) finish({ ok: true, background: true, id, url: m[0].replace(/[.,)]+$/, ""), output: out, truncated });
+      }
+    };
+    child.stdout?.on("data", (b) => push(b, "out"));
+    child.stderr?.on("data", (b) => push(b, "err"));
+
+    const timer = setTimeout(() => {
+      if (background) {
+        // 주소를 못 찾았어도 프로세스는 계속 둔다 — 사용자가 터미널에서 확인할 수 있다
+        finish({ ok: true, background: true, id, url: null, output: out, truncated });
+      } else {
+        killProcTree(child);
+        finish({ ok: true, exitCode: null, timedOut: true, output: out, truncated });
+      }
+    }, background ? BG_SETTLE_MS : RUN_TIMEOUT_MS);
+
+    child.on("error", (err) => finish({ ok: false, error: err && err.message ? err.message : String(err) }));
+    child.on("close", (code) => {
+      runProcs.delete(id);
+      // 백그라운드가 시작 직후 죽었으면(포트 충돌 등) 그 사실을 알린다
+      finish({ ok: true, background, exitCode: code, timedOut: false, output: out, truncated, exitedEarly: background });
+    });
+  });
+});
+
+ipcMain.on("schutz:runStop", (_e, id) => {
+  const c = runProcs.get(String(id));
+  if (c) { killProcTree(c); runProcs.delete(String(id)); }
+});
+
+// ── 사용량(잔여 할당량) ────────────────────────────────────────────────────
+// 구독 경로에서는 금액이 늘 $0 이라 의미가 없다. 대신 벤더가 응답 헤더로 내려주는
+// 사용률/리셋 시각을 정규화해 "얼마나 남았는지" 로 보여준다.
+//   Anthropic : anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}  (utilization = 0..1)
+//   ChatGPT   : x-codex-{primary,secondary}-{used-percent,reset-at,window-minutes}
+// 두 벤더의 형태가 달라 여기서 하나로 맞춘다.
+function normalizeQuota(provider, h) {
+  const g = (k) => { try { return h.get(k); } catch { return null; } };
+  const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
+  const windows = [];
+  let plan = null;
+
+  if (provider === "claude") {
+    for (const [key, label] of [["5h", "5h"], ["7d", "7d"]]) {
+      const u = num(g(`anthropic-ratelimit-unified-${key}-utilization`));
+      if (u === null) continue;
+      windows.push({ label, usedPercent: Math.round(u * 1000) / 10, resetAt: num(g(`anthropic-ratelimit-unified-${key}-reset`)) });
+    }
+  } else {
+    for (const kind of ["primary", "secondary"]) {
+      const mins = num(g(`x-codex-${kind}-window-minutes`));
+      const used = num(g(`x-codex-${kind}-used-percent`));
+      if (used === null || !mins) continue; // window-minutes 0 = 그 창은 없음
+      const label = mins >= 1440 ? Math.round(mins / 1440) + "d" : mins >= 60 ? Math.round(mins / 60) + "h" : mins + "m";
+      windows.push({ label, usedPercent: used, resetAt: num(g(`x-codex-${kind}-reset-at`)) });
+    }
+    plan = g("x-codex-plan-type") || null;
+  }
+  if (!windows.length) return null;
+  return { provider, plan, windows, at: Date.now() };
+}
+
+function sendQuota(e, provider, headers) {
+  try {
+    const q = normalizeQuota(provider, headers);
+    if (q && !e.sender.isDestroyed()) e.sender.send("schutz:quota", JSON.stringify(q));
+  } catch { /* 잔여량 표시는 부가 기능 — 실패해도 대화를 막지 않는다 */ }
+}
+
+/** 앱을 켜자마자 잔여량을 보여주기 위한 최소 요청(응답 본문은 쓰지 않고 버린다). */
+ipcMain.handle("schutz:quotaProbe", async (e, opts) => {
+  try {
+    const isClaude = opts.provider === "claude";
+    const url = isClaude ? "https://api.anthropic.com/v1/messages" : "https://chatgpt.com/backend-api/codex/responses";
+    const headers = isClaude
+      ? { "content-type": "application/json", "anthropic-version": "2023-06-01",
+          authorization: "Bearer " + opts.access, "anthropic-beta": "oauth-2025-04-20" }
+      : { "content-type": "application/json", authorization: "Bearer " + opts.access,
+          ...(opts.accountId ? { "chatgpt-account-id": opts.accountId } : {}) };
+    const body = isClaude
+      ? { model: opts.model || "claude-sonnet-5", max_tokens: 1, stream: false,
+          system: [{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }],
+          messages: [{ role: "user", content: "hi" }] }
+      : { model: opts.model || "gpt-5.6-terra", instructions: "", stream: true, store: false,
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] };
+
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    const q = normalizeQuota(opts.provider, r.headers);
+    try { if (r.body) await r.body.cancel(); } catch { /* 본문 불필요 */ }
+    return q ? { ok: true, quota: q } : { ok: false, error: "no-quota-headers" };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // ── 새 창 ──────────────────────────────────────────────────────────────────
 ipcMain.on("schutz:newWindow", () => {
   // 새 창은 VS Code처럼 가볍게 — 기본 1분할
@@ -925,7 +1080,17 @@ app.on("web-contents-created", (_e, wc) => {
   // 렌더러 재로드 시 destroyed 는 안 불린다(webContents 재사용) → 진행 중 AI 요청·CLI 를 여기서 중단.
   // (메인 프로세스 fetch 는 렌더러 리로드로 취소되지 않아 응답을 아무도 소비 못 하면서 토큰/quota 만 소모.)
   // 셸(PTY)은 termReconcile 로 별도 조정하므로 여기서 건드리지 않는다.
-  wc.on("did-start-loading", () => {
+  //
+  // did-start-loading 은 하위 프레임 로드에도 뜬다 — 개발 서버 프리뷰 <iframe> 하나가
+  // 진행 중이던 에이전트 요청을 통째로 취소시켜, 도구를 쓰고 나면 답이 조용히 사라졌다.
+  // 그래서 "메인 프레임의 실제 이동"일 때만 중단한다.
+  const isMainFrameNav = (...args) => {
+    const d = args.find(a => a && typeof a === "object" && "isMainFrame" in a);
+    if (d) return !!d.isMainFrame && !d.isSameDocument;   // 최신 시그니처(details 객체)
+    return args[3] === true && args[2] !== true;          // 구형 (event, url, isInPlace, isMainFrame)
+  };
+  wc.on("did-start-navigation", (...args) => {
+    if (!isMainFrameNav(...args)) return;
     for (const [rid, ac] of [...oaiRuns.entries()]) { if (ac._sid === wc.id) { try { ac.abort(); } catch { /* */ } oaiRuns.delete(rid); } }
     for (const [rid, ac] of [...anthRuns.entries()]) { if (ac._sid === wc.id) { try { ac.abort(); } catch { /* */ } anthRuns.delete(rid); } }
     const cp = cliProcs.get(wc.id);
@@ -945,6 +1110,13 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// 백그라운드 실행(dev 서버)은 앱보다 오래 산다 — 종료 때 정리하지 않으면
+// 포트를 계속 물고 있어 다음 실행이 EADDRINUSE 로 죽는다.
+app.on("before-quit", () => {
+  for (const c of runProcs.values()) { try { killProcTree(c); } catch { /* 이미 죽음 */ } }
+  runProcs.clear();
 });
 
 app.on("window-all-closed", () => {
@@ -1139,6 +1311,7 @@ ipcMain.on("schutz:oaiRun", async (e, opts) => {
       body: JSON.stringify(opts.body),
       signal: ac.signal,
     });
+    sendQuota(e, "gpt", r.headers);
     if (!r.ok || !r.body) {
       let detail = r.statusText;
       try { detail = (await r.text()).slice(0, 300); } catch {}
@@ -1193,6 +1366,7 @@ ipcMain.on("schutz:anthropicRun", async (e, opts) => {
       body: JSON.stringify(opts.body),
       signal: ac.signal,
     });
+    sendQuota(e, "claude", r.headers); // 응답 헤더의 잔여량 — 매 요청마다 최신으로 갱신
     if (!r.ok || !r.body) {
       let detail = r.statusText;
       try { detail = (await r.text()).slice(0, 400); } catch {}

@@ -91,6 +91,8 @@ export const MESSAGES: Record<string, Msg> = {
   "slash.keys": { ko: "키보드 단축키", en: "Keyboard shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
   "slash.vim": { ko: "Vim 키맵 토글", en: "Toggle Vim keymap", de: "Vim-Tastenzuordnung umschalten", ja: "Vimキーマップ切替" },
   "slash.theme": { ko: "테마 순환", en: "Cycle theme", de: "Design wechseln", ja: "テーマを循環" },
+  "slash.preview": { ko: "실행 중인 서버 화면 열기", en: "Open a running server's screen", de: "Bildschirm eines laufenden Servers öffnen", ja: "実行中のサーバー画面を開く" },
+  "slash.argUrl": { ko: "[주소]", en: "[url]", de: "[URL]", ja: "[アドレス]" },
   "slash.terminal": { ko: "터미널 토글", en: "Toggle terminal", de: "Terminal umschalten", ja: "ターミナル切替" },
   "slash.diff": { ko: "소스 컨트롤(변경) 패널", en: "Source control (changes) panel", de: "Versionskontroll-Panel (Änderungen)", ja: "ソース管理(変更)パネル" },
   "slash.git": { ko: "소스 컨트롤 패널", en: "Source control panel", de: "Versionskontroll-Panel", ja: "ソース管理パネル" },
@@ -233,6 +235,16 @@ export const MESSAGES: Record<string, Msg> = {
 
   // ── 채팅 ────────────────────────────────────────────────
   "chat.title": { ko: "대화", en: "Chat", de: "Chat", ja: "チャット" },
+  // 에이전트별 채팅 탭 — 여러 에이전트가 한 스트림에 섞여 누가 한 말인지 헷갈리던 문제
+  // 셸 명령 실행 승인 — window.confirm 은 렌더러를 얼려서 인앱 모달로 대체
+  "run.askTitle": { ko: "명령을 실행할까요?", en: "Run this command?", de: "Diesen Befehl ausführen?", ja: "このコマンドを実行しますか？" },
+  "run.askHint": { ko: "셸 명령은 되돌릴 수 없습니다. 설정에서 자율성을 '자율'로 두면 묻지 않습니다.", en: "Shell commands cannot be undone. Set autonomy to 'auto' in settings to stop asking.", de: "Shell-Befehle sind nicht umkehrbar. Autonomie in den Einstellungen auf 'auto' setzen, um nicht mehr zu fragen.", ja: "シェルコマンドは元に戻せません。設定で自律性を「自律」にすると確認しません。" },
+  "run.approve": { ko: "실행", en: "Run", de: "Ausführen", ja: "実行" },
+  "run.reject": { ko: "거절", en: "Reject", de: "Ablehnen", ja: "拒否" },
+  // 개발 서버 미리보기 — 에이전트가 background 로 띄운 서버 화면을 편집 그룹에 연다
+  "preview.openExternal": { ko: "브라우저로 열기", en: "Open in browser", de: "Im Browser öffnen", ja: "ブラウザで開く" },
+  "preview.slowHint": { ko: "화면이 아직 안 뜹니다. 서버가 준비 중이거나, 이 주소가 프레임 안에서 열리는 것을 막고 있을 수 있습니다 — [브라우저로 열기]를 눌러보세요.", en: "Nothing yet. The server may still be starting, or this address may refuse to load in a frame — try [Open in browser].", de: "Noch nichts. Der Server startet möglicherweise noch, oder diese Adresse verweigert das Laden im Frame — versuche [Im Browser öffnen].", ja: "まだ表示されません。サーバーが起動中か、このアドレスがフレーム内での表示を拒否している可能性があります — [ブラウザで開く]をお試しください。" },
+  "chat.tabAll": { ko: "전체", en: "All", de: "Alle", ja: "すべて" },
   "chat.continueTitle": { ko: "이 폴더의 최근 Claude 세션을 이어서 진행", en: "Continue the latest Claude session for this folder", de: "Letzte Claude-Sitzung für diesen Ordner fortsetzen", ja: "このフォルダの最新のClaudeセッションを継続" },
   "chat.continuePrompt": { ko: "직전 작업을 이어서 계속 진행해줘.", en: "Continue from where the previous work left off.", de: "Setze die vorherige Arbeit dort fort, wo sie aufgehört hat.", ja: "直前の作業を続けて進めてください。" },
   "chat.continue": { ko: "이어가기", en: "Continue", de: "Fortsetzen", ja: "続ける" },

@@ -97,8 +97,10 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
   private async *parseAnthropicStream(dataLines: AsyncIterable<string>): AsyncIterable<AgentEvent> {
     let inTok = 0, outTok = 0;
     let stop: "end" | "tool_use" | "error" = "end";
+    let sawAny = false; // 이벤트가 하나라도 왔는가 — 조용히 끊긴 스트림을 정상 종료와 구분한다
     const toolBuf: Record<number, { id: string; name: string; json: string }> = {};
     for await (const json of dataLines) {
+      sawAny = true;
       if (json === "__ERROR__") { stop = "error"; continue; }
       if (json.startsWith("__ERRMSG__")) { yield { type: "error", message: json.slice(10) }; stop = "error"; continue; }
       let evt: any;
@@ -139,6 +141,12 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
           if (evt.delta?.stop_reason === "tool_use") stop = "tool_use";
           break;
       }
+    }
+    // 아무 이벤트도 없이 끝났다면 요청이 중간에 취소·차단된 것이다.
+    // 예전엔 이걸 "모델이 할 말이 없었다"와 똑같이 취급해, 도구를 쓴 턴이 답 없이 조용히 끝났다.
+    if (!sawAny && stop !== "error") {
+      yield { type: "error", message: "응답이 오지 않고 요청이 끊겼습니다. 다시 시도해 주세요." };
+      stop = "error";
     }
     if (inTok || outTok) yield { type: "usage", inputTokens: inTok, outputTokens: outTok };
     yield { type: "stop", reason: stop };
@@ -247,6 +255,25 @@ export const WORKSPACE_TOOLS: ToolDef[] = [
         rationale: { type: "string", description: "이 변경을 하는 이유 (한 문장)" },
       },
       required: ["path", "find", "replace", "rationale"],
+    },
+  },
+  {
+    name: "run_command",
+    description:
+      "워크스페이스 루트에서 셸 명령을 실행하고 출력을 돌려받는다. " +
+      "빌드·테스트·설치·스크립트 실행(npm install, npm run dev, pytest 등)에 쓴다. " +
+      "npm run dev 처럼 계속 떠 있어야 하는 개발 서버는 background:true 로 실행한다. " +
+      "그러면 종료를 기다리지 않고 접속 주소를 돌려주며, 그 화면이 편집 그룹에 자동으로 열린다. " +
+      "일반 명령(빌드·테스트·설치)은 background 없이 실행해 출력을 받는다. " +
+      "파일 수정은 이 도구 대신 propose_edit/propose_create 를 쓸 것.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "실행할 셸 명령 (워크스페이스 루트에서 실행됨)" },
+        rationale: { type: "string", description: "이 명령을 실행하는 이유 (한 문장)" },
+        background: { type: "boolean", description: "계속 떠 있는 서버면 true — 주소를 받아 화면이 편집창에 열린다" },
+      },
+      required: ["command", "rationale"],
     },
   },
 ];

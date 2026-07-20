@@ -41,6 +41,11 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc2.verbList": { ko: "목록", en: "List", de: "Liste", ja: "一覧" },
   "sc2.noteCount": { ko: "{n}개", en: "{n} items", de: "{n} Einträge", ja: "{n}件" },
   "sc2.verbRead": { ko: "읽기", en: "Read", de: "Lesen", ja: "読み取り" },
+  "sc2.verbRun": { ko: "실행", en: "Run", de: "Ausführen", ja: "実行" },
+  "sc2.noteTimeout": { ko: "시간 초과", en: "Timed out", de: "Zeitüberschreitung", ja: "タイムアウト" },
+  "sc2.noteExit": { ko: "종료 {code}", en: "exit {code}", de: "Ende {code}", ja: "終了 {code}" },
+  "sc2.noteRejected": { ko: "거절됨", en: "Rejected", de: "Abgelehnt", ja: "拒否" },
+  "sc2.runConfirm": { ko: "AI가 이 명령을 실행하려 합니다:\n\n  {command}\n\n실행할까요? (자율성 정책을 '자율'로 두면 묻지 않습니다)", en: "The AI wants to run this command:\n\n  {command}\n\nRun it? (set autonomy to 'auto' to stop asking)", de: "Die KI möchte diesen Befehl ausführen:\n\n  {command}\n\nAusführen? (Autonomie auf 'auto' stellen, um nicht mehr zu fragen)", ja: "AI がこのコマンドを実行しようとしています:\n\n  {command}\n\n実行しますか？(自律性を「自律」にすると確認しません)" },
   "sc2.verbCreate": { ko: "생성", en: "Create", de: "Erstellen", ja: "作成" },
   "sc2.noteLockConflict": { ko: "락 충돌", en: "Lock conflict", de: "Sperrkonflikt", ja: "ロック競合" },
   "sc2.rationaleCreate": { ko: "새 파일 생성", en: "Create new file", de: "Neue Datei erstellen", ja: "新規ファイル作成" },
@@ -52,6 +57,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc2.noteTargetError": { ko: "대상 오류", en: "Target error", de: "Zielfehler", ja: "対象エラー" },
   "sc2.noteDelegated": { ko: "위임됨", en: "Delegated", de: "Delegiert", ja: "委任済み" },
   "sc2.systemNote": { ko: "Schutz", en: "Schutz", de: "Schutz", ja: "Schutz" },
+  // 단가 덮어쓰기 — 내장 표는 추정치라 벤더가 바꾸면 틀어진다
   // 관리자가 도구를 부르지 않고 위임했다고 말만 한 경우 — 기다려도 결과가 오지 않는다
   "sc2.delegateClaimedButNotDone": {
     ko: "⚠️ 위임했다고 했지만 실제로 다른 에이전트에게 전달되지 않았습니다. 결과가 오지 않으니 다시 요청해 주세요 — 어떤 에이전트에게 무엇을 맡길지 구체적으로 적으면 잘 전달됩니다.",
@@ -59,6 +65,15 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
     de: "⚠️ Der Manager meldete eine Delegation, es wurde aber nichts übergeben. Es kommt kein Ergebnis — bitte erneut anfragen und Agent und Aufgabe ausdrücklich nennen.",
     ja: "⚠️ 委任したと言いましたが、実際には引き渡されていません。結果は届きません — エージェントと作業内容を明示してもう一度依頼してください。",
   },
+  "sc2.previewNeedsUrl": {
+    ko: "열 주소가 없습니다. `/preview http://localhost:5173` 처럼 주소를 적거나, 에이전트에게 개발 서버를 띄워달라고 하세요.",
+    en: "No address to open. Give one like `/preview http://localhost:5173`, or ask an agent to start the dev server.",
+    de: "Keine Adresse zum Öffnen. Gib eine an, z. B. `/preview http://localhost:5173`, oder bitte einen Agenten, den Dev-Server zu starten.",
+    ja: "開くアドレスがありません。`/preview http://localhost:5173` のように指定するか、エージェントに開発サーバーの起動を依頼してください。",
+  },
   "sc2.noteError": { ko: "오류", en: "Error", de: "Fehler", ja: "エラー" },
+  // 백그라운드 실행 — 주소를 찾았으면 화면을 띄웠다는 뜻
+  "sc2.noteServing": { ko: "화면 열림", en: "Preview open", de: "Vorschau offen", ja: "画面表示中" },
+  "sc2.noteRunning": { ko: "실행 중", en: "Running", de: "Läuft", ja: "実行中" },
   "sc2.managerSuffix": { ko: " · 관리자", en: " · Manager", de: " · Manager", ja: " · マネージャー" },
 };
