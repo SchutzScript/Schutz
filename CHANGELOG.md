@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.0.3]
+
+The release that made the manager agent tell the truth, and taught Schutz to run commands.
+
+### Delegation engine
+
+The manager agent used to claim it had delegated work that never happened. The cause was not the model — it was the app. `delegate_task` returned a constant success string *before the sub-agent had produced a single token*, so the model read success and summarised it faithfully. A regex then flagged that honest summary as a lie.
+
+- **Delegations now return the sub-agent's actual output.** A round starts its delegations first, runs the remaining tools sequentially, then collects the results into the same tool-result batch in the original call order. Delegations complete inside the round, so the round limit is untouched and one `tool_use` still maps to one `tool_result`.
+- **A delegation ledger** records every request, rejection, start, and settlement. "Did the manager delegate?" is now a lookup, not a judgement about prose. The old flag was set *before* the call ran, so unknown-agent, not-connected, and already-busy all counted as "delegated" — the three cases where a user is most likely to be left waiting.
+- **Nine rejection reasons**, localized in Korean, English, German, and Japanese. Each one tells the model what to do instead; a reason without an instruction just gets retried verbatim.
+- **Delegation timeout** (180s): the manager settles honestly and moves on, while the sub-agent keeps working and its proposals still arrive in the review panel.
+- **Sub-agents now receive context** — the files the delegating agent has touched travel with the task, since the delegation prompt is the only channel between them.
+- The manager is no longer told it can delegate when no second provider is connected. It used to receive delegation instructions and an empty roster without the tool itself.
+
+### Shell commands and dev server preview
+
+- **`run_command`**: the agent can run shell commands, with an approval modal in manual mode and live output in the AI log tab.
+- **Background processes**: dev servers keep running independently of the agent that started them, are detected from their output, and open in a **preview pane inside the editor**. Closing the tab stops the server; quitting the app cleans them up.
+
+### Fixes
+
+- **Agent replies vanished after tool use.** A preview `<iframe>` firing `did-start-loading` cancelled the in-flight agent request, and the resulting `AbortError` was swallowed — indistinguishable from the model saying nothing. Navigation is now gated on the main frame.
+- **Stop → immediately re-run** could make the dying run release the *new* run's file locks and overwrite its state. Runs are now keyed by run id, and a superseded run skips cleanup entirely.
+- Stopping now resolves a pending command approval as a rejection; approvals were not interruptible by abort.
+- **GPT's subscription path could not edit files** — it was missing tool support.
+- **Tab filenames were unreadable with many files open.** Tabs shrank instead of overflowing; the icon, close button, and padding took 61px, leaving 13px for the name. Tabs now keep their size and the strip scrolls, bringing the active tab into view.
+- **Paper theme** left the editor dark — added a light TextMate theme.
+- Assorted data-loss and false-success paths: destructive file operations now go through the trash with atomic writes, external modifications are detected, auto-accept no longer reports success it did not achieve, and silent failures surface as toasts.
+
+### Chat and motion
+
+- Draft messages survive a restart, `↑` recalls previous messages, a jump-to-latest button appears when you scroll away, and chat opens at the newest message.
+- Per-agent chat tabs with per-agent colours, so Claude and GPT no longer blur together.
+- Korean/Japanese input no longer sends mid-composition on Enter.
+- Language switching, terminal open/close, and project switching animate; the chat no longer shifts horizontally as scrollbars appear.
+- AI edits are applied with a typing animation on the real edit path, without remounting the editor.
+
+### Branding
+
+- New logo and app icon; the sage brand accent is now separate from semantic green (`--ok`), so success states no longer fight the brand colour.
+
+### Internal
+
+- First test infrastructure in this repository: vitest, with 54 tests covering the engine. The engine is a zero-import pure module type-checked under a stricter config than the rest of the app.
+
 ## [0.0.2]
 
 The release that brought the editor core, Git, AI, and the terminal up to everyday-usable quality.

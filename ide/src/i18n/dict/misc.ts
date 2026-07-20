@@ -9,6 +9,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "misc.statusFailed": { ko: "적용 실패", en: "Apply failed", de: "Anwenden fehlgeschlagen", ja: "適用失敗" },
   "misc.acceptAll": { ko: "모두 수락", en: "Accept all", de: "Alle annehmen", ja: "すべて承認" },
   "misc.rejectAll": { ko: "모두 거절", en: "Reject all", de: "Alle ablehnen", ja: "すべて拒否" },
+  // 긴 diff 접기/펼치기 — 잘린 채 스크롤도 안 되던 것을 명시적 토글로
+  "misc.diffExpand": { ko: "{n}줄 더 보기", en: "Show {n} more lines", de: "{n} weitere Zeilen", ja: "他 {n} 行を表示" },
+  "misc.diffCollapse": { ko: "접기", en: "Collapse", de: "Einklappen", ja: "折りたたむ" },
   "misc.auto": { ko: "자동", en: "Auto", de: "Auto", ja: "自動" },
   "misc.autoAcceptedPrefix": { ko: "자동 수락됨 · ", en: "Auto-accepted · ", de: "Autom. angenommen · ", ja: "自動承認 · " },
   "misc.accept": { ko: "수락", en: "Accept", de: "Annehmen", ja: "承認" },

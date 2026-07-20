@@ -66,7 +66,12 @@ export interface ReviewFile {
 export interface ChatMsg {
   id: string;
   role: "user" | "ai";
+  /** 표시용 이름 — 지역화된 문자열이라 판단 근거로 쓰면 안 된다 ("Claude · 관리자") */
   who?: string;
+  /** 안정 에이전트 id (AGDEF.id 또는 "schutz"). 필터·색·컨텍스트 분리는 전부 이걸 기준으로.
+   *  who 접두어로 역추론하지 말 것 — "Codex · 구독" 은 AGDEF 에 없고 언어가 바뀌면 깨진다.
+   *  이 필드가 없는 메시지는 이 필드 도입 이전에 저장된 레거시다. */
+  agent?: string;
   text: string;
   streaming?: boolean;
 }

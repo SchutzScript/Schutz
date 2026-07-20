@@ -104,6 +104,23 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:oaiEvent", h);
   },
 
+  /** 에이전트 명령 실행 (워크스페이스 안, 타임아웃·출력 상한 있음) */
+  runCommand: (opts) => ipcRenderer.invoke("schutz:runCommand", opts),
+  runStop: (id) => ipcRenderer.send("schutz:runStop", id),
+  onRunOutput: (cb) => {
+    const h = (_e, line) => cb(line);
+    ipcRenderer.on("schutz:runOutput", h);
+    return () => ipcRenderer.removeListener("schutz:runOutput", h);
+  },
+
+  /** 잔여 할당량 — 켤 때 1토큰 요청으로 즉시 조회, 이후엔 실제 요청 헤더로 갱신 */
+  quotaProbe: (opts) => ipcRenderer.invoke("schutz:quotaProbe", opts),
+  onQuota: (cb) => {
+    const h = (_e, line) => cb(line);
+    ipcRenderer.on("schutz:quota", h);
+    return () => ipcRenderer.removeListener("schutz:quota", h);
+  },
+
   /** 범용 GET (CORS 우회) — 모델 목록 등 */
   httpGet: (url, headers) => ipcRenderer.invoke("schutz:httpGet", url, headers),
 

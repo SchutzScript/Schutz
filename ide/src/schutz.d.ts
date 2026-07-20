@@ -1,3 +1,12 @@
+/** 잔여 할당량 — 벤더별 rate-limit 헤더를 하나로 정규화한 것.
+ *  usedPercent 0..100, resetAt 은 epoch 초(모르면 null). */
+interface QuotaInfo {
+  provider: string;
+  plan?: string | null;
+  windows: { label: string; usedPercent: number; resetAt: number | null }[];
+  at: number;
+}
+
 /** MCP 서버가 노출하는 도구 (tools/list 결과) */
 interface McpTool {
   name: string;
@@ -63,14 +72,32 @@ interface SchutzApi {
   newWindow(): void;
   setOverlay(color: string, symbolColor: string): void;
   renameEntry(root: string, relFrom: string, relTo: string): Promise<boolean>;
-  deleteEntry(root: string, rel: string): Promise<boolean>;
+  /** trashed=false 면 휴지통을 못 써서 영구 삭제된 것 — 호출측이 사용자에게 구분해 알린다 */
+  deleteEntry(root: string, rel: string): Promise<{ ok: boolean; trashed: boolean; reason?: string }>;
   readBinary(root: string, rel: string): Promise<string>;
   watchStart(root: string): void;
   watchStop(): void;
   onFsChange(cb: () => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
   reveal(root: string, rel: string): Promise<boolean>;
-  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number }>;
+  /** 에이전트 셸 명령 실행 — 워크스페이스 안에서, 타임아웃·출력 상한 있음 */
+  runCommand(opts: { id?: string; command: string; cwd: string; background?: boolean }):
+    Promise<{
+      ok: boolean; error?: string; exitCode?: number | null; timedOut?: boolean;
+      output?: string; truncated?: boolean;
+      /** background:true 일 때만 — 감지한 접속 주소와 조기 종료 여부 */
+      url?: string | null; background?: boolean; exitedEarly?: boolean;
+    }>;
+  runStop(id: string): void;
+  onRunOutput(cb: (line: string) => void): () => void;
+
+  /** 잔여 할당량 — 구독 경로는 금액이 늘 $0 이라 사용률로 보여준다 */
+  quotaProbe(opts: { provider: string; access: string; accountId?: string | null; model?: string }):
+    Promise<{ ok: boolean; quota?: QuotaInfo; error?: string }>;
+  onQuota(cb: (line: string) => void): () => void;
+
+  /** error=정규식 거부 등으로 아무것도 안 함 · partial=도중 실패해 일부만 적용됨 */
+  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number; error?: string; partial?: boolean }>;
   cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
   agentCommands(root: string | null): Promise<{ commands: { name: string; origin: "claude" | "codex"; scope: "user" | "project"; description: string; argHint: string; body: string }[] }>;
   mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number }[]>;

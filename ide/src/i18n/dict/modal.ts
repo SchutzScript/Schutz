@@ -18,6 +18,8 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "modal.usageFootnote": { ko: "* 구독(OAuth/CLI) 경로는 개별 과금 없이 구독에 포함됩니다.", en: "* Subscription (OAuth/CLI) paths are included in the subscription with no separate billing.", de: "* Abo-Pfade (OAuth/CLI) sind ohne separate Abrechnung im Abo enthalten.", ja: "* サブスクリプション (OAuth/CLI) 経路は個別課金なしでサブスクリプションに含まれます。" },
   "modal.subscription": { ko: "구독", en: "Subscription", de: "Abo", ja: "サブスク" },
   "modal.subscriptionIncluded": { ko: "구독 포함", en: "Included in subscription", de: "Im Abo enthalten", ja: "サブスクに含む" },
+  // 단가를 모르는 모델 — 추정값으로 금액을 지어내지 않는다
+  "modal.quotaResets": { ko: "{when} 후 리셋", en: "resets in {when}", de: "Reset in {when}", ja: "{when} 後にリセット" },
   "modal.keysTitle": { ko: "키보드 단축키", en: "Keyboard shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
   "modal.kbWorkspaceSymbol": { ko: "작업공간 기호 이동", en: "Go to workspace symbol", de: "Zu Arbeitsbereich-Symbol springen", ja: "ワークスペースシンボルへ移動" },
   "modal.kbCycleTabs": { ko: "탭 순환 (MRU)", en: "Cycle tabs (MRU)", de: "Tabs durchwechseln (MRU)", ja: "タブ切り替え (MRU)" },

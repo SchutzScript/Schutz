@@ -12,5 +12,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // 테스트는 여기서 제외한다. build 가 tsc 를 먼저 돌리는데 include:["src"] 라
+  // 테스트 파일이 타입체크 대상이 되고, describe/it/expect 가 미선언이라 빌드가 깨진다.
+  // 대신 src/engine/tsconfig.json 이 테스트까지 strict 로 검사한다 (npm run typecheck).
+  "exclude": ["src/**/*.test.ts"]
 }
