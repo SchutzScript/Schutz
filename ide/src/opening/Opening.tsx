@@ -149,11 +149,7 @@ export class Opening extends React.Component<Props, State> {
           opacity: Math.max(0, S(0, 400) - S(3200, 3800)),
           transform: `scale(${1 + E(3200, 3800) * 0.12})`,
         }}>
-          <svg viewBox="0 0 120 130" style={{ width: "13vw", minWidth: 90 }}>
-            <path d="M34 14 L86 46 L58 62 L86 78 L34 116 L34 76 L62 60 L34 44 Z"
-              fill="none" stroke={tk.accent} strokeWidth={7}
-              strokeDasharray={620} strokeDashoffset={620 * (1 - E(400, 2400))} />
-          </svg>
+          <Mark color={tk.accent} size="13vw" dash={620 * (1 - E(400, 2400))} />
         </div>
 
         {/* 2 선언 */}
@@ -171,9 +167,15 @@ export class Opening extends React.Component<Props, State> {
               opacity: op, transform: `translateY(${(1 - inP) * 16 - outP * 10}px)`,
               pointerEvents: op > 0.5 ? "auto" : "none",
             }}>
-              <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
-                {t("open.setup.title")}
-              </h2>
+              {/* 제목만 덩그러니 있으면 허전하다. 방금 획이 그려진 그 마크를 작게 얹어
+                  앞 장면과 이 화면을 잇는다 — 새 그림을 들이는 것보다 낫다. */}
+              <div style={{ display: "grid", justifyItems: "center", gap: 14 }}>
+                <Mark color={tk.accent} size={44} width={9} />
+                <div style={{ width: 26, height: 1, background: tk.w14 }} />
+                <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
+                  {t("open.setup.title")}
+                </h2>
+              </div>
 
               {/* 언어가 먼저다 — 읽지 못하는 화면에서 테마를 고르게 할 수는 없다. */}
               <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
@@ -561,6 +563,23 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       </div>
       <div style={{ ...tagS, left: "71.5%", ...tag("right") }}>{t("open.tag.right")}</div>
     </div>
+  );
+}
+
+/**
+ * 브랜드 마크. 언제나 선으로 그린다 — 이 path 는 외곽선용이라 fill 을 주면 안쪽
+ * 여백이 메워져 삼각형 두 개로 뭉개진다(로고로 안 읽힌다).
+ * dash 를 주면 그려지는 중, 생략하면 다 그려진 상태.
+ */
+function Mark({ color, size, dash = 0, width = 7 }: {
+  color: string; size: number | string; dash?: number; width?: number;
+}) {
+  return (
+    <svg viewBox="0 0 120 130" style={{ width: size, display: "block" }} aria-hidden>
+      <path d="M34 14 L86 46 L58 62 L86 78 L34 116 L34 76 L62 60 L34 44 Z"
+        fill="none" stroke={color} strokeWidth={width}
+        strokeDasharray={620} strokeDashoffset={dash} />
+    </svg>
   );
 }
 
