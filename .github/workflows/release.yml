@@ -2,7 +2,9 @@ name: Release
 
 # v* 태그를 푸시하면 Windows(Inno Setup)/macOS/Linux 설치본을 빌드해
 # GitHub Release에 자동 업로드한다.
-#   git tag v0.0.2 && git push origin v0.0.2
+#   git tag vX.Y.Z && git push origin vX.Y.Z
+# 태그를 밀기 전에 CHANGELOG.md 에 `## [X.Y.Z]` 항목이 있어야 한다 — 릴리스 본문을
+# 거기서 뽑고, 없으면 본문 없는 릴리스를 내보내는 대신 빌드를 멈춘다.
 on:
   push:
     tags:
@@ -18,13 +20,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 릴리스 본문을 CHANGELOG 에서 뽑는다. 예전엔 --title 만 주고 본문을 안 넣어서
+      # 릴리스마다 "뭐가 바뀌었는지" 가 통째로 비어 있었다(v0.0.2 는 손으로 채웠다).
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # 정규식 대신 문자열 비교 — "[" 이스케이프가 awk 구현마다 달라 깨진다.
+          # `## [0.0.1] — Phase 1 prototype` 처럼 제목이 붙는 경우가 있어 접두어로 보되,
+          # `[0.0.1]` 이 `[0.0.10]` 에 걸리지 않게 뒤에 공백이 오는 경우만 허용한다.
+          awk -v h="## [${version}]" '
+            $0 == h || index($0, h " ") == 1 { f = 1; next }
+            f && substr($0, 1, 3) == "## " { exit }
+            f { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md 에 [${version}] 항목이 없습니다. 본문 없는 릴리스를 내보내지 않고 여기서 멈춥니다."
+            exit 1
+          fi
+          echo "추출한 릴리스 노트 $(wc -c < notes.md) 자"
+
       - name: Ensure draft release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-            || gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-                 --draft --title "Schutz ${GITHUB_REF_NAME}"
+          # 재실행 시에도 본문이 최신이도록, 이미 있으면 edit 로 덮어쓴다.
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --title "Schutz ${GITHUB_REF_NAME}" --notes-file notes.md
+          else
+            gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --draft --title "Schutz ${GITHUB_REF_NAME}" --notes-file notes.md
+          fi
 
   build:
     needs: create-release
