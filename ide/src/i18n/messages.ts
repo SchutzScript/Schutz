@@ -21,6 +21,7 @@ import { dict as d_palette } from "./dict/palette";
 import { dict as d_extd } from "./dict/extd";
 import { dict as d_misc } from "./dict/misc";
 import { dict as d_engine } from "./dict/engine";
+import { dict as d_tour } from "./dict/tour";
 import { dict as d_chat2 } from "./dict/chat2";
 import { dict as d_sc1 } from "./dict/sc1";
 import { dict as d_sc2 } from "./dict/sc2";
@@ -32,7 +33,7 @@ export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_ob, ...d_reg,
-  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine,
+  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour,
   ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
@@ -158,21 +159,6 @@ export const MESSAGES: Record<string, Msg> = {
 
   // ── 설정: 언어 ──────────────────────────────────────────
   "settings.language": { ko: "언어", en: "Language", de: "Sprache", ja: "言語" },
-
-  // ── 튜토리얼 투어 ───────────────────────────────────────
-  "tour.progress": { ko: "{cur} / {total}", en: "{cur} / {total}", de: "{cur} / {total}", ja: "{cur} / {total}" },
-  "tour.welcome.title": { ko: "Schutz에 오신 것을 환영합니다", en: "Welcome to Schutz", de: "Willkommen bei Schutz", ja: "Schutzへようこそ" },
-  "tour.welcome.body": { ko: "핵심 기능이 어디 있는지 60초 만에 안내할게요. 언제든 건너뛸 수 있어요.", en: "A 60-second tour of where the key features live. You can skip anytime.", de: "Eine 60-Sekunden-Tour zu den wichtigsten Funktionen. Jederzeit überspringbar.", ja: "主要機能の場所を60秒でご案内します。いつでもスキップできます。" },
-  "tour.tree.title": { ko: "프로젝트 탐색기", en: "Project Explorer", de: "Projekt-Explorer", ja: "プロジェクトエクスプローラー" },
-  "tour.tree.body": { ko: "파일과 폴더를 열고 관리합니다. 왼쪽 레일에서 소스 컨트롤·디버그·확장으로 전환할 수 있어요.", en: "Open and manage files here. Use the left rail to switch to source control, debugging, and extensions.", de: "Dateien öffnen und verwalten. Über die linke Leiste zu Versionskontrolle, Debugging und Erweiterungen wechseln.", ja: "ファイルやフォルダを開いて管理します。左のレールでソース管理・デバッグ・拡張機能に切り替えられます。" },
-  "tour.editor.title": { ko: "에디터", en: "Editor", de: "Editor", ja: "エディタ" },
-  "tour.editor.body": { ko: "코드를 편집합니다. Ctrl+P로 파일 이동, Ctrl+Shift+P로 명령 팔레트를 열 수 있어요.", en: "Edit code here. Press Ctrl+P to jump to files, Ctrl+Shift+P for the command palette.", de: "Code bearbeiten. Ctrl+P springt zu Dateien, Ctrl+Shift+P öffnet die Befehlspalette.", ja: "コードを編集します。Ctrl+Pでファイル移動、Ctrl+Shift+Pでコマンドパレットを開けます。" },
-  "tour.chat.title": { ko: "AI 채팅", en: "AI Chat", de: "AI-Chat", ja: "AIチャット" },
-  "tour.chat.body": { ko: "자연어로 작업을 요청하세요. 슬래시(/) 명령으로 로그인·설정 같은 빠른 작업도 할 수 있어요.", en: "Ask for tasks in natural language. Use slash (/) commands for quick actions like login and settings.", de: "Aufgaben in natürlicher Sprache anfragen. Slash-Befehle (/) für schnelle Aktionen wie Login und Einstellungen.", ja: "自然言語で作業を依頼できます。スラッシュ(/)コマンドでログインや設定などの操作も可能です。" },
-  "tour.mcp.title": { ko: "MCP 서버", en: "MCP Servers", de: "MCP-Server", ja: "MCPサーバー" },
-  "tour.mcp.body": { ko: "MCP 도구 서버를 연결·생성·가져올 수 있어요. 연결된 도구는 AI가 자동으로 사용합니다.", en: "Connect, create, or import MCP tool servers. Connected tools are used by the AI automatically.", de: "MCP-Tool-Server verbinden, erstellen oder importieren. Verbundene Tools nutzt die KI automatisch.", ja: "MCPツールサーバーを接続・生成・インポートできます。接続したツールはAIが自動で使用します。" },
-  "tour.agents.title": { ko: "에이전트", en: "Agents", de: "Agenten", ja: "エージェント" },
-  "tour.agents.body": { ko: "여러 AI 에이전트가 동시에 작업하고, 편집 제안을 여기서 검토·수락합니다.", en: "Multiple AI agents work in parallel; review and accept their edit proposals here.", de: "Mehrere KI-Agenten arbeiten parallel; Änderungsvorschläge hier prüfen und annehmen.", ja: "複数のAIエージェントが同時に作業し、編集提案をここで確認・承認します。" },
 
   // ── 설정 모달 ───────────────────────────────────────────
   "settings.title": { ko: "설정", en: "Settings", de: "Einstellungen", ja: "設定" },
