@@ -44,6 +44,24 @@ export const BEATS: readonly Beat[] = [
 
 export const TOTAL_MS = 52000;
 
+/**
+ * 진행 중 자막. 조립 뒤엔 화면이 알아서 움직이는데 설명이 없으면 그냥 구경만 하게
+ * 된다 — 무엇이 왜 일어나는지 한 줄로 말해준다. 키만 들고 있고 문장은 i18n 이 준다.
+ *
+ * 자막이 없는 비트(mark·say·setup·settle)는 그 자체가 이미 글자라 겹치면 시끄럽다.
+ */
+export const CAPTION_OF: Partial<Record<BeatId, string>> = {
+  assemble: "assemble",
+  ask: "ask",
+  rewrite: "rewrite",
+  approve: "approve",
+};
+
+/** 자막이 붙는 비트인지. */
+export function captionFor(id: BeatId): string | null {
+  return CAPTION_OF[id] ?? null;
+}
+
 /** 게이트가 걸린 비트의 시각. 없으면 null. */
 export function gateAt(): number | null {
   const g = BEATS.find(b => b.gate);

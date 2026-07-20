@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BEATS, TOTAL_MS, PANEL_ENTRIES, PANEL_DUR, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
+import { BEATS, TOTAL_MS, PANEL_ENTRIES, PANEL_DUR, CAPTION_OF, beatAt, captionFor, clampToGate, gateAt, seg, ease } from "./beats";
 
 describe("타임라인이 무너지지 않는다", () => {
   it("비트가 시간순이고 겹치지 않는다", () => {
@@ -23,6 +23,26 @@ describe("타임라인이 무너지지 않는다", () => {
 
   it("모든 패널이 어느 방향에서든 들어온다 — 제자리 페이드는 조립으로 안 읽힌다", () => {
     for (const p of PANEL_ENTRIES) expect(Math.abs(p.dx) + Math.abs(p.dy)).toBeGreaterThan(0);
+  });
+});
+
+describe("자막", () => {
+  it("자막이 붙은 비트는 전부 실제 BeatId 다", () => {
+    const ids = new Set(BEATS.map(b => b.id));
+    for (const k of Object.keys(CAPTION_OF)) expect(ids.has(k as never)).toBe(true);
+  });
+
+  // 마크·선언·세팅·안착은 그 자체가 이미 큰 글자라, 자막이 겹치면 시끄럽다.
+  it("글자가 주인공인 비트에는 자막을 달지 않는다", () => {
+    for (const id of ["mark", "say", "setup", "settle"] as const) {
+      expect(captionFor(id)).toBeNull();
+    }
+  });
+
+  it("화면이 알아서 움직이는 비트에는 전부 자막이 있다", () => {
+    for (const id of ["assemble", "ask", "rewrite", "approve"] as const) {
+      expect(captionFor(id)).not.toBeNull();
+    }
   });
 });
 
