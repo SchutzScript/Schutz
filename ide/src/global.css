@@ -139,3 +139,17 @@ button:disabled { opacity: .55; cursor: default !important; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── 채팅 메시지 복사 버튼 — 평소엔 숨고 hover/focus 때만 ────────────────── */
+.sz-msg-copy { opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
+.sz-msg:hover .sz-msg-copy,
+.sz-msg-copy:focus-visible { opacity: 1; }
+
+/* ── 언어 전환 ─────────────────────────────────────────────────────────────
+   전체 문자열이 한 프레임에 갈리면서 글자 폭까지 바뀌어 툭 끊겨 보였다.
+   새 언어가 살짝 흐려진 상태에서 제자리를 찾아가게 해 리플로를 덮는다. */
+@keyframes szLangIn {
+  from { opacity: .34; filter: blur(2.4px); }
+  to   { opacity: 1;   filter: blur(0); }
+}
+.sz-lang-swap { animation: szLangIn 340ms var(--ease-emph) both; }

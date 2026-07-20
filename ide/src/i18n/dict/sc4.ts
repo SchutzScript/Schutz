@@ -1,5 +1,7 @@
 // sc4 도메인 번역 사전 (App.tsx render — 헤더/트리 우클릭 메뉴/좌우 레일/탭·검토 UI)
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
+  // 구독 잔여 할당량 — 금액 표기를 대체한다
+  "status.quotaTitle": { ko: "구독 잔여 할당량 (사용 창별 남은 비율)", en: "Remaining subscription quota (per rate window)", de: "Verbleibendes Abo-Kontingent (pro Zeitfenster)", ja: "サブスクの残り使用量 (ウィンドウ別)" },
   "sc4.ctxNewFile": { ko: "새 파일", en: "New File", de: "Neue Datei", ja: "新規ファイル" },
   "sc4.ctxNewFolder": { ko: "새 폴더", en: "New Folder", de: "Neuer Ordner", ja: "新規フォルダー" },
   "sc4.ctxRename": { ko: "이름 바꾸기", en: "Rename", de: "Umbenennen", ja: "名前を変更" },
@@ -9,7 +11,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc4.projHeader": { ko: "프로젝트", en: "Project", de: "Projekt", ja: "プロジェクト" },
   "sc4.noOpenProject": { ko: "열린 프로젝트가 없습니다.", en: "No project is open.", de: "Kein Projekt geöffnet.", ja: "開いているプロジェクトはありません。" },
   "sc4.openProjectMenu": { ko: "프로젝트 열기…", en: "Open Project…", de: "Projekt öffnen…", ja: "プロジェクトを開く…" },
-  "sc4.tokenSummary": { ko: "Σ 입력 {in} · 출력 {out} · {cost}", en: "Σ In {in} · Out {out} · {cost}", de: "Σ Ein {in} · Aus {out} · {cost}", ja: "Σ 入力 {in} · 出力 {out} · {cost}" },
+  "sc4.tokenSummary": { ko: "Σ 입력 {in} · 출력 {out}", en: "Σ In {in} · Out {out}", de: "Σ Ein {in} · Aus {out}", ja: "Σ 入力 {in} · 出力 {out}" },
   "sc4.railProject": { ko: "프로젝트", en: "Project", de: "Projekt", ja: "プロジェクト" },
   "sc4.railFlow": { ko: "작업 흐름", en: "Workflow", de: "Arbeitsablauf", ja: "ワークフロー" },
   "sc4.railGit": { ko: "소스 컨트롤", en: "Source Control", de: "Versionskontrolle", ja: "ソース管理" },

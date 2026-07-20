@@ -18,6 +18,7 @@ import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, Mo
 import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, getModelOverride, setModelOverride } from "./ai/provider";
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
+import { PreviewPane } from "./editor/PreviewPane";
 import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco from "./editor/monacoSetup";
@@ -41,7 +42,7 @@ import {
   CODE_FONTS, UI_FONTS, KEYMAPS, EditorPrefs,
   getActiveVsxTheme, setActiveVsxTheme, getActiveIconTheme, setActiveIconTheme,
 } from "./settings";
-import { t, getLang, setLang, LANGS, onLangChange } from "./i18n";
+import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
@@ -141,8 +142,20 @@ interface S {
   agentsOpen: boolean;
   reviewOpen: boolean;
   termOpen: boolean;
+  /** 도크가 마운트된 다음 프레임에 true — 첫 열기도 0→210 으로 움직이게 하는 래치 */
+  termReady: boolean;
   /** 활성 터미널 탭 id, 또는 "ai"(AI 로그) */
   termTab: string;
+  /** 채팅 탭 — "all" 또는 에이전트 id */
+  chatTab: string;
+  /** 사용자가 위로 올려 읽는 중 — "최신으로" 버튼을 띄운다 */
+  chatAway: boolean;
+  /** 에이전트별 잔여 할당량 (구독 경로에서 금액 대신 보여주는 값) */
+  quota: Record<string, QuotaInfo>;
+  /** 실행 승인 대기 중인 명령 (수동 정책일 때) */
+  askRun: { command: string; rationale: string; agent: string } | null;
+  /** 제안 카드에서 diff 를 펼친 것 (id → true) */
+  openDiffs: Record<string, boolean>;
   /** 열린 터미널 탭들 (멀티 터미널) */
   terms: { id: string; title: string }[];
   agents: Record<string, AgentState>;
@@ -294,6 +307,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/keys", origin: "schutz", kind: "local", desc: "slash.keys" },
   { cmd: "/vim", origin: "schutz", kind: "local", desc: "slash.vim" },
   { cmd: "/theme", origin: "schutz", kind: "local", desc: "slash.theme" },
+  { cmd: "/preview", origin: "schutz", kind: "local", desc: "slash.preview", argHint: "slash.argUrl" },
   { cmd: "/terminal", origin: "schutz", kind: "local", desc: "slash.terminal" },
   { cmd: "/diff", origin: "schutz", kind: "local", desc: "slash.diff" },
   { cmd: "/git", origin: "schutz", kind: "local", desc: "slash.git" },
@@ -347,7 +361,7 @@ export class App extends React.Component<{}, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termTab: "t1", terms: [{ id: "t1", title: t("sc1.terminal_1") }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, quota: {}, askRun: null, terms: [{ id: "t1", title: t("sc1.terminal_1") }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -642,7 +656,16 @@ export class App extends React.Component<{}, S> {
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
         git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
-      } as any), () => { this._focusSlot = 0; this.restoreSession(); });
+      } as any), () => {
+        this._focusSlot = 0;
+        this._chatScroll = {};                 // 픽셀 위치가 다른 프로젝트로 새는 것 방지
+        this._chatSeen = {};
+        this._recallIdx = -1;
+        this.setState({ input: "", chatTab: "all", chatAway: false }, () => {
+          this.restoreSession();               // 안에서 seedChatSeen + 하단 스크롤
+          this.restoreDraft();                 // 쓰다 만 글 되살리기 (프로젝트별)
+        });
+      });
       void this.loadGit();
       void this.loadAgentCommands(); // 프로젝트 .claude/commands 반영
       window.schutz.watchStart(tree.root); // 외부 변경 감지 시작
@@ -653,7 +676,7 @@ export class App extends React.Component<{}, S> {
       }, 0);
     } catch (e) {
       this.setState(s => ({
-        messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: t("sc1.cannot_open_folder") + (e instanceof Error ? e.message : String(e)) }],
+        messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", agent: "schutz", text: t("sc1.cannot_open_folder") + (e instanceof Error ? e.message : String(e)) }],
       }));
     }
   }
@@ -857,7 +880,7 @@ export class App extends React.Component<{}, S> {
     this.setModelFor(agent, modelId);
     this.setState(s => ({
       input: "",
-      messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: t("sc1.model_changed", { name: this.agDef(agent).name, modelId }) }],
+      messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", agent: "schutz", text: t("sc1.model_changed", { name: this.agDef(agent).name, modelId }) }],
     }));
   }
 
@@ -953,7 +976,7 @@ export class App extends React.Component<{}, S> {
     if (!window.schutz) {
       this.setState(s => ({
         messages: [...s.messages, {
-          id: "a" + (this._uid++), role: "ai" as const, who: "Schutz",
+          id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", agent: "schutz",
           text: t("sc1.desktop_only_project"),
         }],
       }));
@@ -1084,33 +1107,79 @@ export class App extends React.Component<{}, S> {
     return o;
   }
 
-  agDef(id: string) { return AGDEF.find(a => a.id === id)!; }
-
-  /** 모델별 단가 (USD / 1M tokens, 입력·출력) — 추정 공시가.
-   *  키는 models.ts 의 실제 id 와 맞춰야 한다. 예전엔 "claude-haiku-4-5" 로 적혀 있어
-   *  실제 id "claude-haiku-4-5-20251001" 이 폴백([3,15] = Sonnet 단가)에 걸려 잘못 청구 표시됐다. */
-  static PRICING: Record<string, [number, number]> = {
-    "claude-sonnet-5": [3, 15],
-    "claude-opus-4-8": [15, 75],
-    "claude-haiku-4-5": [0.8, 4],
-    "claude-fable-5": [3, 15],
-    "gpt-5.2": [1.75, 14],
-    "gpt-5.2-codex": [1.75, 14],
-    "grok-4": [3, 15],
-    "glm-4.6": [0.6, 2.2],
-  };
-
-  /** 단가 조회 — 날짜 접미사(-20251001)가 붙은 id 는 접두 일치로 찾는다.
-   *  못 찾으면 null. 임의 단가로 계산하면 조용히 틀린 금액이 쌓이므로 "요금 미상"으로 표시할 것. */
-  static priceOf(model: string): [number, number] | null {
-    const exact = App.PRICING[model];
-    if (exact) return exact;
-    let best: [number, number] | null = null, bestLen = 0;
-    for (const [k, v] of Object.entries(App.PRICING)) {
-      if (model.startsWith(k) && k.length > bestLen) { best = v; bestLen = k.length; }
-    }
-    return best;
+  /** 에이전트 정의 조회 — AGDEF 에 없는 id(레거시 세션, "schutz" 같은 예약 id, 삭제된 에이전트)여도
+   *  undefined 를 돌려주지 않는다. 예전엔 논널 단언이라 그런 id 하나로 플로우 패널 렌더가 통째로 죽었다. */
+  agDef(id: string) {
+    return AGDEF.find(a => a.id === id)
+      ?? { id, name: id || "?", model: "", mgr: false, color: "var(--fg-dim)" };
   }
+
+  private _quotaOff: (() => void) | null = null;
+  /** 실행 중인 셸 명령 id — 중지 시 함께 종료한다 */
+  private _runIds = new Set<string>();
+  /** 백그라운드 서버 — 프리뷰 탭 rel → runId. 에이전트 중지와 수명을 분리한다. */
+  private _bgRuns = new Map<string, string>();
+  private _askRunResolve: ((ok: boolean) => void) | null = null;
+
+  /** 실행 승인 대기 — window.confirm 은 렌더러를 통째로 얼려서 인앱 모달로 바꿨다 */
+  private askRunApproval(command: string, rationale: string, agent: string): Promise<boolean> {
+    return new Promise<boolean>(resolve => {
+      this._askRunResolve = resolve;
+      this.setState({ askRun: { command, rationale, agent } });
+    });
+  }
+  private answerRun(ok: boolean) {
+    const r = this._askRunResolve;
+    this._askRunResolve = null;
+    this.setState({ askRun: null }, () => r?.(ok));
+  }
+
+  /** 켤 때 잔여 할당량 조회 — 헤더는 요청을 보내야 오므로 1토큰짜리 최소 요청을 한 번 던진다.
+   *  실패해도 조용히 넘어간다(대화에는 영향 없음). */
+  private async probeQuotas() {
+    if (!window.schutz?.quotaProbe) return;
+    for (const id of ["claude", "gpt"]) {
+      const tok = getOAuth(id === "gpt" ? "codex" : id);
+      if (!tok?.access) continue;
+      try {
+        const r = await window.schutz.quotaProbe({ provider: id, access: tok.access, accountId: tok.accountId ?? null });
+        if (r.ok && r.quota) this.setState(st => ({ quota: { ...st.quota, [id]: r.quota! } }));
+      } catch { /* 무시 */ }
+    }
+  }
+
+  /** "5h 82% · 7d 35%" — 남은 비율. 모르면 null */
+  quotaText(agentId: string): string | null {
+    const q = this.state.quota[agentId];
+    if (!q?.windows?.length) return null;
+    return q.windows.map(w => `${w.label} ${Math.max(0, Math.round(100 - w.usedPercent))}%`).join(" · ");
+  }
+
+  /** 가장 가까운 리셋까지 남은 시간 ("3시간 12분") */
+  quotaResetText(agentId: string): string {
+    const q = this.state.quota[agentId];
+    const times = (q?.windows ?? []).map(w => w.resetAt).filter((x): x is number => !!x);
+    if (!times.length) return "—";
+    const secs = Math.max(0, Math.min(...times) - Math.floor(Date.now() / 1000));
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  }
+
+  /** 가장 빠듯한 창의 남은 비율 — 색 경고용 */
+  quotaTightest(agentId: string): number | null {
+    const q = this.state.quota[agentId];
+    if (!q?.windows?.length) return null;
+    return Math.max(0, Math.round(100 - Math.max(...q.windows.map(w => w.usedPercent))));
+  }
+
+  /** 채팅 라벨 색 — 시스템 노트는 눈에 덜 띄게, 레거시(agent 없음)는 종전 그대로 */
+  private chatAgentColor(agent?: string): string {
+    if (!agent) return "var(--accent)";
+    if (agent === "schutz") return "var(--fg-dim)";
+    return this.agDef(agent).color;
+  }
+
+
 
   /** 구독 경로 여부 — 토큰 비용이 구독에 포함되어 $ 표시가 무의미 */
   isSubscription(id: string): boolean {
@@ -1259,15 +1328,12 @@ export class App extends React.Component<{}, S> {
   setAgent(id: string, patch: Partial<AgentState>) {
     this.setState(s => ({ agents: { ...s.agents, [id]: { ...s.agents[id], ...patch } } }));
   }
+  /** 토큰 사용량 누적. 금액 계산은 제거됐다 — 구독 경로에서 늘 $0 이라 의미가 없었고,
+   *  대신 벤더 헤더의 잔여 할당량을 보여준다(quotaText / quotaTightest). */
   bumpAgent(id: string, tin: number, tout: number) {
-    const model = this.modelOf(id) ?? "";
-    const price = App.priceOf(model);
-    const sub = this.isSubscription(id);
     this.setState(s => {
       const a = s.agents[id];
-      // 단가를 모르는 모델은 비용을 올리지 않는다 — 토큰 수는 그대로 쌓이고 금액만 미상으로 둔다
-      const cost = sub || !price ? a.cost : a.cost + (tin * price[0] + tout * price[1]) / 1e6;
-      return { agents: { ...s.agents, [id]: { ...a, tin: a.tin + tin, tout: a.tout + tout, cost } } };
+      return { agents: { ...s.agents, [id]: { ...a, tin: a.tin + tin, tout: a.tout + tout } } };
     });
   }
   addFile(path: string, add: number, del: number, agent: string) {
@@ -1384,6 +1450,11 @@ export class App extends React.Component<{}, S> {
   }
 
   stopRun() {
+    for (const id of this._runIds) { try { window.schutz?.runStop(id); } catch { /* */ } }
+    this._runIds.clear();
+    // cliBusy 도 반드시 내린다 — 종료 IPC 를 놓치면 이 값이 true 로 굳어
+    // 이후 모든 Enter 가 조용히 무시되고 재시작 말곤 복구가 없었다
+    this.setState({ cliBusy: false });
     if (this.state.cliBusy && window.schutz) window.schutz.cliStop();
     for (const a of this.abortCtls.values()) a.abort();
     this.abortCtls.clear();
@@ -1565,6 +1636,14 @@ export class App extends React.Component<{}, S> {
     this._closeTabTimers.set(key, tid);
   }
 
+  /** 프리뷰 탭이 닫히면 그 탭이 띄운 서버도 함께 내린다 — 안 그러면 포트가 계속 잡혀 있다 */
+  private _stopBgFor(rel: string) {
+    const id = this._bgRuns.get(rel);
+    if (!id) return;
+    this._bgRuns.delete(rel);
+    try { window.schutz?.runStop(id); } catch { /* 이미 죽음 */ }
+  }
+
   private _doRemoveTab(slot: number, rel: string) {
     this.setState(s => {
       // 지연 제거 중 레이아웃이 바뀌어 slot 인덱스가 무효해졌으면, rel 을 가진 슬롯을 찾아 대상 보정
@@ -1580,7 +1659,8 @@ export class App extends React.Component<{}, S> {
       const stillOpen = tabs.some(t => t.includes(rel));
       const paneDirty = stillOpen ? s.paneDirty : (() => { const d = { ...s.paneDirty }; delete d[rel]; return d; })();
       return { tabs, active, paneDirty } as any;
-    });
+    // 리듀서는 순수하게 두고, 커밋 후에 서버를 내린다 (StrictMode 이중 호출 방지)
+    }, () => { if (!this.allOpen().includes(rel)) this._stopBgFor(rel); });
   }
 
   /** 미저장 확인 모달의 세 선택지 */
@@ -1613,7 +1693,7 @@ export class App extends React.Component<{}, S> {
       input: "",
       messages: [...s.messages,
         { id: "u" + (this._uid++), role: "user" as const, text: userText },
-        { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: reply }],
+        { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", agent: "schutz", text: reply }],
     }));
   }
 
@@ -1650,7 +1730,7 @@ export class App extends React.Component<{}, S> {
         const blocks = connected.map(id => {
           const m = this.modelOf(id) ?? "?";
           const ch = this.modelChannel(id);
-          const price = this.isSubscription(id) ? t("sc2.subscriptionIncluded") : (() => { const pr = App.priceOf(m); return pr ? `$${pr[0]}/${pr[1]} per 1M` : t("modal.priceUnknown"); })();
+          const price = this.isSubscription(id) ? t("sc2.subscriptionIncluded") : "";
           const head = `${this.agDef(id).name}: \`${m}\` (${price})`;
           if (!ch) return head;
           const alts = ch.options.filter(o => o.id !== ch.current).map(o => o.id).join(", ");
@@ -1761,6 +1841,15 @@ export class App extends React.Component<{}, S> {
         else this.schutzSay(raw, t("sc2.fileMissing", { file }));
         return true;
       }
+      case "/preview": {
+        // 인자를 생략하면 마지막으로 띄운 서버 주소를 다시 연다
+        const raw2 = rest.join(" ").trim() || this._lastPreviewUrl || "";
+        if (!raw2) { this.schutzSay(raw, t("sc2.previewNeedsUrl")); return true; }
+        const url = /^https?:\/\//i.test(raw2) ? raw2 : "http://" + raw2;
+        this.openPreview(url);
+        this.setState({ input: "" });
+        return true;
+      }
       case "/mcp":
         this.openMcp();
         this.setState({ input: "" });
@@ -1816,11 +1905,16 @@ export class App extends React.Component<{}, S> {
 
   async send() {
     const rawIn = this.state.input.trim();
+    this._recallIdx = -1;                                    // 소환 위치 초기화
+    if (rawIn) this.clearDraft();
     if (rawIn.startsWith("/")) {
       if (this.forwardSlash(rawIn)) return;
       if (this.handleDiscoveredSlash(rawIn)) return;
       if (this.handleSlash(rawIn)) return;
     }
+    // 실행 중에는 여기서 막는다 — 예전엔 아래 consumeAttachments 가 첨부를 비운 뒤에야
+    // runReal/runCliTurn 이 조용히 return 해서, 사용자가 모아둔 첨부가 통째로 날아갔다.
+    if (this.state.running || this.state.cliBusy) { this.toast("info", t2("chat.busyHint")); return; }
     const hasAttach = this.state.attach.length > 0;
     // 데스크톱: 빈 입력 + 첨부 없음이면 아무것도 보내지 않는다 (데모 프롬프트가 실제 AI로 나가는 것 방지).
     // 데모 문자열은 웹 프리뷰 자동재생 전용.
@@ -1958,6 +2052,58 @@ export class App extends React.Component<{}, S> {
         if (autoE) { await this.acceptProposal(p.id); return this.autoAcceptResult(p.id, "편집이 자동 수락 정책에 따라 적용되었습니다."); }
         return "편집 제안이 등록되었습니다. 사용자가 변경 검토 패널에서 수락/거절합니다.";
       }
+      if (call.name === "run_command") {
+        const command = String(call.input?.command ?? "").trim();
+        this.addTool(toolId, agentId, t("sc2.verbRun"), command.slice(0, 60));
+        if (!command) { this.setTool(toolId, { st: "done", note: t("sc2.noteError") }); return "오류: 빈 명령입니다."; }
+        if (!ws || !window.schutz?.runCommand) { this.setTool(toolId, { st: "done", note: t("sc2.noteError") }); return "오류: 워크스페이스가 열려 있지 않습니다."; }
+
+        // 셸 명령은 되돌릴 수 없다 — 자율 정책이 '자율' 이 아니면 사용자에게 묻는다.
+        if (getAutonomy().policy !== "auto") {
+          const okToRun = await this.askRunApproval(command, String(call.input?.rationale ?? ""), agentId);
+          if (!okToRun) {
+            this.setTool(toolId, { st: "done", note: t("sc2.noteRejected") });
+            return "사용자가 이 명령의 실행을 거절했습니다. 다른 방법을 제안하거나 실행 방법을 안내하세요.";
+          }
+        }
+
+        const runId = "rc" + (this._uid++);
+        this._runIds.add(runId);
+        try {
+          const bg = !!call.input?.background;
+          const r = await window.schutz.runCommand({ id: runId, command, cwd: ws.root, background: bg });
+          this._runIds.delete(runId); // 에이전트 중지가 dev 서버까지 죽이면 안 된다 — 아래에서 따로 관리
+          if (!r.ok) { this.setTool(toolId, { st: "done", note: t("sc2.noteError") }); return "명령 실행 실패: " + (r.error ?? "알 수 없는 오류"); }
+          if (bg) {
+            if (r.exitedEarly) {
+              this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
+              return `서버가 바로 종료됐습니다 (종료 코드 ${r.exitCode}).
+--- 출력 ---
+${(r.output || "").trim() || "(없음)"}`;
+            }
+            this.setTool(toolId, { st: "done", note: r.url ? t("sc2.noteServing") : t("sc2.noteRunning") });
+            if (r.url) { this._bgRuns.set("preview:" + r.url, runId); this.openPreview(r.url); }
+            else this._bgRuns.set("run:" + runId, runId); // 주소를 못 찾아도 앱 종료 때 정리되도록 추적
+            return r.url
+              ? `서버를 백그라운드로 실행했습니다. 주소: ${r.url}
+화면을 편집 그룹에 열었습니다. 프리뷰 탭을 닫으면 서버도 함께 종료됩니다.`
+              : `서버를 백그라운드로 실행했지만 주소를 찾지 못했습니다. 출력:
+${(r.output || "").slice(0, 2000)}`;
+          }
+          const code = r.timedOut ? "timeout" : String(r.exitCode);
+          this.setTool(toolId, { st: "done", note: r.timedOut ? t("sc2.noteTimeout") : t("sc2.noteExit", { code }) });
+          const body = (r.output || "").trim() || "(출력 없음)";
+          return [
+            `종료 코드: ${code}${r.truncated ? " (출력이 잘렸습니다)" : ""}`,
+            "--- 출력 ---",
+            body,
+          ].join("\n");
+        } catch (e) {
+          this._runIds.delete(runId);
+          this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
+          return "명령 실행 실패: " + (e instanceof Error ? e.message : String(e));
+        }
+      }
       if (call.name === "delegate_task") {
         const target = String(call.input?.agent ?? "");
         const task = String(call.input?.task ?? "");
@@ -2019,7 +2165,7 @@ export class App extends React.Component<{}, S> {
       for (let round = 0; round < 8; round++) {
         const aiId = "a" + (this._uid++);
         this.setState(s => ({
-          messages: [...s.messages, { id: aiId, role: "ai" as const, who, text: "", streaming: true }],
+          messages: [...s.messages, { id: aiId, role: "ai" as const, who, agent: agentId, text: "", streaming: true }],
         }));
 
         let turnText = "";
@@ -2066,16 +2212,21 @@ export class App extends React.Component<{}, S> {
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
         this.setState(s => ({
-          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who, text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who, agent: agentId, text: "⚠️ " + (e instanceof Error ? e.message : String(e)) }],
         }));
       }
     } finally {
       // 관리자가 "위임했다"고 말만 하고 delegate_task 를 부르지 않으면, 사용자는 오지 않을 결과를
       // 기다리게 된다. 앱이 그 거짓 주장을 조용히 통과시키지 않는다.
-      if (opts.isManager && !delegated && /위임|delegat|맡겼|시켰/i.test(finalText)) {
+      // '위임' 이라는 낱말만 보고 경고하면 "제 도구는 위임뿐이라 실행은 못 합니다" 같은
+      // 설명문에도 잘못 뜬다. 위임을 했다/하겠다는 주장일 때만, 그리고 같은 메시지에
+      // 부정 표현이 없을 때만 경고한다.
+      const claimsDelegation = /(위임(했|하겠|할게|합니다)|맡겼|맡기겠|시켰|delegated|delegating)/i.test(finalText);
+      const hasNegation = /(없습니다|없어요|없습니다만|불가능|할 수 없|못 하|못합니다|뿐(이라|입니다)|지원하지 않)/.test(finalText);
+      if (opts.isManager && !delegated && claimsDelegation && !hasNegation) {
         this.setState(s => ({
           messages: [...s.messages, {
-            id: "a" + (this._uid++), role: "ai" as const, who: t("sc2.systemNote"),
+            id: "a" + (this._uid++), role: "ai" as const, who: t("sc2.systemNote"), agent: "schutz",
             text: t("sc2.delegateClaimedButNotDone"),
           }],
         }));
@@ -2110,8 +2261,8 @@ export class App extends React.Component<{}, S> {
       running: true, cliBusy: true, statusKey: "tool", input: "",
       agents: { ...s.agents, [agentKey]: { ...s.agents[agentKey], status: "edit" } },
       messages: [...s.messages,
-        { id: "u" + (this._uid++), role: "user" as const, text },
-        { id: aiId, role: "ai" as const, who, text: "", streaming: true }],
+        { id: "u" + (this._uid++), role: "user" as const, agent: agentKey, text },
+        { id: aiId, role: "ai" as const, who, agent: agentKey, text: "", streaming: true }],
     }));
     if (agent === "codex") this._codexSession = "last"; // 이후 이어가기(--last) 가능 표시
     window.schutz.cliRun({
@@ -2226,7 +2377,7 @@ export class App extends React.Component<{}, S> {
       if (!k) return;
       try {
         const { tabs, active, layout } = this.state;
-        const clean = tabs.map(slot => slot.filter(rel => !this.parseDiffKey(rel))); // diff 등 특수 탭 제외
+        const clean = tabs.map(slot => slot.filter(rel => !this.parseDiffKey(rel) && !this.parsePreviewKey(rel))); // diff 등 특수 탭 제외
         localStorage.setItem(k, JSON.stringify({ tabs: clean, active, layout }));
       } catch { /* ignore */ }
     }, 400);
@@ -2247,7 +2398,11 @@ export class App extends React.Component<{}, S> {
       if (!raw) return;
       const d = JSON.parse(raw);
       if (Array.isArray(d.messages)) {
-        this.setState({ messages: d.messages });
+        this.setState({ messages: d.messages }, () => {
+          this.seedChatSeen();                                  // 복원분은 "이미 읽음"
+          if (this._chat) this._chat.scrollTop = this._chat.scrollHeight; // 최신 대화부터 보이게
+          this._chatSig = null;                                 // 첫 갱신이 다시 하단으로 잡아당기지 않게
+        });
         // _uid 를 복원된 id 뒤로 시드 — 새 메시지가 복원 id와 충돌해 엉뚱한 메시지를 덮어쓰는 것 방지
         this._uid = d.messages.reduce((mx: number, m: any) => Math.max(mx, +((String(m.id).match(/\d+$/) || [])[0] ?? 0) + 1), this._uid);
       }
@@ -2416,6 +2571,33 @@ export class App extends React.Component<{}, S> {
     this.openFile(key);
   }
   /** 합성 diff rel 파싱 */
+  /** 프리뷰 탭 키 — "preview:<url>". 실제 파일이 아니므로 레이아웃 저장에서 제외된다(parseDiffKey 와 같은 취급). */
+  private parsePreviewKey(rel: string): string | null {
+    return rel.startsWith("preview:") ? rel.slice("preview:".length) : null;
+  }
+
+  /** 프리뷰 탭 라벨 — "localhost:5173" 처럼 짧게. 파싱 실패하면 URL 그대로. */
+  private previewLabel(url: string): string {
+    try { const u = new URL(url); return u.host || url; } catch { return url; }
+  }
+  private _lastPreviewUrl = "";
+  /** 개발 서버 화면을 편집 그룹에 띄운다 */
+  openPreview(url: string) {
+    this._lastPreviewUrl = url;
+    const key = "preview:" + url;
+    // 서버를 다시 띄우면 포트가 바뀌곤 한다 — 같은 호스트의 낡은 프리뷰 탭은 치우고 연다.
+    // (그대로 두면 죽은 주소를 가리키는 탭이 계속 쌓인다)
+    const host = this.previewLabel(url);
+    for (const rel of this.allOpen()) {
+      const pv = this.parsePreviewKey(rel);
+      if (!pv || rel === key) continue;
+      if (this.previewLabel(pv).split(":")[0] === host.split(":")[0]) {
+        this.state.tabs.forEach((slot, si) => { if (slot.includes(rel)) this._removeTab(si, rel); });
+      }
+    }
+    this.openFile(key);
+  }
+
   private parseDiffKey(rel: string): { path: string; staged: boolean; untracked: boolean } | null {
     if (!rel.startsWith("git-diff:")) return null;
     const rest = rel.slice("git-diff:".length);
@@ -2476,7 +2658,7 @@ export class App extends React.Component<{}, S> {
     this.history.push({ role: "user", content: text });
     this.setState(s => ({
       running: true, statusKey: "thinking", input: "",
-      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text: display }],
+      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: managerId, text: display }],
     }));
     const seed: NeutralMsg[] = this.history.map(m => ({ role: m.role as "user" | "assistant", text: m.content }));
     await this.runAgentLoop(managerId, seed, { isManager: true });
@@ -2493,7 +2675,7 @@ export class App extends React.Component<{}, S> {
     }
     const provider = this.providers[managerId];
     const aiId = "a" + (this._uid++);
-    this.setState(s => ({ messages: [...s.messages, { id: aiId, role: "ai" as const, who: this.agDef(managerId).name + t("sc3.inlineEditWhoSuffix"), text: t("sc3.editingSelection"), streaming: true }] }));
+    this.setState(s => ({ messages: [...s.messages, { id: aiId, role: "ai" as const, who: this.agDef(managerId).name + t("sc3.inlineEditWhoSuffix"), agent: managerId, text: t("sc3.editingSelection"), streaming: true }] }));
     const system = "당신은 코드 편집기입니다. 사용자가 파일에서 코드 조각을 선택했습니다. 지시에 따라 그 조각을 수정하고, 그 조각을 대체할 코드만 출력하세요. 설명·주석·마크다운 코드펜스 없이 순수 코드만 반환합니다. 들여쓰기는 원본 문맥을 유지하세요.";
     const transcript: NeutralMsg[] = [{ role: "user", text: `파일: ${rel}\n\n선택된 코드:\n${selection}\n\n지시: ${instruction}\n\n이 코드를 대체할 코드만 반환하세요.` }];
     const abort = new AbortController();
@@ -2530,13 +2712,21 @@ export class App extends React.Component<{}, S> {
   componentDidMount() {
     applyTheme(getThemeId());
     applyUiFont(); // 저장된 UI 폰트를 전역 적용
-    this._langOff = onLangChange(() => this.forceUpdate()); // 언어 변경 시 전체 리렌더
+    this._langOff = onLangChange(() => { this.forceUpdate(); this.playLangSwap(); }); // 언어 변경 시 전체 리렌더
     // 데스크톱 앱: 데모 없이 빈 상태에서 시작 + Claude Code CLI(구독 인증) 감지
     if (window.schutz) {
       this.setState(s => ({ ...this.normSlots([], [], s.layout), leftTab: "tree" } as any));
       window.addEventListener("beforeunload", this._onBeforeUnload);
       this._markersOff = monaco.editor.onDidChangeMarkers(() => this._scheduleMarkerScan());
       this._fsOff = window.schutz.onFsChange(this.onFsChange);
+      // 잔여 할당량: 실제 요청이 나갈 때마다 헤더로 갱신되고, 켤 때는 아래에서 한 번 조회한다
+      this._quotaOff = window.schutz.onQuota(line => {
+        try {
+          const q = JSON.parse(line) as QuotaInfo;
+          this.setState(st => ({ quota: { ...st.quota, [q.provider]: q } }));
+        } catch { /* 부가 정보 — 실패해도 무시 */ }
+      });
+      void this.probeQuotas();
       // 재로드 후 고아 PTY 정리 — 이 렌더러의 현재 터미널 탭에 없는 셸을 메인이 종료(리로드 시 누수 방지)
       try { window.schutz.termReconcile?.(this.state.terms.map(t => t.id)); } catch { /* */ }
       // LSP 초기화 + Monaco 프로바이더 등록 (Python 등)
@@ -2583,6 +2773,19 @@ export class App extends React.Component<{}, S> {
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
+  /** 언어가 바뀐 순간의 전환 — 모든 문자열과 글자 폭이 한꺼번에 갈리는 걸 부드럽게 덮는다.
+   *  루트에 클래스를 얹었다 빼는 방식이라 React 트리를 건드리지 않는다. */
+  private _langSwapTimer: ReturnType<typeof setTimeout> | undefined;
+  private playLangSwap() {
+    const root = document.getElementById("root") ?? document.body;
+    if (!root) return;
+    root.classList.remove("sz-lang-swap");
+    void root.offsetWidth;                 // 리플로우 강제 — 연속 전환에도 매번 다시 재생되게
+    root.classList.add("sz-lang-swap");
+    clearTimeout(this._langSwapTimer);
+    this._langSwapTimer = setTimeout(() => root.classList.remove("sz-lang-swap"), 420);
+  }
+
   componentWillUnmount() {
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
@@ -2611,6 +2814,9 @@ export class App extends React.Component<{}, S> {
 
   /** 앱 종료 가드 — 미저장 변경이 있으면 네이티브 확인 */
   private _onBeforeUnload = (e: BeforeUnloadEvent) => {
+    // 대화는 턴이 끝날 때만 저장돼서, 스트리밍 중에 끄면 그 주고받음이 통째로 사라졌다.
+    // 슬래시 명령 응답처럼 턴 밖에서 생긴 메시지도 마찬가지 — 나가기 직전에 한 번 더 저장한다.
+    try { this.saveSession(); } catch { /* 저장 실패가 종료를 막으면 안 된다 */ }
     if (Object.values(this.state.paneDirty).some(Boolean)) {
       e.preventDefault();
       e.returnValue = "";
@@ -2997,15 +3203,30 @@ export class App extends React.Component<{}, S> {
 
   private _lastTabsRef: string[][] | null = null;
   private _lastActiveRef: string[] | null = null;
-  componentDidUpdate() {
+  /** 렌더 커밋 직전의 채팅 스크롤 상태 — 하단 추적 판정은 반드시 갱신 전 값으로 해야 한다 */
+  getSnapshotBeforeUpdate(): { chatAtBottom: boolean } | null {
+    const el = this._chat;
+    if (!el) return null;
+    return { chatAtBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 60 };
+  }
+
+  componentDidUpdate(_pp?: any, _ps?: any, snap?: { chatAtBottom: boolean } | null) {
     // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
     if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
       this._lastTabsRef = this.state.tabs; this._lastActiveRef = this.state.active;
       this.persistLayout();
     }
     if (this._chat) {
-      const sig = this.state.messages.map(m => m.text.length).join(",");
-      if (sig !== this._chatSig) { this._chatSig = sig; this._chat.scrollTop = this._chat.scrollHeight; }
+      // 지금 탭에 보이는 것만 기준으로 — 안 보이는 탭이 자라도 끌어내리지 않는다.
+      // 그리고 사용자가 위로 올려 읽는 중이면 건드리지 않는다(예전엔 매 토큰 하단으로 잡아당겼다).
+      const el = this._chat;
+      // text 가 없는 손상된 항목이 하나라도 있으면 여기서 터져 화면 전체가 하얘졌다 — 방어
+      const sig = this.state.chatTab + "|" + this.visibleMessages().map(m => (m.text ?? "").length).join(",");
+      if (sig !== this._chatSig) {
+        this._chatSig = sig;
+        if (snap ? snap.chatAtBottom : true) el.scrollTop = el.scrollHeight;
+      }
+      this.onChatScroll(); // 버튼 노출은 스크롤 위치 하나로 판단 (도착·스크롤 공통)
     }
     this.allOpen().forEach(path => {
       const el = this._paneRefs[path];
@@ -3088,8 +3309,8 @@ export class App extends React.Component<{}, S> {
     const statusLabel = stMap[s.statusKey];
     const totIn = AGDEF.reduce((n, d) => n + s.agents[d.id].tin, 0);
     const totOut = AGDEF.reduce((n, d) => n + s.agents[d.id].tout, 0);
-    const totCost = AGDEF.reduce((n, d) => n + s.agents[d.id].cost, 0);
-    const costText = "$" + totCost.toFixed(3);
+    // 금액 표기 제거 — 구독 경로에서는 늘 $0 이라 의미가 없었다. 대신 잔여 할당량.
+    const quotaSummary = this.quotaText(getManagerId()) ?? this.quotaText("claude") ?? this.quotaText("gpt");
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     const doneCount = s.plan.filter(p => p.st === "done").length;
     const beamW = s.running ? (s.plan.length ? Math.max(8, Math.round((doneCount / s.plan.length) * 100)) + "%" : "8%") : "100%";
@@ -3115,6 +3336,7 @@ export class App extends React.Component<{}, S> {
         {this.renderCommandPalette()}
         {this.renderSearch()}
         {this.renderAskClose()}
+        {this.renderAskRun()}
         {this.renderToasts()}
         {this.renderMru()}
         {s.ctxMenu && (
@@ -3271,7 +3493,7 @@ export class App extends React.Component<{}, S> {
           <span style={{ width: 1, height: 16, background: "var(--w08)" }} />
           <span style={{ fontSize: 12, color: "var(--fg-sub2)", whiteSpace: "nowrap" }}>{statusLabel}</span>
           <span style={{ width: 1, height: 16, background: "var(--w08)" }} />
-          <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("sc4.tokenSummary", { in: totIn.toLocaleString(), out: totOut.toLocaleString(), cost: costText })}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("sc4.tokenSummary", { in: totIn.toLocaleString(), out: totOut.toLocaleString() })}</span>
         </div>
 
         {/* progress beam */}
@@ -3357,7 +3579,10 @@ export class App extends React.Component<{}, S> {
             : <span style={{ color: pendingFiles > 0 ? "#CCB491" : "var(--fg-dim)" }}>{pendingFiles > 0 ? t("status.pendingReview", { n: pendingFiles }) : t("status.noChanges")}</span>; })()}
           <div style={{ flex: 1 }} />
           <span>{t("status.agentsActive", { active: AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length, total: AGDEF.length })}</span>
-          <span style={{ fontFamily: MONO }}>{costText}</span>
+          {quotaSummary && (() => {
+            const left = this.quotaTightest(getManagerId()) ?? this.quotaTightest("claude") ?? this.quotaTightest("gpt") ?? 100;
+            return <span title={t("status.quotaTitle")} style={{ fontFamily: MONO, color: left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : "var(--fg-dim)" }}>{quotaSummary}</span>;
+          })()}
           {s.statusInfo && (
             <>
               <span style={{ fontFamily: MONO }}>{s.statusInfo.lang}</span>
@@ -3710,6 +3935,192 @@ export class App extends React.Component<{}, S> {
     );
   }
 
+  /** 현재 탭에 보여줄 메시지. 레거시(agent 없음)는 전체 탭에서만 보인다 —
+   *  who 접두어로 역추론하면 언어가 바뀌었거나 "Codex · 구독" 같은 값에서 틀린다. */
+  private visibleMessages(): ChatMsg[] {
+    const { chatTab, messages } = this.state;
+    if (chatTab === "all") return messages;
+    // schutz = 시스템 응답(슬래시 명령 결과·경고). 탭은 없지만 모든 탭에 보여야 한다 —
+    // 안 그러면 에이전트 탭에서 /model 을 쳤을 때 명령도 답도 사라져 먹통처럼 보인다.
+    return messages.filter((m, i) => {
+      if (m.agent === chatTab || m.agent === "schutz") return true;
+      // 시스템 응답 바로 앞의 사용자 메시지(= 그 명령)도 짝지어 보여준다
+      const next = messages[i + 1];
+      return m.role === "user" && !m.agent && !!next && next.agent === "schutz";
+    });
+  }
+
+  /** 탭별 스크롤 위치 · 안 읽은 개수 기준점 */
+  private _chatScroll: Record<string, number> = {};
+  private _chatSeen: Record<string, number> = {};
+
+  // ── 입력창 ────────────────────────────────────────────────────────────────
+  private _chatInput: HTMLTextAreaElement | null = null;
+  /** IME 조합 중 여부 — 한글/일본어에서 Enter 가 "확정"인지 "전송"인지 가른다 */
+  private _composing = false;
+  /** ↑/↓ 로 되돌려 보는 위치. -1 = 지금 쓰는 중(히스토리 밖) */
+  private _recallIdx = -1;
+  private _recallStash = "";
+
+  /** 내용에 맞춰 입력창 높이 조절 (최대 높이는 style 의 maxHeight 가 잡는다) */
+  private autoGrowInput() {
+    const ta = this._chatInput;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 148) + "px";
+  }
+
+  private draftKey(): string | null {
+    const root = this.state.workspace?.root;
+    return root ? "schutz.draft:" + root : null;
+  }
+  /** 입력 중이던 글은 껐다 켜도 남아 있어야 한다 (프로젝트별로 따로) */
+  private saveDraft(v: string) {
+    const k = this.draftKey();
+    if (!k) return;
+    clearTimeout(this._draftTimer);
+    this._draftTimer = setTimeout(() => {
+      try { v.trim() ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* ignore */ }
+    }, 300);
+  }
+  private _draftTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 임시저장 삭제 — 예약된 저장까지 취소한다(안 그러면 방금 보낸 글이 되살아난다) */
+  private clearDraft() {
+    clearTimeout(this._draftTimer);
+    const k = this.draftKey();
+    if (k) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+  }
+  private restoreDraft() {
+    const k = this.draftKey();
+    if (!k) return;
+    try {
+      const v = localStorage.getItem(k);
+      if (v) this.setState({ input: v }, () => this.autoGrowInput());
+    } catch { /* ignore */ }
+  }
+
+  /** 이전에 보낸 메시지 소환. 더 갈 데가 없으면 null 을 돌려 기본 캐럿 이동을 막지 않는다. */
+  private recallSent(dir: -1 | 1): string | null {
+    const sent = this.state.messages.filter(m => m.role === "user").map(m => m.text);
+    if (!sent.length) return null;
+    if (this._recallIdx === -1) {
+      if (dir === 1) return null;            // 아래로 갈 곳이 없다
+      this._recallStash = this.state.input;  // 쓰던 글은 돌아올 때 복구
+      this._recallIdx = sent.length - 1;
+      return sent[this._recallIdx];
+    }
+    const next = this._recallIdx + (dir === -1 ? -1 : 1);
+    if (next < 0) return sent[0];            // 가장 오래된 것에서 멈춘다
+    if (next >= sent.length) { this._recallIdx = -1; return this._recallStash; }
+    this._recallIdx = next;
+    return sent[next];
+  }
+
+  private switchChatTab(next: string) {
+    const cur = this.state.chatTab;
+    if (cur === next) return;
+    if (this._chat) {
+      const el = this._chat;
+      // 하단에 붙어 있었으면 픽셀이 아니라 "하단"을 기억한다 — 안 그러면 돌아왔을 때
+      // 그 사이 자란 내용만큼 위에 남아 자동 추적이 영영 끊긴다.
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+      this._chatScroll[cur] = atBottom ? -1 : el.scrollTop;
+    }
+    this._markSeen(cur);   // 떠나는 탭도 읽음 처리 — 예전엔 방금 읽은 글이 안읽음으로 남았다
+    this._markSeen(next);
+    this.setState({ chatTab: next, chatAway: false }, () => {
+      if (!this._chat) return;
+      const y = this._chatScroll[next];
+      this._chat.scrollTop = (y === undefined || y === -1) ? this._chat.scrollHeight : y;
+      this._chatSig = null;
+    });
+  }
+
+  /** 하단에서 멀어지면 "최신으로" 를 띄운다. 새 메시지 도착과 무관하게 항상 돌아갈 길을 준다. */
+  private onChatScroll = () => {
+    const el = this._chat;
+    if (!el) return;
+    const away = el.scrollHeight - el.scrollTop - el.clientHeight >= 60;
+    if (away !== this.state.chatAway) this.setState({ chatAway: away });
+  };
+
+  private _markSeen(id: string) {
+    this._chatSeen[id] = this.state.messages.filter(m => id === "all" || m.agent === id).length;
+  }
+  /** 모든 탭의 안 읽음 기준점을 현재 메시지 수로 — 복원·프로젝트 전환 직후에 부른다 */
+  private seedChatSeen() {
+    this._chatSeen = {};
+    const ids = new Set<string>(["all", ...this.state.messages.map(m => m.agent).filter((a): a is string => !!a)]);
+    for (const id of ids) this._markSeen(id);
+  }
+
+  /** 채팅 탭 스트립 — 터미널 탭(renderTerm)과 같은 관용구 */
+  renderChatTabs() {
+    const s = this.state;
+    if (!window.schutz) return null;
+    // 메시지가 있는 에이전트 + 현재 연결된 에이전트의 합집합. schutz(시스템 노트)는 탭을 주지 않는다.
+    const withMsgs = new Set(s.messages.map(m => m.agent).filter((a): a is string => !!a && a !== "schutz"));
+    const ids = [...new Set([...this.configuredAgents(), ...withMsgs])];
+    if (ids.length < 2) return null; // 에이전트가 하나뿐이면 탭이 의미 없다
+
+    const tab = (id: string, label: string, color?: string) => {
+      const on = s.chatTab === id;
+      const total = s.messages.filter(m => id === "all" || m.agent === id).length;
+      // 기준점이 없으면 0 이 아니라 total 이 맞다 — 예전엔 한 번도 안 연 탭에 배지가 안 떴다
+      const unread = on ? 0 : Math.max(0, total - (this._chatSeen[id] ?? 0));
+      return (
+        <button key={id} className="hvTermTab" onMouseDown={() => this.switchChatTab(id)}
+          style={{ height: 22, padding: "0 9px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontWeight: on ? 600 : 500, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, border: "none", color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent" }}>
+          {color && <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flex: "none" }} />}
+          {label}
+          {unread > 0 && (
+            <span style={{ fontSize: 9, fontWeight: 700, borderRadius: 7, padding: "0 5px", lineHeight: "13px", color: "var(--bg-root)", background: "var(--accent)" }}>{unread}</span>
+          )}
+        </button>
+      );
+    };
+
+    return (
+      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 3, padding: "0 12px 6px", overflowX: "auto" }}>
+        {tab("all", t("chat.tabAll"))}
+        <span style={{ flex: "none", width: 1, height: 13, background: "var(--w07)", margin: "0 3px" }} />
+        {ids.map(id => tab(id, this.agDef(id).name, this.agDef(id).color))}
+      </div>
+    );
+  }
+
+  /** 실행 승인 모달 — 명령을 그대로 보여주고 승인/거절. 셸 명령은 되돌릴 수 없어 기본은 확인. */
+  renderAskRun() {
+    const a = this.state.askRun;
+    if (!a) return null;
+    const d = this.agDef(a.agent);
+    return (
+      <div className="sz-backdrop" onClick={() => this.answerRun(false)}
+        style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(t("run.askTitle"))} className="sz-pop" onClick={e => e.stopPropagation()}
+          style={{ width: 460, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.color, flex: "none" }} />
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{t("run.askTitle")}</span>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{d.name}</span>
+          </div>
+          {a.rationale && <div style={{ fontSize: 12, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 10 }}>{a.rationale}</div>}
+          <div style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7, color: "var(--fg)", background: "var(--bg-editor)", border: "1px solid var(--w07)", borderRadius: 8, padding: "10px 12px", marginBottom: 12, maxHeight: 160, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>{a.command}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-dim)", marginBottom: 14 }}>{t("run.askHint")}</div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="hv05" onClick={() => this.answerRun(false)}
+              style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("run.reject")}</button>
+            <button className="hvAccent" autoFocus onClick={() => this.answerRun(true)}
+              style={{ height: 32, padding: "0 18px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("run.approve")}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── 좌 패널: 대화 ──
   renderChat() {
     const s = this.state;
@@ -3730,19 +4141,34 @@ export class App extends React.Component<{}, S> {
             </button>
           )}
         </div>
-        <div ref={el => { this._chat = el; }} style={{ flex: 1, overflowY: "auto", padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {s.messages.map(m => (
-            <div key={m.id} className="sz-in" style={{ display: "flex", gap: 8 }}>
+        {this.renderChatTabs()}
+        <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
+        {s.chatAway && (
+          <button className="hv05 sz-in" onClick={() => { if (this._chat) this._chat.scrollTop = this._chat.scrollHeight; this.setState({ chatAway: false }); }}
+            style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", zIndex: 5, height: 24, padding: "0 12px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 12, color: "var(--fg-sub)", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", boxShadow: "var(--shadow-pop)" }}>
+            ↓ {t("chat.jumpLatest")}
+          </button>
+        )}
+        <div ref={el => { this._chat = el; }} onScroll={this.onChatScroll} style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", scrollbarGutter: "stable", padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {this.visibleMessages().map(m => (
+            <div key={m.id} className="sz-in sz-msg" style={{ display: "flex", gap: 8, position: "relative" }}>
               <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
+              {/* 복사 — 긴 답변을 드래그로 긁어내는 건 사실상 불가능했다. hover 시에만 나타난다 */}
+              <button className="sz-msg-copy hv05" title={t("chat.copyMsg")}
+                onClick={() => { navigator.clipboard.writeText(m.text ?? "").then(() => this.toast("ok", t("chat.copied")), () => { /* 클립보드 거부 */ }); }}
+                style={{ position: "absolute", top: -2, right: 0, height: 19, padding: "0 7px", fontSize: 9.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "var(--bg-card)", border: "1px solid var(--w08)" }}>⧉</button>
               <div style={{ minWidth: 0 }}>
-                {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: "var(--accent)", marginBottom: 2 }}>{m.who}</div>}
-                <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", color: m.role === "user" ? "#E0E5E0" : "var(--fg-sub2)", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
+                {/* 에이전트 색으로 라벨 — 전에는 전부 같은 --accent 라 이름 글자만 달랐다.
+                    AGDEF.color 는 에이전트 패널·제안 배지·AI 로그가 이미 쓰는 관용구다. */}
+                {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: this.chatAgentColor(m.agent), marginBottom: 2 }}>{m.who}</div>}
+                <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word", color: m.role === "user" ? "#E0E5E0" : "var(--fg-sub2)", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
                   {m.text}
                   {m.streaming && <span style={{ display: "inline-block", width: 2, height: 12, marginLeft: 2, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
                 </div>
               </div>
             </div>
           ))}
+        </div>
         </div>
         {window.schutz && s.workspace && (
           <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", position: "relative", borderTop: "1px solid var(--w06)" }}>
@@ -3811,13 +4237,18 @@ export class App extends React.Component<{}, S> {
                 </div>
               );
             })()}
-            <input value={s.input}
-              onChange={e => { const val = e.target.value; this.setState({ input: val, slashSel: 0 }); if (/^\/model/.test(val)) this.ensureModelsFetched(); }}
+            <textarea ref={el => { this._chatInput = el; }} value={s.input} rows={1}
+              onChange={e => { const val = e.target.value; this.setState({ input: val, slashSel: 0 }); this.saveDraft(val); this.autoGrowInput(); if (/^\/model/.test(val)) this.ensureModelsFetched(); }}
+              onCompositionStart={() => { this._composing = true; }}
+              onCompositionEnd={() => { this._composing = false; }}
               onKeyDown={e => {
+                // 한글·일본어 조합 중 Enter 는 "글자 확정"이지 전송이 아니다.
+                // (isComposing 은 compositionend 직전 keydown 에서도 true — 그래서 자체 플래그도 함께 본다)
+                const composing = this._composing || (e.nativeEvent as any).isComposing || (e as any).keyCode === 229;
                 const models = this.modelPalette();
                 const list = models.length ? [] : this.slashList();
                 const len = models.length || list.length;
-                if (len) {
+                if (len && !composing) {
                   const sel = Math.min(s.slashSel, len - 1);
                   if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ slashSel: (sel + 1) % len }); return; }
                   if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ slashSel: (sel - 1 + len) % len }); return; }
@@ -3832,16 +4263,29 @@ export class App extends React.Component<{}, S> {
                     }
                   }
                 }
-                if (e.key === "Enter") this.send();
+                // 보낸 메시지 다시 꺼내기 — 캐럿이 첫 줄/끝 줄일 때만 (여러 줄 편집을 방해하지 않게)
+                if (!composing && !len && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+                  const ta = e.currentTarget;
+                  const atTop = ta.selectionStart === ta.selectionEnd && !ta.value.slice(0, ta.selectionStart).includes("\n");
+                  const atEnd = ta.selectionStart === ta.selectionEnd && !ta.value.slice(ta.selectionStart).includes("\n");
+                  if ((e.key === "ArrowUp" && atTop) || (e.key === "ArrowDown" && atEnd)) {
+                    const recalled = this.recallSent(e.key === "ArrowUp" ? -1 : 1);
+                    if (recalled !== null) { e.preventDefault(); this.setState({ input: recalled }, () => this.autoGrowInput()); return; }
+                  }
+                }
+                if (e.key === "Enter" && !e.shiftKey && !composing) {
+                  e.preventDefault(); // 줄바꿈 대신 전송 (Shift+Enter 는 줄바꿈)
+                  this.send();
+                }
               }}
               placeholder={t("chat.inputPlaceholder")}
-              style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, height: 34, padding: "0 13px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none", display: "block" }} />
+              style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, minHeight: 34, maxHeight: 148, padding: "8px 13px", color: "var(--fg)", fontSize: 12.5, lineHeight: 1.5, fontFamily: SUIT, outline: "none", display: "block", resize: "none", overflowY: "auto" }} />
           </div>
           {(() => {
             const canSend = (!!this.state.input.trim() || this.state.attach.length > 0) && !this.state.running;
             return (
               <button className="hvAccent" onClick={() => this.send()} disabled={!canSend} title={this.state.running ? t("chat.sending") : t("chat.send")}
-                style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 9, color: "var(--bg-root)", background: "var(--accent)", border: "none", fontWeight: 700 }}>↑</button>
+                style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 9, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", fontWeight: 700, transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
             );
           })()}
         </div>
@@ -3895,7 +4339,9 @@ export class App extends React.Component<{}, S> {
         <div key={"slot" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
           onMouseDown={() => { this._focusSlot = si; }}>
           {this.renderTabStrip(si, tabsHere, activeRel)}
-          {diffMeta && s.workspace ? (
+          {this.parsePreviewKey(activeRel) ? (
+            <PreviewPane key={activeRel} url={this.parsePreviewKey(activeRel)!} />
+          ) : diffMeta && s.workspace ? (
             <DiffPane
               key={activeRel + ":" + (s.paneVer[diffMeta.path] ?? 0)}
               root={s.workspace.root}
@@ -3936,17 +4382,23 @@ export class App extends React.Component<{}, S> {
             const on = rel === activeRel;
             const closingTab = s.closingTabs.includes(si + ":" + rel);
             const dm = this.parseDiffKey(rel);
-            const dirty = !dm && s.paneDirty[rel];
-            const name = dm ? (dm.path.split("/").pop() + " ⇆") : rel.split("/").pop();
+            const pv = this.parsePreviewKey(rel);
+            const dirty = !dm && !pv && s.paneDirty[rel];
+            // 프리뷰 rel 은 URL 이라 "/" 로 잘라 쓰면 이름이 빈 문자열이 된다 — host:port 로 라벨을 만든다
+            const name = dm ? (dm.path.split("/").pop() + " ⇆")
+              : pv ? this.previewLabel(pv)
+              : rel.split("/").pop();
             return (
-              <div key={rel} className={"hv04 " + (closingTab ? "sz-tab-out" : "sz-tab-in")} title={dm ? dm.path + " (diff)" : rel}
+              <div key={rel} className={"hv04 " + (closingTab ? "sz-tab-out" : "sz-tab-in")} title={dm ? dm.path + " (diff)" : pv ? pv : rel}
                 draggable={!closingTab}
                 onDragStart={() => { this._dragTab = { slot: si, rel }; }}
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => { e.preventDefault(); this.reorderTab(si, rel); }}
                 onMouseDown={e => { e.stopPropagation(); if (closingTab) return; this._focusSlot = si; this.selectTab(si, rel); }}
                 style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 8px 0 11px", cursor: "pointer", minWidth: 0, maxWidth: 200, borderRight: "1px solid var(--w04)", background: on ? "var(--bg-editor)" : "transparent", transition: "background var(--dur) var(--ease)" }}>
-                {this.parseDiffKey(rel) ? <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: on ? "var(--accent)" : "var(--fg-dim3)" }} /> : <FileIcon rel={rel} size={13} />}
+                {dm ? <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: on ? "var(--accent)" : "var(--fg-dim3)" }} />
+                  : pv ? <span style={{ flex: "none", fontSize: 11, lineHeight: 1, color: on ? "var(--ok)" : "var(--fg-dim2)" }}>◉</span>
+                  : <FileIcon rel={rel} size={13} />}
                 <span style={{ fontFamily: MONO, fontSize: 11.5, color: on ? "var(--fg)" : "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
                 {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
                 <button className="hvDim" title={t("sc4.closeTab")}
@@ -3956,7 +4408,7 @@ export class App extends React.Component<{}, S> {
             );
           })}
         </div>
-        {activeRel.endsWith(".md") && !this.parseDiffKey(activeRel) && s.workspace && (
+        {activeRel.endsWith(".md") && !this.parseDiffKey(activeRel) && !this.parsePreviewKey(activeRel) && s.workspace && (
           <button className="hv05" title={t("editor.previewTitle")}
             onClick={() => this.setState(st => ({ mdPreview: { ...st.mdPreview, [activeRel]: !st.mdPreview[activeRel] } }))}
             style={{ flex: "none", alignSelf: "center", height: 20, marginRight: 8, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: s.mdPreview[activeRel] ? "var(--on-accent)" : "var(--fg-sub)", background: s.mdPreview[activeRel] ? "var(--accent)" : "var(--w05)", border: "none" }}>
@@ -4081,8 +4533,24 @@ export class App extends React.Component<{}, S> {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: a.file ? d.color : "var(--fg-dim3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file ?? "—"}</span>
                     <div style={{ flex: 1 }} />
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()} · <span style={{ color: "var(--fg-sub2)" }}>{this.isSubscription(d.id) ? t("agent.subscription") : "$" + a.cost.toFixed(3)}</span></span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>↓{a.tin.toLocaleString()} ↑{a.tout.toLocaleString()}</span>
                   </div>
+                  {/* 구독 잔여 할당량 — 금액 대신. 가장 빠듯한 창을 막대로, 창별 남은 비율을 글자로. */}
+                  {(() => {
+                    const q = this.state.quota[d.id];
+                    const left = this.quotaTightest(d.id);
+                    if (!q || left === null) return null;
+                    const col = left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : d.color;
+                    return (
+                      <div title={t("status.quotaTitle")} style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6 }}>
+                        <div style={{ flex: 1, height: 3, borderRadius: 2, background: "var(--w06)", overflow: "hidden" }}>
+                          <div style={{ width: (100 - left) + "%", height: "100%", background: col, transition: "width var(--dur-med) var(--ease)" }} />
+                        </div>
+                        <span style={{ flex: "none", fontFamily: MONO, fontSize: 9.5, color: "var(--fg-dim2)", whiteSpace: "nowrap" }}>{this.quotaText(d.id)}</span>
+                        <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, fontWeight: 700, color: col, whiteSpace: "nowrap" }}>{left}%</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -4130,27 +4598,43 @@ export class App extends React.Component<{}, S> {
                   <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
                   {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
                 </div>
-                <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", maxHeight: 180, overflow: "auto", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
-                  {p.find.split("\n").map((l, i) => (
-                    <div key={"o" + i} style={{ display: "flex", background: "rgba(201,123,123,.1)" }}>
-                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "#C97B7B", userSelect: "none" }}>−</span>
-                      <span style={{ whiteSpace: "pre", color: "#C99A9A" }}>{l || " "}</span>
+                {/* diff 는 접었다 펼친다. 예전엔 maxHeight 180 + 중첩 스크롤이라 아래 코드가 안 보이는데
+                    스크롤 대신 드래그 선택이 됐고, 수락/거절 버튼까지 그 잘린 영역 안에 있어 손이 안 닿았다. */}
+                {(() => {
+                  const rows = [
+                    ...(p.find ? p.find.split("\n").map(l => ({ k: "-" as const, l })) : []),
+                    ...p.replace.split("\n").map(l => ({ k: "+" as const, l })),
+                  ];
+                  const LIMIT = 14, PEEK = 8;
+                  const long = rows.length > LIMIT;
+                  const open = !!s.openDiffs[p.id];
+                  const shown = long && !open ? rows.slice(0, PEEK) : rows;
+                  return (
+                    <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
+                      {shown.map((r, i) => (
+                        <div key={r.k + i} className={p.status === "pending" && r.k === "+" ? "sz-in" : undefined}
+                          style={{ display: "flex", background: r.k === "-" ? "rgba(201,123,123,.1)" : "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
+                          <span style={{ flex: "none", width: 16, textAlign: "center", color: r.k === "-" ? "#C97B7B" : "var(--ok)", userSelect: "none" }}>{r.k === "-" ? "−" : "+"}</span>
+                          <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", color: r.k === "-" ? "#C99A9A" : "#B7CBBA" }}>{r.l || " "}</span>
+                        </div>
+                      ))}
+                      {long && (
+                        <button className="hv05" onClick={() => this.setState(st => ({ openDiffs: { ...st.openDiffs, [p.id]: !st.openDiffs[p.id] } }))}
+                          style={{ width: "100%", height: 26, fontSize: 10.5, fontFamily: SUIT, cursor: "pointer", border: "none", borderTop: "1px solid var(--w05)", color: "var(--fg-dim)", background: "transparent" }}>
+                          {open ? t("misc.diffCollapse") : t("misc.diffExpand", { n: rows.length - PEEK })}
+                        </button>
+                      )}
                     </div>
-                  ))}
-                  {p.replace.split("\n").map((l, i) => (
-                    <div key={"n" + i} className={p.status === "pending" ? "sz-in" : undefined} style={{ display: "flex", background: "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
-                      <span style={{ flex: "none", width: 16, textAlign: "center", color: "var(--ok)", userSelect: "none" }}>+</span>
-                      <span style={{ whiteSpace: "pre", color: "#B7CBBA" }}>{l || " "}</span>
-                    </div>
-                  ))}
-                  {p.status === "pending" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w05)", fontFamily: SUIT }}>
-                      <div style={{ flex: 1 }} />
-                      <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
-                      <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
-                    </div>
-                  )}
-                </div>
+                  );
+                })()}
+                {/* 버튼은 diff 밖 — 코드가 아무리 길어도 항상 닿는다 */}
+                {p.status === "pending" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w06)", fontFamily: SUIT }}>
+                    <div style={{ flex: 1 }} />
+                    <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
+                    <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -4246,7 +4730,11 @@ export class App extends React.Component<{}, S> {
   // ── 터미널 독 (xterm 멀티 탭 + AI 로그) ──
   renderTerm() {
     const s = this.state;
+    // 처음 여는 순간엔 도크가 아예 없다가 210 으로 생겨서 애니메이션할 여지가 없었다.
+    // 첫 렌더는 높이 0 으로 두고, 다음 프레임에 펼쳐 다른 토글과 똑같이 움직이게 한다.
+    const firstMount = !this._termMounted;
     this._termMounted = true; // 최초 렌더 시 래치 → 이후 접어도 언마운트되지 않게(셸 유지)
+    if (firstMount) requestAnimationFrame(() => this.setState({ termReady: true }));
     const DIM = "var(--fg-dim)", TXT = "var(--fg-code)", SUB = "var(--fg-sub)", AC = "var(--accent)";
     const termCloseTitle = t("term.close"), toolDoneLabel = t("term.toolDone"); // 아래 map(t => …) 섀도잉 회피
     const onAi = s.termTab === "ai";
@@ -4254,7 +4742,16 @@ export class App extends React.Component<{}, S> {
     const errs = s.problems.filter(p => p.severity >= 8).length;
     const warns = s.problems.length - errs;
     return (
-      <div style={{ flex: "none", height: 210, display: s.termOpen ? "flex" : "none", flexDirection: "column", background: "var(--bg-dock)", borderTop: "1px solid var(--w07)" }}>
+      <div style={{
+        // minHeight:0 이 없으면 flex 아이템의 min-height:auto 가 내용 높이를 바닥으로 잡아
+        // height:0 을 줘도 210 그대로 남는다(접히지 않는다)
+        flex: "none", height: s.termOpen && s.termReady ? 210 : 0, minHeight: 0, overflow: "hidden",
+        display: "flex", flexDirection: "column", background: "var(--bg-dock)",
+        borderTop: s.termOpen ? "1px solid var(--w07)" : "1px solid transparent",
+        // --ease-emph 는 오버슈트(1.4)가 있어 패널이 210 을 넘어 220 까지 튀었다가 돌아온다.
+        // 도크에는 오버슈트 없는 --ease 가 맞다(그 토큰은 AI 강조용).
+        transition: "height var(--dur-med) var(--ease), border-color var(--dur-med) var(--ease)",
+      }}>
         <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 8px 0 10px", borderBottom: "1px solid var(--w05)" }}>
           {s.terms.map(t => {
             const on = s.termTab === t.id;
@@ -4863,12 +5360,12 @@ export class App extends React.Component<{}, S> {
   renderUsage() {
     if (!this.state.usageOpen && !this.isClosing("usage")) return null;
     const connected = AGDEF.filter(d => this.modelOf(d.id) !== null);
-    let totIn = 0, totOut = 0, totCost = 0, hasKeyCost = false;
-    for (const d of AGDEF) { const a = this.state.agents[d.id]; totIn += a.tin; totOut += a.tout; if (!this.isSubscription(d.id)) { totCost += a.cost; hasKeyCost = true; } }
+    let totIn = 0, totOut = 0;
+    for (const d of AGDEF) { const a = this.state.agents[d.id]; totIn += a.tin; totOut += a.tout; }
     const body = (
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", gap: 10 }}>
-          {[[t("modal.usageInputTokens"), totIn.toLocaleString()], [t("modal.usageOutputTokens"), totOut.toLocaleString()], [t("modal.usageSessionCost"), hasKeyCost ? "$" + totCost.toFixed(4) : t("modal.subscription")]].map(([k, v]) => (
+          {[[t("modal.usageInputTokens"), totIn.toLocaleString()], [t("modal.usageOutputTokens"), totOut.toLocaleString()]].map(([k, v]) => (
             <div key={k} style={{ flex: 1, background: "var(--bg-root)", borderRadius: 10, padding: "12px 14px", border: "1px solid var(--w06)" }}>
               <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 4 }}>{k}</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: "var(--fg)", fontFamily: MONO }}>{v}</div>
@@ -4881,15 +5378,22 @@ export class App extends React.Component<{}, S> {
           const a = this.state.agents[d.id];
           const sub = this.isSubscription(d.id);
           const m = this.modelOf(d.id) ?? "?";
-          const price = sub ? t("modal.subscriptionIncluded") : (() => { const pr = App.priceOf(m); return pr ? `$${pr[0]}/${pr[1]} /1M` : t("modal.priceUnknown"); })();
+          const q = this.state.quota[d.id];
+          const left = this.quotaTightest(d.id);
           return (
             <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "var(--bg-root)", borderRadius: 9, border: "1px solid var(--w06)" }}>
               <span style={{ width: 8, height: 8, borderRadius: 4, background: d.color, flex: "none" }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 12, color: "var(--fg)" }}>{d.name} <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-dim)" }}>{m}</span></div>
-                <div style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>{t("modal.usageAgentTokens", { tin: a.tin.toLocaleString(), tout: a.tout.toLocaleString(), price })}</div>
+                <div style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: MONO }}>{t("modal.usageAgentTokens", { tin: a.tin.toLocaleString(), tout: a.tout.toLocaleString(), price: sub ? t("modal.subscription") : "" })}</div>
+                {q && (
+                  <div style={{ fontSize: 10, color: "var(--fg-dim2)", fontFamily: MONO, marginTop: 2 }}>
+                    {this.quotaText(d.id)}{q.plan ? " · " + q.plan : ""}
+                    {q.windows.map(w => w.resetAt).filter(Boolean).length > 0 && " · " + t("modal.quotaResets", { when: this.quotaResetText(d.id) })}
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: sub ? "var(--accent-hi)" : "var(--fg-sub)", fontFamily: MONO }}>{sub ? t("modal.subscription") : "$" + a.cost.toFixed(4)}</div>
+              <div title={t("status.quotaTitle")} style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: left === null ? "var(--fg-dim3)" : left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : "var(--ok)" }}>{left === null ? "—" : left + "%"}</div>
             </div>
           );
         })}

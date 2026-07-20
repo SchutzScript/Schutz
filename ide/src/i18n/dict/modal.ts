@@ -19,7 +19,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "modal.subscription": { ko: "구독", en: "Subscription", de: "Abo", ja: "サブスク" },
   "modal.subscriptionIncluded": { ko: "구독 포함", en: "Included in subscription", de: "Im Abo enthalten", ja: "サブスクに含む" },
   // 단가를 모르는 모델 — 추정값으로 금액을 지어내지 않는다
-  "modal.priceUnknown": { ko: "요금 미상", en: "Price unknown", de: "Preis unbekannt", ja: "料金不明" },
+  "modal.quotaResets": { ko: "{when} 후 리셋", en: "resets in {when}", de: "Reset in {when}", ja: "{when} 後にリセット" },
   "modal.keysTitle": { ko: "키보드 단축키", en: "Keyboard shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
   "modal.kbWorkspaceSymbol": { ko: "작업공간 기호 이동", en: "Go to workspace symbol", de: "Zu Arbeitsbereich-Symbol springen", ja: "ワークスペースシンボルへ移動" },
   "modal.kbCycleTabs": { ko: "탭 순환 (MRU)", en: "Cycle tabs (MRU)", de: "Tabs durchwechseln (MRU)", ja: "タブ切り替え (MRU)" },
