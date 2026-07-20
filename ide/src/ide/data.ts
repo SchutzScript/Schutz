@@ -205,7 +205,7 @@ export const MENUS: [string, ([string, string] | null)[]][] = [
   ["view", [["view.splitReset", "⌥⌘1"], ["view.split2", "⌥⌘2"], ["view.split4", "⌥⌘4"], null, ["view.format", "⇧⌥F"], ["view.wordWrap", ""], ["view.minimap", ""], null, ["view.problems", ""], ["view.terminal", "⌘`"]]],
   ["nav", [["nav.quickOpen", "⌘P"], ["nav.commandPalette", "⇧⌘P"], ["nav.symbol", "⇧⌘O"]]],
   ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""]]],
-  ["help", [["help.replayTutorial", ""], ["help.keys", ""], ["help.about", ""]]],
+  ["help", [["help.replayOpening", ""], ["help.replayTutorial", ""], ["help.keys", ""], ["help.about", ""]]],
 ];
 
 export const PROJECTS = [

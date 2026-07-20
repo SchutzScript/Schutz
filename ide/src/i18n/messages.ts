@@ -22,6 +22,7 @@ import { dict as d_extd } from "./dict/extd";
 import { dict as d_misc } from "./dict/misc";
 import { dict as d_engine } from "./dict/engine";
 import { dict as d_tour } from "./dict/tour";
+import { dict as d_open } from "./dict/open";
 import { dict as d_chat2 } from "./dict/chat2";
 import { dict as d_sc1 } from "./dict/sc1";
 import { dict as d_sc2 } from "./dict/sc2";
@@ -33,7 +34,7 @@ export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_ob, ...d_reg,
-  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour,
+  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open,
   ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
@@ -151,6 +152,7 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.ai.mcp": { ko: "MCP 서버…", en: "MCP Servers…", de: "MCP-Server…", ja: "MCPサーバー…" },
   "menu.help.keys": { ko: "단축키 목록", en: "Keyboard Shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
   "menu.help.about": { ko: "Schutz 정보", en: "About Schutz", de: "Über Schutz", ja: "Schutzについて" },
+  "menu.help.replayOpening": { ko: "오프닝 다시 보기", en: "Replay Opening", de: "Einführung wiederholen", ja: "オープニングをもう一度" },
   "menu.help.replayTutorial": { ko: "튜토리얼 다시 보기", en: "Replay Tutorial", de: "Tutorial wiederholen", ja: "チュートリアルを再生" },
 
   // ── 타이틀바 ────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./global.css";
 import { App } from "./App";
 import { Onboarding } from "./Onboarding";
+import { Opening } from "./opening/Opening";
 import { applyTheme, getThemeId } from "./theme";
 import { applyUiFont } from "./settings";
 import { applyLang } from "./i18n";
@@ -10,7 +11,23 @@ import { applyLang } from "./i18n";
 // 첫 페인트 전에 테마/폰트/언어를 적용 — 저장된 Paper(라이트) 등에서 다크 플래시 방지, <html lang> 동기화
 try { applyTheme(getThemeId()); applyUiFont(); applyLang(); } catch { /* ignore */ }
 
-const DONE_KEY = "schutz.onboarded";
+const DONE_KEY = "schutz.onboarded";     // 기존 설정 마법사 완료
+const OPEN_KEY = "schutz.openingSeen";   // 신규 오프닝 시청 완료
+
+/**
+ * 오프닝을 보여줄지. 이미 앱을 써 온 사람에게 첫 실행 영화를 다시 트는 건 명백한
+ * 퇴행이라, 온보딩을 마친 흔적이 있으면 본 것으로 친다(1회성 마이그레이션).
+ */
+function shouldPlayOpening(): boolean {
+  try {
+    if (localStorage.getItem(OPEN_KEY)) return false;
+    if (localStorage.getItem(DONE_KEY)) {           // 기존 사용자 — 조용히 넘긴다
+      localStorage.setItem(OPEN_KEY, "1");
+      return false;
+    }
+    return true;
+  } catch { return false; }   // localStorage 가 막혀 있으면 연출보다 앱이 뜨는 게 우선
+}
 
 function Root() {
   const [hash, setHash] = useState(window.location.hash);
@@ -21,9 +38,32 @@ function Root() {
   }, []);
 
   const forceOnboarding = hash.startsWith("#/onboarding");
-  const firstRun = !localStorage.getItem(DONE_KEY);
+  const forceOpening = hash.startsWith("#/opening");
+  const [playOpening, setPlayOpening] = useState(() => shouldPlayOpening());
+  // 오프닝이 "천천히 둘러보기"로 끝났으면 App 이 뜨자마자 투어를 시작해야 한다.
+  const [autoTour, setAutoTour] = useState(false);
 
-  if (forceOnboarding || firstRun) {
+  if (forceOpening || playOpening) {
+    return (
+      <Opening
+        onDone={({ wantsTour }) => {
+          try {
+            localStorage.setItem(OPEN_KEY, "1");
+            // 오프닝에서 테마를 받았으므로 설정 마법사를 처음부터 다시 시키지 않는다.
+            // AI 연결처럼 남은 항목은 앱 안에서 이어서 안내한다.
+            localStorage.setItem(DONE_KEY, "1");
+            if (wantsTour) localStorage.removeItem("schutz.tutorialDone");
+            else localStorage.setItem("schutz.tutorialDone", "1");
+          } catch { /* ignore */ }
+          setAutoTour(wantsTour);
+          setPlayOpening(false);
+          if (forceOpening) window.location.hash = "#/";
+        }}
+      />
+    );
+  }
+
+  if (forceOnboarding) {
     return (
       <Onboarding
         onFinish={() => {
@@ -33,7 +73,7 @@ function Root() {
       />
     );
   }
-  return <App />;
+  return <App autoTour={autoTour} />;
 }
 
 /** 렌더 예외 격리 — App 이 단일 대형 컴포넌트라 throw 하나로 창 전체가 백지가 되던 것을 막는다.
