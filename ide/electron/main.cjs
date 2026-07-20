@@ -126,6 +126,68 @@ ipcMain.handle("schutz:openFolder", async (event) => {
   return r.filePaths[0];
 });
 
+// 첫 실행 데모용 샘플 프로젝트. 경로를 렌더러가 정하지 않는다 — userData 아래 고정 위치라
+// 임의 경로에 파일을 쓰게 만들 수 없다. 사용자 파일은 어떤 경우에도 건드리지 않는다.
+ipcMain.handle("schutz:demoProject", async () => {
+  const root = path.join(app.getPath("userData"), "demo-project");
+  const files = {
+    "src/components/Footer.jsx":
+      "function Footer() {
+" +
+      "  return (
+" +
+      "    <footer className=\"footer\">
+" +
+      "      <p>© 2024 SCHUTZ STUDIO. MADE WITH INTENT.</p>
+" +
+      "    </footer>
+" +
+      "  );
+" +
+      "}
+
+" +
+      "export default Footer;
+",
+    "src/components/Header.jsx":
+      "function Header() {
+" +
+      "  return <header className=\"header\">Schutz</header>;
+" +
+      "}
+
+" +
+      "export default Header;
+",
+    "src/styles/global.css":
+      ".footer { padding: 24px; opacity: .7; }
+" +
+      ".header { font-weight: 700; }
+",
+    "package.json":
+      "{
+  \"name\": \"schutz-demo\",
+  \"version\": \"1.0.0\",
+  \"private\": true
+}
+",
+    "README.md":
+      "# Schutz 데모 프로젝트
+
+" +
+      "첫 실행 안내에서 쓰는 예제입니다. 마음껏 고쳐도 되고, 지워도 다시 만들어집니다.
+",
+  };
+  // 매번 원본으로 되돌린다 — 데모를 다시 볼 때 이전 실행의 편집이 남아 있으면 안 된다.
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(root, rel);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, "utf8");
+  }
+  openedRoots.add(path.resolve(root));
+  return root;
+});
+
 ipcMain.handle("schutz:readTree", async (_e, root) => {
   if (typeof root !== "string" || !root) throw new Error("잘못된 경로");
   openedRoots.add(path.resolve(root)); // 이 루트에 대한 후속 파일 IPC 허용
