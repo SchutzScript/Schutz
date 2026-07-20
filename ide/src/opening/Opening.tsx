@@ -30,6 +30,17 @@ const SWAP_TO = "{new Date().getFullYear()}";
 /** 고를 수 있는 테마 — 실제 THEME_TOKENS 에서 가져온다. 가짜 색이 아니라 진짜 테마다. */
 const CHOICES = ["feldgrau", "graphite", "paper"] as const;
 
+/** 목업 트리 — 막대만 그리면 조립이 끝나도 빈 상자로 보인다. depth 는 들여쓰기. */
+const MOCK_TREE: Array<{ name: string; depth: number; dir?: boolean; on?: boolean }> = [
+  { name: "src", depth: 0, dir: true },
+  { name: "components", depth: 1, dir: true },
+  { name: "Footer.jsx", depth: 2, on: true },
+  { name: "Header.jsx", depth: 2 },
+  { name: "styles", depth: 1, dir: true },
+  { name: "global.css", depth: 2 },
+  { name: "package.json", depth: 0 },
+];
+
 interface Props {
   /** 오프닝이 끝났다(또는 건너뛰었다). 다음 단계로. */
   onDone: (opts: { wantsTour: boolean }) => void;
@@ -309,6 +320,39 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       position: "absolute", inset: 0, opacity: op,
       transform: `scale(${1 - E(46000, 49000) * 0.06})`,
     }}>
+      {/* 창 프레임 — 위아래가 열려 있으면 패널이 허공에 뜬 상자로 보인다.
+          조립이 끝난 뒤 조용히 들어와 화면을 닫아준다. */}
+      {(() => {
+        const fr = E(15800, 16900);
+        if (fr < 0.01) return null;
+        const menus = ["파일", "편집", "보기", "이동", "AI"];
+        return (
+          <>
+            <div style={{
+              position: "absolute", left: "6%", right: "6%", top: "5.5%", height: "5%",
+              background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "8px 8px 0 0",
+              display: "flex", alignItems: "center", gap: 12, padding: "0 12px",
+              opacity: fr, transform: `translateY(${(1 - fr) * -8}px)`,
+            }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: tk.accent }} />
+              {menus.map(m => (
+                <span key={m} style={{ fontSize: 9.5, color: tk.fgDim }}>{m}</span>
+              ))}
+            </div>
+            <div style={{
+              position: "absolute", left: "6%", right: "6%", top: "86.5%", height: "3.6%",
+              background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "0 0 8px 8px",
+              display: "flex", alignItems: "center", padding: "0 12px", gap: 10,
+              opacity: fr, transform: `translateY(${(1 - fr) * 8}px)`,
+            }}>
+              <span style={{ fontSize: 9, color: time >= 43500 ? tk.ok : tk.fgDim }}>
+                {time >= 43500 ? t("open.status.changed") : t("open.status.clean")}
+              </span>
+            </div>
+          </>
+        );
+      })()}
+
       {/* 레일 */}
       <div style={{ ...panel, left: "6%", top: "12%", width: "3.2%", height: "74%", ...box("rail") }}>
         {[0, 1, 2, 3].map(i => (
@@ -322,9 +366,34 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
 
       {/* 프로젝트 + 대화 */}
       <div style={{ ...panel, left: "10.2%", top: "12%", width: "19%", height: "74%", ...box("left") }}>
-        {[60, 44, 52, 38].map((w, i) => (
-          <div key={i} style={{ height: 5, borderRadius: 3, background: tk.fgDim, opacity: .22, margin: "3.5% 8%", width: `${w}%` }} />
-        ))}
+        <div style={{ padding: "10px 8px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
+          {t("open.tag.project")}
+        </div>
+        <div style={{ padding: "6px 4px" }}>
+          {MOCK_TREE.map((n, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, lineHeight: 1.9,
+              padding: `0 6px 0 ${6 + n.depth * 11}px`, borderRadius: 4,
+              background: n.on ? tk.accentSoft : "transparent",
+              color: n.on ? tk.fg : n.dir ? tk.fgSub : tk.fgSub2,
+              fontWeight: n.on ? 600 : 400,
+            }}>
+              <span style={{ opacity: .55, fontSize: 8 }}>{n.dir ? "▾" : "·"}</span>
+              {n.name}
+            </div>
+          ))}
+        </div>
+        {/* 답변 — 코드가 다시 쓰인 뒤에 온다 */}
+        <div style={{
+          position: "absolute", left: "6%", right: "6%", bottom: "26%",
+          fontSize: 10, lineHeight: 1.55, color: tk.fgSub,
+          opacity: E(35800, 36800),
+        }}>
+          <span style={{ color: tk.accent, fontSize: 9, letterSpacing: ".1em", display: "block", marginBottom: 3 }}>
+            Claude
+          </span>
+          {t("open.reply")}
+        </div>
         <div style={{ position: "absolute", left: "6%", right: "6%", bottom: "5%" }}>
           <div style={{
             fontSize: 11.5, lineHeight: 1.5, background: tk.bgEditor, borderRadius: 7, padding: "8px 10px",
@@ -343,8 +412,24 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
 
       {/* 에디터 */}
       <div style={{ ...panel, left: "30%", top: "12%", width: "41%", height: "74%", background: tk.bgEditor, ...box("editor") }}>
+        {/* 탭 스트립 — 이게 없으면 코드 상자가 떠 있는 것처럼 보인다 */}
+        <div style={{
+          display: "flex", alignItems: "stretch", height: 26,
+          borderBottom: `1px solid ${tk.w07}`, background: tk.bgPanel,
+          borderRadius: "7px 7px 0 0", overflow: "hidden",
+        }}>
+          {["Footer.jsx", "App.jsx"].map((n, i) => (
+            <div key={n} style={{
+              display: "flex", alignItems: "center", padding: "0 11px",
+              fontFamily: "var(--font-mono, monospace)", fontSize: 9.5,
+              borderRight: `1px solid ${tk.w07}`,
+              background: i === 0 ? tk.bgEditor : "transparent",
+              color: i === 0 ? tk.fg : tk.fgDim,
+            }}>{n}</div>
+          ))}
+        </div>
         <pre style={{
-          position: "absolute", inset: "6% 5%", fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          position: "absolute", inset: "34px 5% 6%", fontFamily: "var(--font-mono, ui-monospace, monospace)",
           fontSize: "clamp(9px,1.05vw,15px)", lineHeight: 2, margin: 0, whiteSpace: "pre",
           overflow: "hidden", color: tk.fgCode,
         }}>
@@ -371,9 +456,36 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
 
       {/* 검토 */}
       <div style={{ ...panel, left: "71.5%", top: "12%", width: "22.5%", height: "74%", ...box("right") }}>
-        {[56, 40].map((w, i) => (
-          <div key={i} style={{ height: 5, borderRadius: 3, background: tk.fgDim, opacity: .22, margin: "3.5% 8%", width: `${w}%` }} />
-        ))}
+        <div style={{ padding: "10px 9px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
+          {t("open.tag.agents")}
+        </div>
+        {(() => {
+          const busy = time >= 20000 && time < 37500;
+          const st = time < 20000 ? "idle" : time < 26000 ? "read" : time < 36000 ? "edit" : "review";
+          return (
+            <div style={{
+              margin: "7px 9px", padding: "8px 9px", borderRadius: 7, background: tk.bgEditor,
+              border: `1px solid ${busy ? tk.accent : tk.w07}`, transition: "border-color .4s",
+            }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 11 }}>
+                <span style={{ fontWeight: 650 }}>Claude</span>
+                <span style={{ marginLeft: "auto", fontSize: 9.5, color: busy ? tk.accent : tk.fgDim }}>
+                  {t("open.st." + st)}
+                </span>
+              </div>
+              <div style={{
+                fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: tk.fgDim, marginTop: 3,
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>{time >= 20000 ? "src/components/Footer.jsx" : "—"}</div>
+              <div style={{ height: 2, borderRadius: 1, background: tk.w12, marginTop: 6, overflow: "hidden" }}>
+                <div style={{ height: "100%", background: tk.accent, width: `${E(20000, 36000) * 100}%` }} />
+              </div>
+            </div>
+          );
+        })()}
+        <div style={{ padding: "6px 9px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
+          {t("open.tag.review")}
+        </div>
         {(() => {
           const shown = time >= 37500 && time < 44000;
           const stamped = time >= 43500 && time < 47000;

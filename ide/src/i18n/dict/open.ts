@@ -47,6 +47,24 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Lass das Copyright-Jahr im Footer sich jedes Jahr selbst aktualisieren",
     ja: "フッターの著作権年を毎年自動で変わるようにして",
   },
+  "open.tag.project": { ko: "프로젝트", en: "Project", de: "Projekt", ja: "プロジェクト" },
+  "open.tag.agents":  { ko: "에이전트", en: "Agents", de: "Agenten", ja: "エージェント" },
+  "open.tag.review":  { ko: "변경 검토", en: "Review", de: "Änderungen", ja: "変更レビュー" },
+
+  "open.st.idle":   { ko: "대기", en: "Idle", de: "Bereit", ja: "待機" },
+  "open.st.read":   { ko: "읽는 중", en: "Reading", de: "Liest", ja: "読み取り中" },
+  "open.st.edit":   { ko: "편집 중", en: "Editing", de: "Bearbeitet", ja: "編集中" },
+  "open.st.review": { ko: "검토 대기", en: "Awaiting review", de: "Wartet auf Prüfung", ja: "レビュー待ち" },
+
+  "open.reply": {
+    ko: "연도를 현재 연도로 계산하도록 바꿨습니다. 검토에서 확인하세요.",
+    en: "Changed the year to compute from the current date. Check the review panel.",
+    de: "Das Jahr wird jetzt aus dem aktuellen Datum berechnet. Prüfen Sie das Änderungs-Panel.",
+    ja: "年を現在の日付から計算するように変更しました。変更レビューで確認してください。",
+  },
+  "open.status.clean":   { ko: "변경 없음", en: "No changes", de: "Keine Änderungen", ja: "変更なし" },
+  "open.status.changed": { ko: "1개 파일 변경됨", en: "1 file changed", de: "1 Datei geändert", ja: "1ファイル変更" },
+
   "open.accept":  { ko: "수락", en: "Accept", de: "Annehmen", ja: "承認" },
   "open.reject":  { ko: "거절", en: "Reject", de: "Ablehnen", ja: "却下" },
   "open.applied": { ko: "✓ 반영됨", en: "✓ Applied", de: "✓ Übernommen", ja: "✓ 反映済み" },

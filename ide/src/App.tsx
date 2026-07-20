@@ -3029,8 +3029,18 @@ ${(r.output || "").slice(0, 2000)}`;
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
       // this.qt 사용(언마운트 시 clearTimers 로 취소) — 고아 타이머가 죽은 인스턴스에서 startTour 호출하는 것 방지
       try {
-        // 오프닝에서 넘어온 경우 tutorialDone 이 이미 지워져 있어 이 조건이 참이 된다.
-        if (this.props.autoTour || !localStorage.getItem("schutz.tutorialDone")) {
+        // 오프닝은 테마만 받고 AI 연결은 일부러 뒤로 미뤘다(실패 경로가 많아 연출이
+        // 중간에 깨진다). 그 대신 여기서 이어준다 — 안 하면 첫 실행 사용자가 AI 를
+        // 연결할 경로가 아예 없다. 설정 모달의 맨 위가 로그인/키 섹션이라 그대로 쓴다.
+        const needsProvider =
+          this.props.autoTour !== undefined &&                 // 오프닝을 막 지나온 실행
+          this.configuredAgents().length === 0 &&
+          !this.state.cliAgents.claude?.ok && !this.state.cliAgents.codex?.ok;
+
+        if (needsProvider) {
+          this.qt(() => this.openO({ settingsOpen: true }), 900);
+        } else if (this.props.autoTour || !localStorage.getItem("schutz.tutorialDone")) {
+          // 오프닝에서 넘어온 경우 tutorialDone 이 이미 지워져 있어 이 조건이 참이 된다.
           this.qt(() => { if (!this.state.tourOpen && !this.state.settingsOpen) this.startTour(); }, 1400);
         }
       } catch { /* ignore */ }
