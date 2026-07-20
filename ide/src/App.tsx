@@ -344,7 +344,8 @@ const TYPING_SPEED = 1;
 const SHOW_REASONS = true;
 const AUTOPLAY = true;
 
-export class App extends React.Component<{}, S> {
+/** autoTour: 오프닝에서 "천천히 둘러보기" 를 고르고 들어온 경우 */
+export class App extends React.Component<{ autoTour?: boolean }, S> {
   private _timers: ReturnType<typeof setTimeout>[] = [];
   private _uid = 0;
   private _paneRefs: Record<string, HTMLDivElement | null> = {};
@@ -3028,7 +3029,8 @@ ${(r.output || "").slice(0, 2000)}`;
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
       // this.qt 사용(언마운트 시 clearTimers 로 취소) — 고아 타이머가 죽은 인스턴스에서 startTour 호출하는 것 방지
       try {
-        if (!localStorage.getItem("schutz.tutorialDone")) {
+        // 오프닝에서 넘어온 경우 tutorialDone 이 이미 지워져 있어 이 조건이 참이 된다.
+        if (this.props.autoTour || !localStorage.getItem("schutz.tutorialDone")) {
           this.qt(() => { if (!this.state.tourOpen && !this.state.settingsOpen) this.startTour(); }, 1400);
         }
       } catch { /* ignore */ }
@@ -3769,6 +3771,12 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "edit.find": this.setState({ openMenu: null }); this.editorAction("find"); return;
                                 case "edit.replace": this.setState({ openMenu: null }); this.editorAction("replace"); return;
                                 case "edit.findInFiles": this.setState({ openMenu: null }); this.cancelClose("search"); this.setState({ searchOpen: true, searchSel: 0 }); return;
+                                case "help.replayOpening":
+                                  this.setState({ openMenu: null });
+                                  // 해시로 넘긴다 — Root 가 Opening 을 다시 마운트한다.
+                                  // 여기서 직접 띄우면 App 안에 App 이 겹친다.
+                                  window.location.hash = "#/opening";
+                                  return;
                                 case "help.replayTutorial": this.setState({ openMenu: null }); this.startTour(); return;
                                 case "help.keys": this.openO({ openMenu: null, keysOpen: true }); return;
                                 case "help.about": this.openO({ openMenu: null, aboutOpen: true }); return;
