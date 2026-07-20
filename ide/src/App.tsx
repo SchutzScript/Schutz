@@ -46,6 +46,8 @@ import {
 } from "./settings";
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
+import { Opening } from "./opening/Opening";
+import { DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS } from "./opening/demoScript";
 import type { TourHost } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
@@ -195,6 +197,10 @@ interface S {
   mcpGen: null | { mode: "cli" | "project" | "openapi" | "generic"; input: string; status: string; };
   /** 사용법 스포트라이트 투어 */
   tourOpen: boolean;
+  /** 오프닝 오버레이 국면. off=안 뜸, intro=마크·선언·세팅, outro=마무리 */
+  openingPhase: "off" | "intro" | "outro";
+  /** 데모 진행 중 하단 자막 키. null 이면 자막 없음 */
+  demoCaption: string | null;
   tourStep: number;
   /** 닫히는 중인 오버레이 키(나가는 애니메이션 후 언마운트) */
   closing: string[];
@@ -344,8 +350,8 @@ const TYPING_SPEED = 1;
 const SHOW_REASONS = true;
 const AUTOPLAY = true;
 
-/** autoTour: 오프닝에서 "천천히 둘러보기" 를 고르고 들어온 경우 */
-export class App extends React.Component<{ autoTour?: boolean }, S> {
+/** playOpening: 첫 실행(또는 #/opening) — 오프닝 오버레이를 띄우고 데모를 돈다 */
+export class App extends React.Component<{ playOpening?: boolean }, S> {
   private _timers: ReturnType<typeof setTimeout>[] = [];
   private _uid = 0;
   private _paneRefs: Record<string, HTMLDivElement | null> = {};
@@ -387,7 +393,7 @@ export class App extends React.Component<{ autoTour?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, settingsTab: "editor", aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, closing: [], closingTabs: [], testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, settingsTab: "editor", aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
@@ -3029,18 +3035,10 @@ ${(r.output || "").slice(0, 2000)}`;
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
       // this.qt 사용(언마운트 시 clearTimers 로 취소) — 고아 타이머가 죽은 인스턴스에서 startTour 호출하는 것 방지
       try {
-        // 오프닝은 테마만 받고 AI 연결은 일부러 뒤로 미뤘다(실패 경로가 많아 연출이
-        // 중간에 깨진다). 그 대신 여기서 이어준다 — 안 하면 첫 실행 사용자가 AI 를
-        // 연결할 경로가 아예 없다. 설정 모달의 맨 위가 로그인/키 섹션이라 그대로 쓴다.
-        const needsProvider =
-          this.props.autoTour !== undefined &&                 // 오프닝을 막 지나온 실행
-          this.configuredAgents().length === 0 &&
-          !this.state.cliAgents.claude?.ok && !this.state.cliAgents.codex?.ok;
-
-        if (needsProvider) {
-          this.qt(() => this.openO({ settingsOpen: true }), 900);
-        } else if (this.props.autoTour || !localStorage.getItem("schutz.tutorialDone")) {
-          // 오프닝에서 넘어온 경우 tutorialDone 이 이미 지워져 있어 이 조건이 참이 된다.
+        // 오프닝은 App 위 오버레이다. 여기서 띄우면 뒤에 진짜 UI 가 이미 마운트돼 있어
+        // 데모가 목업 대신 실물을 움직일 수 있다.
+        if (this.props.playOpening) this.setState({ openingPhase: "intro" });
+        else if (!localStorage.getItem("schutz.tutorialDone")) {
           this.qt(() => { if (!this.state.tourOpen && !this.state.settingsOpen) this.startTour(); }, 1400);
         }
       } catch { /* ignore */ }
@@ -3529,6 +3527,11 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   componentDidUpdate(_pp?: any, _ps?: any, snap?: { chatAtBottom: boolean } | null) {
+    // 도움말 → 오프닝 다시 보기는 해시만 바꾼다. App 은 재마운트되지 않으므로
+    // componentDidMount 가 다시 돌지 않는다 — prop 이 켜지는 순간을 여기서 잡는다.
+    if (this.props.playOpening && !_pp?.playOpening && this.state.openingPhase === "off") {
+      this.setState({ openingPhase: "intro" });
+    }
     // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
     if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
       this._lastTabsRef = this.state.tabs; this._lastActiveRef = this.state.active;
@@ -3649,6 +3652,30 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderCommands()}
         {this.renderMcp()}
         {this.renderTour()}
+        {/* 첫 실행 오프닝 — App 위 오버레이. 뒤에 진짜 UI 가 이미 떠 있어서
+            세팅이 끝나면 오버레이만 걷고 그 UI 를 데모가 직접 움직인다. */}
+        {this.state.openingPhase !== "off" && (
+          <Opening
+            phase={this.state.openingPhase}
+            onDone={({ wantsTour }) => this.finishDemo(wantsTour)}
+            onStartDemo={() => { this.setState({ openingPhase: "off" }); void this.runDemo(); }}
+          />
+        )}
+        {/* 데모 진행 중 자막 — 화면이 알아서 움직이는데 설명이 없으면 구경만 하게 된다 */}
+        {this.state.demoCaption && (
+          <div key={this.state.demoCaption} className="sz-in" style={{
+            position: "fixed", left: 0, right: 0, bottom: 34, zIndex: 480,
+            display: "grid", justifyItems: "center", gap: 6, padding: "0 8vw",
+            textAlign: "center", pointerEvents: "none",
+          }}>
+            <div style={{ fontSize: 17, fontWeight: 650, color: "var(--fg)", textShadow: "0 2px 18px var(--bg-root)" }}>
+              {t(`open.cap.${this.state.demoCaption}.t`)}
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--fg-sub)", maxWidth: "62ch", lineHeight: 1.6, textShadow: "0 2px 18px var(--bg-root)" }}>
+              {t(`open.cap.${this.state.demoCaption}.b`)}
+            </div>
+          </div>
+        )}
         {this.renderUsage()}
         {this.renderKeybindings()}
         {this.renderCommandPalette()}
@@ -5723,6 +5750,14 @@ ${(r.output || "").slice(0, 2000)}`;
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)", letterSpacing: -0.5 }}>Schutz</div>
           <div style={{ fontSize: 12, color: "var(--fg-sub)", marginTop: 3 }}>{t("modal.aboutTagline", { version: APP_VERSION })}</div>
         </div>
+        {/* 오프닝과 같은 문장. 언어와 무관하게 독일어로 두고 번역을 밑에 깐다 —
+            이건 번역 대상이 아니라 상표에 가깝다. */}
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 300, color: "var(--fg)", letterSpacing: "-.01em" }}>
+            {t("open.say").replace(/\*/g, "")}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--fg-dim)", marginTop: 4 }}>{t("open.saySub")}</div>
+        </div>
         <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.7 }}>
           {t("modal.aboutDesc")}
         </div>
@@ -5809,6 +5844,132 @@ ${(r.output || "").slice(0, 2000)}`;
 
   // ── MCP 관리 ──
   openMcp() { this.cancelClose("mcp"); this.setState({ mcpOpen: true }); void this.refreshMcp(); }
+
+  // ── 첫 실행 데모 ─────────────────────────────────────────────────────────
+  /** 데모 시작 전 워크스페이스 — 끝나면 여기로 돌려놓는다 */
+  private _demoPrevRoot: string | null = null;
+  private _demoAbort = false;
+
+  private demoSleep(ms: number) {
+    return new Promise<void>(r => { this.qt(() => r(), ms); });
+  }
+
+  /**
+   * 첫 실행 데모. 목업이 아니라 **진짜 UI** 를 움직인다 — 실제 워크스페이스를 열고,
+   * 실제 Monaco 모델에 타이핑하고, 실제 제안을 검토에 올리고, 실제 수락 경로로 반영한다.
+   *
+   * API 호출은 0회다. "에이전트" 가 할 일을 여기서 직접 상태에 밀어넣을 뿐이라,
+   * 화면에 보이는 건 전부 진짜다. 사용자 파일은 안 건드린다 — userData 아래 샘플에서만 돈다.
+   */
+  private async runDemo() {
+    if (!window.schutz) { this.finishDemo(false); return; }
+    this._demoAbort = false;
+    this._demoPrevRoot = this.state.workspace?.root ?? null;
+
+    let root: string;
+    try {
+      root = await window.schutz.demoProject();
+      await this.openWorkspacePath(root);
+    } catch {
+      this.finishDemo(false);   // 샘플을 못 만들면 데모를 접는다 — 빈 화면을 보여줄 수는 없다
+      return;
+    }
+
+    for (const step of DEMO_STEPS) {
+      if (this._demoAbort) return;
+      this.setState({ demoCaption: step.caption ?? null });
+      await this.demoSleep(step.waitMs);
+      if (this._demoAbort) return;
+      try { await this.demoStep(step.id, root); } catch { /* 한 단계 실패로 데모를 죽이지 않는다 */ }
+    }
+    if (!this._demoAbort) this.setState({ openingPhase: "outro", demoCaption: null });
+  }
+
+  private async demoStep(id: string, root: string) {
+    switch (id) {
+      case "reveal":
+        return;
+
+      case "ask": {
+        // 대화 입력창에 한 글자씩 — 진짜 입력창이라 자동 높이 조절까지 그대로 돈다
+        const text = t("open.ask");
+        for (let i = 1; i <= text.length; i++) {
+          if (this._demoAbort) return;
+          this.setState({ input: text.slice(0, i) }, () => this.autoGrowInput());
+          await this.demoSleep(TYPE_INTERVAL_MS);
+        }
+        return;
+      }
+
+      case "work": {
+        // 사용자가 보낸 것처럼 대화에 남기고 입력창을 비운다
+        this.setState(s => ({
+          messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: "claude", text: t("open.ask") }],
+          input: "",
+        }));
+        this.setAgent("claude", { status: "edit", file: DEMO_FILE });
+        this.openFile(DEMO_FILE);
+        return;
+      }
+
+      case "propose": {
+        // 진짜 제안 — 검토 패널이 이걸 그대로 그린다
+        const p: Proposal = {
+          id: "p" + (this._uid++),
+          rel: DEMO_FILE,
+          find: DEMO_FIND,
+          replace: DEMO_REPLACE,
+          rationale: t("open.reply"),
+          agent: "claude",
+          status: "pending",
+        };
+        this._proposalsById.set(p.id, p);
+        this.setState(s => ({
+          proposals: [...s.proposals, p],
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: this.agDef("claude").name, agent: "claude", text: t("open.reply") }],
+        }));
+        this._demoProposalId = p.id;
+        return;
+      }
+
+      case "accept": {
+        // 실제 수락 경로 — animateEditIntoModel 이 진짜 Monaco 모델에 타이핑한다
+        if (this._demoProposalId) await this.acceptProposal(this._demoProposalId);
+        this.setAgent("claude", { status: "idle", file: null });
+        return;
+      }
+
+      case "done":
+        return;
+    }
+  }
+
+  private _demoProposalId: string | null = null;
+
+  /** 데모 종료 — 원래 프로젝트로 돌려놓는다. */
+  private finishDemo(wantsTour: boolean) {
+    this._demoAbort = true;
+    const prev = this._demoPrevRoot;
+    this._demoPrevRoot = null;
+    this._demoProposalId = null;
+    this.setState({ openingPhase: "off", demoCaption: null });
+    try {
+      localStorage.setItem("schutz.openingSeen", "1");
+      localStorage.setItem("schutz.onboarded", "1");
+    } catch { /* ignore */ }
+
+    const after = () => {
+      if (wantsTour) this.qt(() => this.startTour(), 900);
+      else if (this.configuredAgents().length === 0 && !this.state.cliAgents.claude?.ok && !this.state.cliAgents.codex?.ok) {
+        // 오프닝은 테마만 받았다. 여기서 안 이어주면 첫 실행 사용자가 AI 를 연결할
+        // 경로가 아예 없다 — 설정 모달 맨 위가 로그인/키 섹션이라 그대로 쓴다.
+        this.qt(() => this.openO({ settingsOpen: true }), 700);
+      }
+    };
+    // 열려 있던 프로젝트가 있으면 되돌린다. 데모가 남의 작업 자리를 뺏으면 안 된다.
+    if (prev && prev !== this.state.workspace?.root) void this.openWorkspacePath(prev).then(after);
+    else after();
+  }
 
   // ── 사용법 스포트라이트 투어 ─────────────────────────────────────────────
   private _tourCardH = 168;   // 첫 렌더 추정치. 마운트 직후 실측으로 대체된다.
