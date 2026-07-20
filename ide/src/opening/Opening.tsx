@@ -2,10 +2,7 @@ import React from "react";
 import { t, LANGS, getLang, setLang } from "../i18n";
 import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
-import {
-  BEATS, TOTAL_MS, PANEL_ENTRIES, PANEL_DUR,
-  beatAt, captionFor, clampToGate, gateAt, seg, ease,
-} from "./beats";
+import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
 /**
  * 첫 실행 오프닝.
@@ -18,29 +15,10 @@ import {
  * 아니라 영화다 — 사용자 파일을 건드리지 않고 API 호출도 하지 않는다.
  */
 
-const MOCK_CODE: Array<[string, string?]> = [
-  ["function ", "k"], ["Footer", "t"], ["() {\n"],
-  ["  return (\n"],
-  ["    <footer className="], ["\"footer\"", "s"], [">\n"],
-  ["      <p>© "], ["@SWAP@"], [" SCHUTZ STUDIO.</p>\n"],
-  ["    </footer>\n"],
-  ["  );\n}"],
-];
-const SWAP_TO = "{new Date().getFullYear()}";
 
 /** 고를 수 있는 테마 — 실제 THEME_TOKENS 에서 가져온다. 가짜 색이 아니라 진짜 테마다. */
 const CHOICES = ["feldgrau", "graphite", "paper"] as const;
 
-/** 목업 트리 — 막대만 그리면 조립이 끝나도 빈 상자로 보인다. depth 는 들여쓰기. */
-const MOCK_TREE: Array<{ name: string; depth: number; dir?: boolean; on?: boolean }> = [
-  { name: "src", depth: 0, dir: true },
-  { name: "components", depth: 1, dir: true },
-  { name: "Footer.jsx", depth: 2, on: true },
-  { name: "Header.jsx", depth: 2 },
-  { name: "styles", depth: 1, dir: true },
-  { name: "global.css", depth: 2 },
-  { name: "package.json", depth: 0 },
-];
 
 interface Props {
   /** 오프닝이 끝났다(또는 건너뛰었다). 다음 단계로. */
@@ -128,10 +106,6 @@ export class Opening extends React.Component<Props, State> {
       background: tk.bgRoot, color: tk.fg, fontFamily: "var(--font-ui, system-ui, sans-serif)",
       transition: "background .6s ease, color .6s ease",
     };
-
-    const swapChars = time < BEATS[5].at ? null
-      : Math.round(E(26500, 35500) * SWAP_TO.length);
-    const hotSwap = time >= BEATS[5].at && time < 37500;
 
     return (
       <div style={stage} role="dialog" aria-modal="true" aria-label={t("open.aria")}>
@@ -234,12 +208,6 @@ export class Opening extends React.Component<Props, State> {
           );
         })()}
 
-        {/* 4~7 조립 + 실연 */}
-        <Assembled
-          time={time} tk={tk} E={E} S={S}
-          swapChars={swapChars} hotSwap={hotSwap}
-        />
-
         {/* 8 마무리 */}
         {(() => {
           const op = E(48200, 49600);
@@ -262,28 +230,6 @@ export class Opening extends React.Component<Props, State> {
                   fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10,
                   border: `1px solid ${tk.w14}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
                 }}>{t("open.done.skip")}</button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* 진행 중 자막 — 영화처럼 하단에 고정한다. 카드로 띄우면 조립을 가리고,
-            비트마다 위치가 튀어 눈이 따라다녀야 한다. */}
-        {(() => {
-          const cap = captionFor(beat.id);
-          if (!cap) return null;
-          // 비트가 바뀔 때 새로 뜨도록 key 를 준다 — 글자만 갈리면 전환이 안 읽힌다
-          return (
-            <div key={cap} className="sz-in" style={{
-              position: "absolute", left: 0, right: 0, bottom: "6%",
-              display: "grid", justifyItems: "center", gap: 6, padding: "0 8vw", textAlign: "center",
-              pointerEvents: "none",
-            }}>
-              <div style={{ fontSize: "clamp(15px,1.8vw,22px)", fontWeight: 600, letterSpacing: "-.01em" }}>
-                {t(`open.cap.${cap}.t`)}
-              </div>
-              <div style={{ fontSize: "clamp(11.5px,1.15vw,14px)", color: tk.fgSub, maxWidth: "62ch", lineHeight: 1.6 }}>
-                {t(`open.cap.${cap}.b`)}
               </div>
             </div>
           );
@@ -345,249 +291,6 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
   );
 }
 
-/** 조립되는 인터페이스 + 실연 */
-function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
-  time: number; tk: typeof THEME_TOKENS[string];
-  E: (a: number, b: number) => number; S: (a: number, b: number) => number;
-  swapChars: number | null; hotSwap: boolean;
-}) {
-  const op = E(12200, 12600) * (1 - E(47500, 49500));
-  if (op < 0.01) return null;
-  const box = (k: string): React.CSSProperties => {
-    const e = PANEL_ENTRIES.find(p => p.key === k)!;
-    const p = E(e.at, e.at + PANEL_DUR);
-    return { opacity: p, transform: `translate(${e.dx * (1 - p)}px, ${e.dy * (1 - p)}px)` };
-  };
-  const tag = (k: string): React.CSSProperties => {
-    const e = PANEL_ENTRIES.find(p => p.key === k)!;
-    const p = E(e.at + 700, e.at + 1300) * (1 - E(18600, 19700));
-    return { opacity: p, transform: `translateY(${(1 - p) * 8}px)` };
-  };
-  const panel: React.CSSProperties = {
-    position: "absolute", background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: 8,
-  };
-  const tagS: React.CSSProperties = {
-    position: "absolute", fontSize: 10.5, letterSpacing: ".16em", color: tk.accent,
-    textTransform: "uppercase", fontWeight: 700, whiteSpace: "nowrap", top: "77%",
-  };
-  const ask = t("open.ask");
-  const askN = Math.round(E(20000, 25500) * ask.length);
-
-  return (
-    <div aria-hidden style={{
-      position: "absolute", inset: 0, opacity: op,
-      transform: `scale(${1 - E(46000, 49000) * 0.06})`,
-    }}>
-      {/* 창 프레임 — 위아래가 열려 있으면 패널이 허공에 뜬 상자로 보인다.
-          조립이 끝난 뒤 조용히 들어와 화면을 닫아준다. */}
-      {(() => {
-        const fr = E(15800, 16900);
-        if (fr < 0.01) return null;
-        const menus = ["파일", "편집", "보기", "이동", "AI"];
-        return (
-          <>
-            <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "3%", height: "4.5%",
-              background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "8px 8px 0 0",
-              display: "flex", alignItems: "center", gap: 12, padding: "0 12px",
-              opacity: fr, transform: `translateY(${(1 - fr) * -8}px)`,
-            }}>
-              <span style={{ width: 7, height: 7, borderRadius: 2, background: tk.accent }} />
-              {menus.map(m => (
-                <span key={m} style={{ fontSize: 9.5, color: tk.fgDim }}>{m}</span>
-              ))}
-            </div>
-            <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "75.5%", height: "3.4%",
-              background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "0 0 8px 8px",
-              display: "flex", alignItems: "center", padding: "0 12px", gap: 10,
-              opacity: fr, transform: `translateY(${(1 - fr) * 8}px)`,
-            }}>
-              <span style={{ fontSize: 9, color: time >= 43500 ? tk.ok : tk.fgDim }}>
-                {time >= 43500 ? t("open.status.changed") : t("open.status.clean")}
-              </span>
-            </div>
-          </>
-        );
-      })()}
-
-      {/* 레일 */}
-      <div style={{ ...panel, left: "6%", top: "9%", width: "3.2%", height: "65%", ...box("rail") }}>
-        {[0, 1, 2, 3].map(i => (
-          <div key={i} style={{
-            width: "56%", margin: "8% auto", aspectRatio: "1", borderRadius: 3,
-            background: i === 0 ? tk.accent : tk.fgDim, opacity: i === 0 ? 1 : .3,
-          }} />
-        ))}
-      </div>
-      <div style={{ ...tagS, left: "6%", ...tag("rail") }}>{t("open.tag.rail")}</div>
-
-      {/* 프로젝트 + 대화 */}
-      <div style={{ ...panel, left: "10.2%", top: "9%", width: "19%", height: "65%", ...box("left") }}>
-        <div style={{ padding: "10px 8px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
-          {t("open.tag.project")}
-        </div>
-        <div style={{ padding: "6px 4px" }}>
-          {MOCK_TREE.map((n, i) => (
-            <div key={i} style={{
-              display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, lineHeight: 1.9,
-              padding: `0 6px 0 ${6 + n.depth * 11}px`, borderRadius: 4,
-              background: n.on ? tk.accentSoft : "transparent",
-              color: n.on ? tk.fg : n.dir ? tk.fgSub : tk.fgSub2,
-              fontWeight: n.on ? 600 : 400,
-            }}>
-              <span style={{ opacity: .55, fontSize: 8 }}>{n.dir ? "▾" : "·"}</span>
-              {n.name}
-            </div>
-          ))}
-        </div>
-        {/* 답변 — 코드가 다시 쓰인 뒤에 온다 */}
-        <div style={{
-          position: "absolute", left: "6%", right: "6%", bottom: "26%",
-          fontSize: 10, lineHeight: 1.55, color: tk.fgSub,
-          opacity: E(35800, 36800),
-        }}>
-          <span style={{ color: tk.accent, fontSize: 9, letterSpacing: ".1em", display: "block", marginBottom: 3 }}>
-            Claude
-          </span>
-          {t("open.reply")}
-        </div>
-        <div style={{ position: "absolute", left: "6%", right: "6%", bottom: "5%" }}>
-          <div style={{
-            fontSize: 11.5, lineHeight: 1.5, background: tk.bgEditor, borderRadius: 7, padding: "8px 10px",
-            minHeight: "2.6em", color: tk.fg,
-            border: `1px solid ${time >= 20000 && time < 27000 ? tk.accent : tk.w07}`, transition: "border-color .4s",
-          }}>
-            <span style={{ color: tk.accent, fontSize: 9.5, letterSpacing: ".1em", display: "block", marginBottom: 4 }}>
-              {t("open.tag.ask")}
-            </span>
-            {ask.slice(0, askN)}
-            {time >= 20000 && time < 26500 && <Caret c={tk.accentHi} />}
-          </div>
-        </div>
-      </div>
-      <div style={{ ...tagS, left: "10.2%", ...tag("left") }}>{t("open.tag.left")}</div>
-
-      {/* 에디터 */}
-      <div style={{ ...panel, left: "30%", top: "9%", width: "41%", height: "65%", background: tk.bgEditor, ...box("editor") }}>
-        {/* 탭 스트립 — 이게 없으면 코드 상자가 떠 있는 것처럼 보인다 */}
-        <div style={{
-          display: "flex", alignItems: "stretch", height: 26,
-          borderBottom: `1px solid ${tk.w07}`, background: tk.bgPanel,
-          borderRadius: "7px 7px 0 0", overflow: "hidden",
-        }}>
-          {["Footer.jsx", "App.jsx"].map((n, i) => (
-            <div key={n} style={{
-              display: "flex", alignItems: "center", padding: "0 11px",
-              fontFamily: "var(--font-mono, monospace)", fontSize: 9.5,
-              borderRight: `1px solid ${tk.w07}`,
-              background: i === 0 ? tk.bgEditor : "transparent",
-              color: i === 0 ? tk.fg : tk.fgDim,
-            }}>{n}</div>
-          ))}
-        </div>
-        <pre style={{
-          position: "absolute", inset: "34px 5% 6%", fontFamily: "var(--font-mono, ui-monospace, monospace)",
-          fontSize: "clamp(9px,1.05vw,15px)", lineHeight: 2, margin: 0, whiteSpace: "pre",
-          overflow: "hidden", color: tk.fgCode,
-        }}>
-          {MOCK_CODE.map(([txt, cls], i) => {
-            if (txt === "@SWAP@") {
-              const shown = swapChars === null ? "2024" : SWAP_TO.slice(0, swapChars);
-              return (
-                <span key={i}>
-                  <span style={{
-                    borderRadius: 3, padding: "0 2px",
-                    background: hotSwap ? tk.accentSoft : "transparent",
-                    boxShadow: hotSwap ? `0 0 22px ${tk.accentSoft}` : "none",
-                  }}>{shown}</span>
-                  {swapChars !== null && swapChars < SWAP_TO.length && <Caret c={tk.accentHi} />}
-                </span>
-              );
-            }
-            const color = cls === "k" ? tk.accentHi : cls === "s" ? tk.ok : cls === "t" ? tk.fgSub : undefined;
-            return <span key={i} style={color ? { color } : undefined}>{txt}</span>;
-          })}
-        </pre>
-      </div>
-      <div style={{ ...tagS, left: "30%", ...tag("editor") }}>{t("open.tag.editor")}</div>
-
-      {/* 검토 */}
-      <div style={{ ...panel, left: "71.5%", top: "9%", width: "22.5%", height: "65%", ...box("right") }}>
-        <div style={{ padding: "10px 9px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
-          {t("open.tag.agents")}
-        </div>
-        {(() => {
-          const busy = time >= 20000 && time < 37500;
-          const st = time < 20000 ? "idle" : time < 26000 ? "read" : time < 36000 ? "edit" : "review";
-          return (
-            <div style={{
-              margin: "7px 9px", padding: "8px 9px", borderRadius: 7, background: tk.bgEditor,
-              border: `1px solid ${busy ? tk.accent : tk.w07}`, transition: "border-color .4s",
-            }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 11 }}>
-                <span style={{ fontWeight: 650 }}>Claude</span>
-                <span style={{ marginLeft: "auto", fontSize: 9.5, color: busy ? tk.accent : tk.fgDim }}>
-                  {t("open.st." + st)}
-                </span>
-              </div>
-              <div style={{
-                fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: tk.fgDim, marginTop: 3,
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              }}>{time >= 20000 ? "src/components/Footer.jsx" : "—"}</div>
-              <div style={{ height: 2, borderRadius: 1, background: tk.w12, marginTop: 6, overflow: "hidden" }}>
-                <div style={{ height: "100%", background: tk.accent, width: `${E(20000, 36000) * 100}%` }} />
-              </div>
-            </div>
-          );
-        })()}
-        <div style={{ padding: "6px 9px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
-          {t("open.tag.review")}
-        </div>
-        {(() => {
-          const shown = time >= 37500 && time < 44000;
-          const stamped = time >= 43500 && time < 47000;
-          if (stamped) return (
-            <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "38%", display: "grid", placeItems: "center",
-              fontSize: 15, fontWeight: 650, color: tk.ok,
-            }}>{t("open.applied")}</div>
-          );
-          return (
-            <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "38%", background: tk.bgEditor,
-              border: `1px solid ${tk.w12}`, borderRadius: 8, padding: 11,
-              opacity: shown ? 1 : 0, transform: shown ? "none" : "translateY(14px) scale(.97)",
-              transition: "opacity .5s, transform .6s cubic-bezier(.22,1.2,.36,1)",
-            }}>
-              <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 9.5, color: tk.fgDim }}>
-                src/components/Footer.jsx
-              </div>
-              <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 10, lineHeight: 1.7, margin: "6px 0" }}>
-                <div style={{ color: "#C98A8A" }}>− © 2024 SCHUTZ STUDIO</div>
-                <div style={{ color: tk.ok }}>+ © {"{new Date().getFullYear()}"} SCHUTZ STUDIO</div>
-              </div>
-              <div style={{ display: "flex", gap: 5 }}>
-                <span style={{
-                  fontSize: 10.5, padding: "3px 11px", borderRadius: 5, background: tk.accent, color: tk.onAccent,
-                  fontWeight: 650,
-                  transform: time >= 42700 && time < 43400 ? "scale(.9)" : "none",
-                  boxShadow: time >= 42700 && time < 43400 ? `0 0 30px ${tk.accent}` : "none",
-                  transition: "transform .18s cubic-bezier(.22,1.2,.36,1), box-shadow .3s",
-                }}>{t("open.accept")}</span>
-                <span style={{ fontSize: 10.5, padding: "3px 11px", borderRadius: 5, border: `1px solid ${tk.w12}`, color: tk.fgSub }}>
-                  {t("open.reject")}
-                </span>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-      <div style={{ ...tagS, left: "71.5%", ...tag("right") }}>{t("open.tag.right")}</div>
-    </div>
-  );
-}
-
 /**
  * 브랜드 마크. 언제나 선으로 그린다 — 이 path 는 외곽선용이라 fill 을 주면 안쪽
  * 여백이 메워져 삼각형 두 개로 뭉개진다(로고로 안 읽힌다).
@@ -605,6 +308,3 @@ function Mark({ color, size, dash = 0, width = 7 }: {
   );
 }
 
-function Caret({ c }: { c: string }) {
-  return <span style={{ display: "inline-block", width: 2, height: "1.05em", background: c, verticalAlign: -3 }} />;
-}
