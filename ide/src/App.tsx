@@ -69,7 +69,7 @@ interface Proposal {
 const MONO = "var(--font-code,'IBM Plex Mono','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',monospace)";
 const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',sans-serif)";
 
-const APP_VERSION = "0.0.2";
+const APP_VERSION = "0.0.3";
 
 /** 맥 단축키 글리프(⌘⇧⌥)를 플랫폼에 맞게 표기 — Windows/Linux에서는 Ctrl/Shift/Alt 텍스트로 */
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");

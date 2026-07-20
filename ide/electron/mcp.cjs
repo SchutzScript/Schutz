@@ -122,7 +122,7 @@ async function startServer(name) {
     await request(s, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "Schutz", version: "0.0.2" },
+      clientInfo: { name: "Schutz", version: "0.0.3" },
     }, 20000);
     sendRpc(s, "notifications/initialized", {}, true);
     const listed = await request(s, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
