@@ -46,6 +46,7 @@ import {
 } from "./settings";
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
+import type { TourHost } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
 interface InlineRange { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }
@@ -3720,7 +3721,7 @@ ${(r.output || "").slice(0, 2000)}`;
           <span style={{ width: 1, height: 16, background: "var(--w07)" }} />
 
           {/* menu bar */}
-          <div style={{ display: "flex", gap: 1 }}>
+          <div data-tour="menubar" style={{ display: "flex", gap: 1 }}>
             {MENUS.map(([k, items]) => {
               const open = s.openMenu === k;
               return (
@@ -3812,7 +3813,7 @@ ${(r.output || "").slice(0, 2000)}`;
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
 
           {/* tool rail */}
-          <div style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
+          <div data-tour="rail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
             <button data-tour="rail-tree" className="hv07" title={t("sc4.railProject")} onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: s.leftTab === "tree" ? "rgba(143,168,147,.16)" : "transparent" }}>
               <FolderIcon color={s.leftTab === "tree" ? "var(--accent-hi)" : "#6E776F"} />
             </button>
@@ -3844,7 +3845,7 @@ ${(r.output || "").slice(0, 2000)}`;
             <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
-            <div key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: TREE_MIN_H, display: "flex", flexDirection: "column" }}>
+            <div data-tour="left-panel" key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: TREE_MIN_H, display: "flex", flexDirection: "column" }}>
               {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
             </div>
             {/* 트리↔대화 세로 리사이즈 핸들 */}
@@ -3865,9 +3866,11 @@ ${(r.output || "").slice(0, 2000)}`;
           <div onMouseDown={e => this.startResize("right", e)} title={t("sc4.resizeHandle")}
             style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
           {/* ── Right column ── */}
-          <div data-tour="agents" style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
-            {this.renderAgents()}
-            {this.renderReview()}
+          {/* 예전엔 이 컬럼 전체가 data-tour="agents" 라 에이전트와 변경 검토가
+              한 덩어리로 강조됐다. 둘은 다른 이야기라 앵커를 나눈다. */}
+          <div style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
+            <div data-tour="agents" style={{ flex: "none", display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderAgents()}</div>
+            <div data-tour="review" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderReview()}</div>
           </div>
         </div>
 
@@ -5101,7 +5104,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const errs = s.problems.filter(p => p.severity >= 8).length;
     const warns = s.problems.length - errs;
     return (
-      <div style={{
+      <div data-tour="terminal" style={{
         // minHeight:0 이 없으면 flex 아이템의 min-height:auto 가 내용 높이를 바닥으로 잡아
         // height:0 을 줘도 210 그대로 남는다(접히지 않는다)
         flex: "none", height: s.termOpen && s.termReady ? 210 : 0, minHeight: 0, overflow: "hidden",
@@ -5790,6 +5793,7 @@ ${(r.output || "").slice(0, 2000)}`;
   openMcp() { this.cancelClose("mcp"); this.setState({ mcpOpen: true }); void this.refreshMcp(); }
 
   // ── 사용법 스포트라이트 투어 ─────────────────────────────────────────────
+  private _tourCardH = 168;   // 첫 렌더 추정치. 마운트 직후 실측으로 대체된다.
   private _tourResize = () => { if (this.state.tourOpen) this.forceUpdate(); };
   /** 창이 짧아지면 대화가 트리를 밀어내므로 상한을 다시 적용한다. */
   private _clampChatOnResize = () => {
@@ -5800,22 +5804,58 @@ ${(r.output || "").slice(0, 2000)}`;
   };
   startTour() {
     window.addEventListener("resize", this._tourResize);
+    // 중간에 창을 닫았으면 그 단계부터. 인덱스가 아니라 id 로 찾는다 — 단계 순서가
+    // 바뀌어도 엉뚱한 곳에서 재개되지 않게.
+    let from = 0;
+    try {
+      const saved = localStorage.getItem("schutz.tourStep");
+      const at = saved ? TOUR_STEPS.findIndex(x => x.id === saved) : -1;
+      if (at > 0) from = at;
+    } catch { /* */ }
     // 다른 오버레이/모달은 모두 닫고 시작 — 투어(z240)가 덮어 가려진 채로 남지 않도록
     this.setState({
-      tourOpen: true, tourStep: 0, openMenu: null, projOpen: false,
+      tourOpen: true, tourStep: from, openMenu: null, projOpen: false,
       settingsOpen: false, cmdOpen: false, quickOpen: false, symOpen: false, searchOpen: false,
       aboutOpen: false, commandsOpen: false, mcpOpen: false, usageOpen: false, keysOpen: false,
       extDetail: null, extPanel: null, askClose: null, closing: [],
     });
   }
-  private tourStepTo(i: number) {
+  /** 투어가 앱을 건드리는 유일한 통로. tour.ts 가 App 을 import 하지 않게 한다. */
+  private tourHost(): TourHost {
+    return {
+      showLeftTab: tab => this.setState({ leftTab: tab } as any),
+      showTerminal: open => { if (this.state.termOpen !== open) this.toggleTerm(); },
+      hasWorkspace: () => !!this.state.workspace,
+    };
+  }
+
+  /**
+   * dir 은 건너뛸 방향 — 뒤로 가다가 조건에 안 맞는 단계를 만나면 계속 뒤로 가야지
+   * 앞으로 튕기면 안 된다.
+   */
+  private tourStepTo(i: number, dir: 1 | -1 = 1) {
     if (i < 0) return;
     if (i >= TOUR_STEPS.length) { this.endTour(); return; }
-    this.setState({ tourStep: i });
+    const step = TOUR_STEPS[i];
+    const host = this.tourHost();
+    if (step.when && !step.when(host)) { this.tourStepTo(i + dir, dir); return; }
+    step.before?.(host);
+    this.setState({ tourStep: i }, () => {
+      // before 가 연 패널이 실제로 그려질 한 프레임을 준다. 그래도 앵커가 없으면
+      // 건너뛴다 — 예전엔 조용히 중앙 카드로 퇴화해서 아무것도 강조되지 않았다.
+      requestAnimationFrame(() => {
+        if (step.anchor && !anchorRect(step.anchor)) { this.tourStepTo(i + dir, dir); return; }
+        try { localStorage.setItem("schutz.tourStep", step.id); } catch { /* */ }
+      });
+    });
   }
+
   endTour() {
     window.removeEventListener("resize", this._tourResize);
-    try { localStorage.setItem("schutz.tutorialDone", "1"); } catch { /* ignore */ }
+    try {
+      localStorage.setItem("schutz.tutorialDone", "1");
+      localStorage.removeItem("schutz.tourStep");   // 완주했으면 이어보기 지점도 지운다
+    } catch { /* ignore */ }
     this.setState({ tourOpen: false });
   }
   renderTour() {
@@ -5823,8 +5863,10 @@ ${(r.output || "").slice(0, 2000)}`;
     const cur = Math.min(Math.max(0, this.state.tourStep), TOUR_STEPS.length - 1);
     const step = TOUR_STEPS[cur];
     const rect = anchorRect(step.anchor);
-    const cardW = 330, cardH = 168;
-    const pos = cardPos(rect, cardW, cardH);
+    // 카드 높이는 실제로 재서 쓴다. 예전엔 168 로 박아놔서 문장이 긴 독일어·일본어에선
+    // 배치 계산이 실제 카드보다 작게 잡혀 화면 밖으로 밀려났다.
+    const cardW = 330, cardH = this._tourCardH;
+    const pos = cardPos(rect, cardW, cardH, step.placement);
     const isLast = cur === TOUR_STEPS.length - 1;
     const tourBtn: React.CSSProperties = { padding: "5px 14px", fontSize: 11.5, borderRadius: 7, cursor: "pointer", fontFamily: SUIT };
     return (
@@ -5833,18 +5875,30 @@ ${(r.output || "").slice(0, 2000)}`;
         {rect
           ? <div className="sz-tour-hole" style={{ position: "fixed", left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderRadius: 9, pointerEvents: "none" }} />
           : <div className="sz-backdrop" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.58)" }} />}
-        <div className="sz-pop" onClick={e => e.stopPropagation()} style={{ position: "fixed", left: pos.left, top: pos.top, width: cardW, background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16, fontFamily: SUIT }}>
+        <div className="sz-pop" onClick={e => e.stopPropagation()}
+          ref={el => {
+            if (!el) return;
+            const h = el.offsetHeight;
+            // 2px 이상 달라질 때만 다시 그린다 — 안 그러면 반올림 오차로 무한 루프.
+            if (Math.abs(h - this._tourCardH) > 2) { this._tourCardH = h; this.forceUpdate(); }
+          }}
+          style={{ position: "fixed", left: pos.left, top: pos.top, width: cardW, background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16, fontFamily: SUIT }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--fg)", marginBottom: 7 }}>{t(step.titleKey)}</div>
           <div style={{ fontSize: 12, color: "var(--fg-sub)", lineHeight: 1.6 }}>{t(step.bodyKey)}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 15 }}>
-            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              {TOUR_STEPS.map((_, i) => (
-                <span key={i} style={{ width: i === cur ? 16 : 6, height: 6, borderRadius: 3, background: i === cur ? "var(--accent)" : "var(--w12)", transition: "all var(--dur) var(--ease)" }} />
-              ))}
+            {/* 예전엔 점이었는데 14단계에선 안 읽힌다. 정의만 해두고 안 쓰던
+                tour.progress 키를 여기서 쓴다. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div style={{ width: 54, height: 3, borderRadius: 2, background: "var(--w12)", overflow: "hidden" }}>
+                <div style={{ width: `${((cur + 1) / TOUR_STEPS.length) * 100}%`, height: "100%", background: "var(--accent)", transition: "width var(--dur) var(--ease)" }} />
+              </div>
+              <span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontVariantNumeric: "tabular-nums" }}>
+                {t("tour.progress", { cur: cur + 1, total: TOUR_STEPS.length })}
+              </span>
             </div>
             <div style={{ flex: 1 }} />
             <button className="hvDim" onClick={() => this.endTour()} style={{ background: "transparent", border: "none", color: "var(--fg-dim)", fontSize: 11.5, cursor: "pointer", padding: "5px 8px", borderRadius: 6, fontFamily: SUIT }}>{t("common.skip")}</button>
-            {cur > 0 && <button className="hv08" onClick={() => this.tourStepTo(cur - 1)} style={{ ...tourBtn, background: "transparent", border: "1px solid var(--w10)", color: "var(--fg-sub)" }}>{t("common.prev")}</button>}
+            {cur > 0 && <button className="hv08" onClick={() => this.tourStepTo(cur - 1, -1)} style={{ ...tourBtn, background: "transparent", border: "1px solid var(--w10)", color: "var(--fg-sub)" }}>{t("common.prev")}</button>}
             <button className="hvAccent" onClick={() => this.tourStepTo(cur + 1)} style={{ ...tourBtn, background: "var(--accent)", color: "var(--on-accent)", border: "none", fontWeight: 700 }}>{isLast ? t("common.done") : t("common.next")}</button>
           </div>
         </div>
