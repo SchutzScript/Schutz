@@ -106,3 +106,37 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$env:GITHUB_REF_NAME" (Get-ChildItem release/SchutzSetup-*.exe).FullName --repo "$env:GITHUB_REPOSITORY" --clobber
+
+  # 릴리스는 빌드가 다 끝날 때까지 draft 로 둔다 — 중간에 공개하면 아직 안 올라온
+  # 플랫폼을 사용자가 빈손으로 받는다. 그렇다고 draft 로 두고 끝내면 아무도 못 받으므로
+  # (v0.0.1~v0.0.3 이 그렇게 묻혔다) 여기서 마지막에 공개한다.
+  # needs: build 라 매트릭스 중 하나라도 실패하면 이 잡은 아예 안 돈다 — 반쪽짜리
+  # 릴리스가 공개된 채 남지 않는다.
+  publish-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all platform installers are present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          names=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
+          echo "$names"
+          missing=""
+          # 윈도우 설치본은 electron-builder 가 아니라 별도 스텝이 glob 로 올린다.
+          # glob 이 빗나가도 그 스텝은 조용히 성공하므로 여기서 존재를 확인한다.
+          echo "$names" | grep -q '^SchutzSetup-.*\.exe$'   || missing="${missing} windows-installer"
+          echo "$names" | grep -q '\.dmg$'                  || missing="${missing} macos-dmg"
+          echo "$names" | grep -q '\.AppImage$'             || missing="${missing} linux-appimage"
+          if [ -n "$missing" ]; then
+            echo "::error::설치본이 빠졌습니다:${missing} — 공개하지 않고 draft 로 둡니다."
+            exit 1
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft,assets --jq '"공개 완료 — draft=\(.isDraft), 에셋 \(.assets | length)개"'
