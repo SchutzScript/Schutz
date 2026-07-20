@@ -20,6 +20,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc4.railTerminal": { ko: "터미널", en: "Terminal", de: "Terminal", ja: "ターミナル" },
   "sc4.railSettings": { ko: "설정", en: "Settings", de: "Einstellungen", ja: "設定" },
   "sc4.resizeHandle": { ko: "드래그로 크기 조절", en: "Drag to resize", de: "Zum Anpassen ziehen", ja: "ドラッグしてサイズ変更" },
+  "sc4.resizeHandleV": { ko: "드래그로 대화 높이 조절", en: "Drag to resize chat", de: "Zum Anpassen des Chats ziehen", ja: "ドラッグしてチャットの高さを変更" },
   "sc4.discardConfirm": { ko: "'{path}' 의 변경을 취소할까요? 되돌릴 수 없습니다.", en: "Discard changes to '{path}'? This cannot be undone.", de: "Änderungen an '{path}' verwerfen? Dies kann nicht rückgängig gemacht werden.", ja: "'{path}' の変更を取り消しますか？元に戻せません。" },
   "sc4.closeTab": { ko: "닫기", en: "Close", de: "Schließen", ja: "閉じる" },
   "sc4.agentWorking": { ko: "{name} 작업 중", en: "{name} working", de: "{name} arbeitet", ja: "{name} 作業中" },

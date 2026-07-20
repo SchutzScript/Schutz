@@ -70,6 +70,10 @@ const MONO = "var(--font-code,'IBM Plex Mono','Yu Gothic UI','Meiryo','Segoe UI 
 const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',sans-serif)";
 
 const APP_VERSION = "0.0.3";
+// 좌측 컬럼 세로 분할의 하한. 대화는 제목·탭·입력창만 130px 가량 먹어서
+// 이보다 낮추면 메시지가 한 줄도 안 남는다.
+const CHAT_MIN_H = 180;
+const TREE_MIN_H = 120;
 
 /** 맥 단축키 글리프(⌘⇧⌥)를 플랫폼에 맞게 표기 — Windows/Linux에서는 Ctrl/Shift/Alt 텍스트로 */
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
@@ -236,6 +240,7 @@ interface S {
   /** 좌·우 패널 폭 (드래그 리사이즈) */
   leftW: number;
   rightW: number;
+  chatH: number;
   /** 마크다운 미리보기 중인 rel 집합 */
   mdPreview: Record<string, boolean>;
   /** 찾기·바꾸기 모드(검색 오버레이) */
@@ -399,6 +404,8 @@ export class App extends React.Component<{}, S> {
     toasts: [],
     leftW: (() => { try { return Math.max(200, Math.min(520, +(localStorage.getItem("schutz.leftW") || 272))); } catch { return 272; } })(),
     rightW: (() => { try { return Math.max(240, Math.min(600, +(localStorage.getItem("schutz.rightW") || 336))); } catch { return 336; } })(),
+    // 대화 높이. 예전엔 트리와 대화가 둘 다 flex:1 이라 50/50 으로 고정이었다.
+    chatH: (() => { try { return Math.max(CHAT_MIN_H, +(localStorage.getItem("schutz.chatH") || 360)); } catch { return 360; } })(),
     mdPreview: {}, replaceOpen: false, replaceVal: "",
     searchOpts: { regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "" },
     mruOpen: false, mruSel: 0,
@@ -565,6 +572,39 @@ export class App extends React.Component<{}, S> {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     document.body.style.cursor = "col-resize";
+  }
+
+  /** 좌측 컬럼 안 트리↔대화 세로 리사이즈 */
+  private startChatResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = this.state.chatH;
+    // 마지막 값을 따로 들고 있는다 — onUp 에서 this.state 를 읽으면 직전 mousemove 의
+    // setState 가 아직 반영 안 됐을 수 있어 한 프레임 낡은 값이 저장된다.
+    let last = startH;
+    const onMove = (ev: MouseEvent) => {
+      // 위로 끌면 대화가 커진다. 컨테이너 높이를 매번 다시 재는 이유 — 드래그 중에
+      // 터미널이 열리거나 창이 바뀌면 상한이 달라진다.
+      const avail = this._leftCol?.clientHeight ?? window.innerHeight;
+      last = this.clampChatH(startH - (ev.clientY - startY), avail);
+      this.setState({ chatH: last });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      try { localStorage.setItem("schutz.chatH", String(last)); } catch { /* */ }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "row-resize";
+  }
+
+  /** 트리·대화 양쪽의 최소 높이를 보장한다. 창이 짧으면 상한이 하한보다 작아질 수
+   *  있어서(음수 폭) 그때는 하한을 우선한다 — 안 그러면 대화가 0 이 된다. */
+  private clampChatH(h: number, avail: number): number {
+    const hi = Math.max(CHAT_MIN_H, avail - TREE_MIN_H);
+    return Math.round(Math.max(CHAT_MIN_H, Math.min(hi, h)));
   }
 
   async renameAt(rel: string) {
@@ -1601,6 +1641,7 @@ export class App extends React.Component<{}, S> {
       () => { try { paneRegistry.panes.get(rel)?.editor.focus(); } catch { /* */ } });
   }
 
+  private _leftCol: HTMLDivElement | null = null;
   private _dragTab: { slot: number; rel: string } | null = null;
   /** 탭 드래그 재정렬 (같은 슬롯 내) */
   reorderTab(slot: number, targetRel: string) {
@@ -2907,6 +2948,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   componentDidMount() {
+    window.addEventListener("resize", this._clampChatOnResize);
     applyTheme(getThemeId());
     applyUiFont(); // 저장된 UI 폰트를 전역 적용
     this._langOff = onLangChange(() => { this.forceUpdate(); this.playLangSwap(); }); // 언어 변경 시 전체 리렌더
@@ -3002,6 +3044,7 @@ ${(r.output || "").slice(0, 2000)}`;
     this._fsOff?.();
     this._langOff?.();
     window.removeEventListener("resize", this._tourResize);
+    window.removeEventListener("resize", this._clampChatOnResize);
     this._mruCommit?.();
     try { window.schutz?.watchStop(); } catch { /* */ }
     lspClient.shutdownAll();
@@ -3730,13 +3773,17 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
 
           {/* ── Left column ── */}
-          <div style={{ flex: "none", width: s.leftW, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
+          <div ref={el => { this._leftCol = el; }}
+            style={{ flex: "none", width: s.leftW, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
             <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
-            <div key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: TREE_MIN_H, display: "flex", flexDirection: "column" }}>
               {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
             </div>
+            {/* 트리↔대화 세로 리사이즈 핸들 */}
+            <div onMouseDown={e => this.startChatResize(e)} title={t("sc4.resizeHandleV")}
+              style={{ flex: "none", height: 5, cursor: "row-resize", background: "transparent", zIndex: 30 }} className="szResize" />
             {this.renderChat()}
           </div>
           {/* 좌 리사이즈 핸들 */}
@@ -4365,7 +4412,7 @@ ${(r.output || "").slice(0, 2000)}`;
   renderChat() {
     const s = this.state;
     return (
-      <div data-tour="chat" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div data-tour="chat" style={{ flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />
@@ -5678,6 +5725,13 @@ ${(r.output || "").slice(0, 2000)}`;
 
   // ── 사용법 스포트라이트 투어 ─────────────────────────────────────────────
   private _tourResize = () => { if (this.state.tourOpen) this.forceUpdate(); };
+  /** 창이 짧아지면 대화가 트리를 밀어내므로 상한을 다시 적용한다. */
+  private _clampChatOnResize = () => {
+    const avail = this._leftCol?.clientHeight;
+    if (!avail) return;
+    const h = this.clampChatH(this.state.chatH, avail);
+    if (h !== this.state.chatH) this.setState({ chatH: h });
+  };
   startTour() {
     window.addEventListener("resize", this._tourResize);
     // 다른 오버레이/모달은 모두 닫고 시작 — 투어(z240)가 덮어 가려진 채로 남지 않도록
