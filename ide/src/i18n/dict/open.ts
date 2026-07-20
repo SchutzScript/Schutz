@@ -77,6 +77,41 @@ export const dict: Record<string, Record<string, string>> = {
   "open.reject":  { ko: "거절", en: "Reject", de: "Ablehnen", ja: "却下" },
   "open.applied": { ko: "✓ 반영됨", en: "✓ Applied", de: "✓ Übernommen", ja: "✓ 反映済み" },
 
+  // ── 진행 중 자막 ───────────────────────────────────────────────────
+  // 조립 뒤엔 화면이 알아서 움직이는데 왜 그러는지 설명이 없으면 그냥 구경만 하게 된다.
+  // 각 장면마다 제목 한 줄 + 설명 한 줄. 영화 자막처럼 하단에 고정한다.
+  "open.cap.assemble.t": { ko: "화면은 네 부분입니다", en: "Four parts to the screen", de: "Vier Bereiche", ja: "画面は4つの領域です" },
+  "open.cap.assemble.b": {
+    ko: "왼쪽에 파일과 대화, 가운데에 편집기, 오른쪽에 에이전트와 변경 검토.",
+    en: "Files and chat on the left, the editor in the middle, agents and change review on the right.",
+    de: "Links Dateien und Chat, in der Mitte der Editor, rechts Agenten und Änderungsprüfung.",
+    ja: "左にファイルとチャット、中央にエディタ、右にエージェントと変更レビュー。",
+  },
+
+  "open.cap.ask.t": { ko: "그냥 말하면 됩니다", en: "Just say it", de: "Einfach sagen", ja: "そのまま言うだけ" },
+  "open.cap.ask.b": {
+    ko: "명령어를 외울 필요가 없습니다. 하고 싶은 일을 적으면 에이전트가 파일을 찾아갑니다.",
+    en: "No commands to memorise. Describe what you want and the agent goes and finds the file.",
+    de: "Keine Befehle zu lernen. Beschreiben Sie, was Sie wollen — der Agent findet die Datei.",
+    ja: "コマンドを覚える必要はありません。やりたいことを書けば、エージェントがファイルを探します。",
+  },
+
+  "open.cap.rewrite.t": { ko: "고쳐지는 과정이 보입니다", en: "You watch it happen", de: "Sie sehen es geschehen", ja: "直る過程が見えます" },
+  "open.cap.rewrite.b": {
+    ko: "완성된 diff 만 던져주지 않습니다. 어느 줄이 어떻게 바뀌는지 그대로 흘러갑니다.",
+    en: "You don't get handed a finished diff. Each line changes in front of you, as it happens.",
+    de: "Sie bekommen kein fertiges Diff vorgesetzt. Jede Zeile ändert sich vor Ihren Augen.",
+    ja: "完成したdiffを渡されるのではありません。どの行がどう変わるかがそのまま流れます。",
+  },
+
+  "open.cap.approve.t": { ko: "반영은 당신이 정합니다", en: "You decide what lands", de: "Sie entscheiden, was bleibt", ja: "反映はあなたが決めます" },
+  "open.cap.approve.b": {
+    ko: "수정안은 파일에 바로 들어가지 않고 검토에 쌓입니다. 수락해야 반영됩니다.",
+    en: "Edits never land straight in your files — they queue in review. Nothing applies until you accept.",
+    de: "Änderungen landen nie direkt in Ihren Dateien — sie sammeln sich in der Prüfung. Erst Ihre Freigabe übernimmt sie.",
+    ja: "修正案がファイルに直接入ることはなく、レビューに溜まります。承認して初めて反映されます。",
+  },
+
   // ── 마무리 ─────────────────────────────────────────────────────────
   "open.done.title": {
     ko: "준비됐습니다", en: "You're ready", de: "Alles bereit", ja: "準備できました",

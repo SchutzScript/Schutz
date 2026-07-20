@@ -4,7 +4,7 @@ import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import {
   BEATS, TOTAL_MS, PANEL_ENTRIES, PANEL_DUR,
-  beatAt, clampToGate, gateAt, seg, ease,
+  beatAt, captionFor, clampToGate, gateAt, seg, ease,
 } from "./beats";
 
 /**
@@ -267,6 +267,28 @@ export class Opening extends React.Component<Props, State> {
           );
         })()}
 
+        {/* 진행 중 자막 — 영화처럼 하단에 고정한다. 카드로 띄우면 조립을 가리고,
+            비트마다 위치가 튀어 눈이 따라다녀야 한다. */}
+        {(() => {
+          const cap = captionFor(beat.id);
+          if (!cap) return null;
+          // 비트가 바뀔 때 새로 뜨도록 key 를 준다 — 글자만 갈리면 전환이 안 읽힌다
+          return (
+            <div key={cap} className="sz-in" style={{
+              position: "absolute", left: 0, right: 0, bottom: "6%",
+              display: "grid", justifyItems: "center", gap: 6, padding: "0 8vw", textAlign: "center",
+              pointerEvents: "none",
+            }}>
+              <div style={{ fontSize: "clamp(15px,1.8vw,22px)", fontWeight: 600, letterSpacing: "-.01em" }}>
+                {t(`open.cap.${cap}.t`)}
+              </div>
+              <div style={{ fontSize: "clamp(11.5px,1.15vw,14px)", color: tk.fgSub, maxWidth: "62ch", lineHeight: 1.6 }}>
+                {t(`open.cap.${cap}.b`)}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* 항상 열려 있는 탈출구 */}
         {beat.id !== "settle" && (
           <button onClick={() => this.finish(false)} style={{
@@ -346,7 +368,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
   };
   const tagS: React.CSSProperties = {
     position: "absolute", fontSize: 10.5, letterSpacing: ".16em", color: tk.accent,
-    textTransform: "uppercase", fontWeight: 700, whiteSpace: "nowrap", top: "88%",
+    textTransform: "uppercase", fontWeight: 700, whiteSpace: "nowrap", top: "77%",
   };
   const ask = t("open.ask");
   const askN = Math.round(E(20000, 25500) * ask.length);
@@ -365,7 +387,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
         return (
           <>
             <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "5.5%", height: "5%",
+              position: "absolute", left: "6%", right: "6%", top: "3%", height: "4.5%",
               background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "8px 8px 0 0",
               display: "flex", alignItems: "center", gap: 12, padding: "0 12px",
               opacity: fr, transform: `translateY(${(1 - fr) * -8}px)`,
@@ -376,7 +398,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
               ))}
             </div>
             <div style={{
-              position: "absolute", left: "6%", right: "6%", top: "86.5%", height: "3.6%",
+              position: "absolute", left: "6%", right: "6%", top: "75.5%", height: "3.4%",
               background: tk.bgPanel, border: `1px solid ${tk.w07}`, borderRadius: "0 0 8px 8px",
               display: "flex", alignItems: "center", padding: "0 12px", gap: 10,
               opacity: fr, transform: `translateY(${(1 - fr) * 8}px)`,
@@ -390,7 +412,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       })()}
 
       {/* 레일 */}
-      <div style={{ ...panel, left: "6%", top: "12%", width: "3.2%", height: "74%", ...box("rail") }}>
+      <div style={{ ...panel, left: "6%", top: "9%", width: "3.2%", height: "65%", ...box("rail") }}>
         {[0, 1, 2, 3].map(i => (
           <div key={i} style={{
             width: "56%", margin: "8% auto", aspectRatio: "1", borderRadius: 3,
@@ -401,7 +423,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       <div style={{ ...tagS, left: "6%", ...tag("rail") }}>{t("open.tag.rail")}</div>
 
       {/* 프로젝트 + 대화 */}
-      <div style={{ ...panel, left: "10.2%", top: "12%", width: "19%", height: "74%", ...box("left") }}>
+      <div style={{ ...panel, left: "10.2%", top: "9%", width: "19%", height: "65%", ...box("left") }}>
         <div style={{ padding: "10px 8px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
           {t("open.tag.project")}
         </div>
@@ -447,7 +469,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       <div style={{ ...tagS, left: "10.2%", ...tag("left") }}>{t("open.tag.left")}</div>
 
       {/* 에디터 */}
-      <div style={{ ...panel, left: "30%", top: "12%", width: "41%", height: "74%", background: tk.bgEditor, ...box("editor") }}>
+      <div style={{ ...panel, left: "30%", top: "9%", width: "41%", height: "65%", background: tk.bgEditor, ...box("editor") }}>
         {/* 탭 스트립 — 이게 없으면 코드 상자가 떠 있는 것처럼 보인다 */}
         <div style={{
           display: "flex", alignItems: "stretch", height: 26,
@@ -491,7 +513,7 @@ function Assembled({ time, tk, E, S, swapChars, hotSwap }: {
       <div style={{ ...tagS, left: "30%", ...tag("editor") }}>{t("open.tag.editor")}</div>
 
       {/* 검토 */}
-      <div style={{ ...panel, left: "71.5%", top: "12%", width: "22.5%", height: "74%", ...box("right") }}>
+      <div style={{ ...panel, left: "71.5%", top: "9%", width: "22.5%", height: "65%", ...box("right") }}>
         <div style={{ padding: "10px 9px 0", fontSize: 9.5, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700 }}>
           {t("open.tag.agents")}
         </div>
