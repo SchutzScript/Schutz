@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import "./global.css";
 import { App } from "./App";
 import { Onboarding } from "./Onboarding";
-import { Opening } from "./opening/Opening";
 import { applyTheme, getThemeId } from "./theme";
 import { applyUiFont } from "./settings";
 import { applyLang } from "./i18n";
@@ -38,30 +37,9 @@ function Root() {
   }, []);
 
   const forceOnboarding = hash.startsWith("#/onboarding");
-  const forceOpening = hash.startsWith("#/opening");
-  const [playOpening, setPlayOpening] = useState(() => shouldPlayOpening());
-  // 오프닝이 "천천히 둘러보기"로 끝났으면 App 이 뜨자마자 투어를 시작해야 한다.
-  const [autoTour, setAutoTour] = useState(false);
-
-  if (forceOpening || playOpening) {
-    return (
-      <Opening
-        onDone={({ wantsTour }) => {
-          try {
-            localStorage.setItem(OPEN_KEY, "1");
-            // 오프닝에서 테마를 받았으므로 설정 마법사를 처음부터 다시 시키지 않는다.
-            // AI 연결처럼 남은 항목은 앱 안에서 이어서 안내한다.
-            localStorage.setItem(DONE_KEY, "1");
-            if (wantsTour) localStorage.removeItem("schutz.tutorialDone");
-            else localStorage.setItem("schutz.tutorialDone", "1");
-          } catch { /* ignore */ }
-          setAutoTour(wantsTour);
-          setPlayOpening(false);
-          if (forceOpening) window.location.hash = "#/";
-        }}
-      />
-    );
-  }
+  // 오프닝은 App 위에 오버레이로 뜬다. 예전엔 App **대신** 렌더했는데, 그러면
+  // 데모가 움직일 진짜 UI 가 아직 없다 — 목업을 그릴 수밖에 없었던 이유다.
+  const playOpening = hash.startsWith("#/opening") || shouldPlayOpening();
 
   if (forceOnboarding) {
     return (
@@ -73,7 +51,7 @@ function Root() {
       />
     );
   }
-  return <App autoTour={autoTour} />;
+  return <App playOpening={playOpening} />;
 }
 
 /** 렌더 예외 격리 — App 이 단일 대형 컴포넌트라 throw 하나로 창 전체가 백지가 되던 것을 막는다.

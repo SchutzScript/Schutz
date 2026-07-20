@@ -21,7 +21,14 @@ const CHOICES = ["feldgrau", "graphite", "paper"] as const;
 
 
 interface Props {
-  /** 오프닝이 끝났다(또는 건너뛰었다). 다음 단계로. */
+  /**
+   * intro = 마크·선언·세팅(화면이 비어야 성립하는 구간).
+   * outro = 데모가 끝난 뒤 마무리. 그 사이 조립·실연은 진짜 App 이 맡는다.
+   */
+  phase: "intro" | "outro";
+  /** 세팅을 마쳤다 — 오버레이를 걷고 진짜 UI 로 데모를 시작한다. */
+  onStartDemo: () => void;
+  /** 오프닝이 끝났다(또는 건너뛰었다). */
   onDone: (opts: { wantsTour: boolean }) => void;
 }
 interface State { t: number; passedGate: boolean; theme: string; }
@@ -69,9 +76,10 @@ export class Opening extends React.Component<Props, State> {
   };
 
   private pass = () => {
-    this.last = performance.now();
-    this.setState({ passedGate: true });
-    if (this.reduced) this.finish(true);   // 연출을 건너뛰므로 바로 투어로 넘긴다
+    // 세팅이 끝나면 오버레이를 걷고 진짜 UI 로 넘긴다. 모션 최소화를 켠 사람은
+    // 연출을 건너뛰므로 데모도 돌리지 않고 바로 투어로 보낸다.
+    if (this.reduced) { this.finish(true); return; }
+    this.props.onStartDemo();
   };
 
   /** 언어를 바꾸면 이 화면의 글자도 즉시 바뀌어야 한다 — 클래스 컴포넌트라 직접 리렌더. */
@@ -90,7 +98,35 @@ export class Opening extends React.Component<Props, State> {
     this.props.onDone({ wantsTour });
   }
 
+  /** 데모가 끝난 뒤 마무리. 진짜 UI 를 뒤에 두고 그 위에 뜬다. */
+  private renderOutro() {
+    const tk = THEME_TOKENS[this.state.theme] ?? THEME_TOKENS.feldgrau;
+    return (
+      <div role="dialog" aria-modal="true" aria-label={t("open.aria")} className="sz-backdrop" style={{
+        position: "fixed", inset: 0, zIndex: 500, display: "grid", placeItems: "center",
+        alignContent: "center", gap: 22, padding: "0 10vw", textAlign: "center",
+        background: "color-mix(in srgb, " + tk.bgRoot + " 88%, transparent)",
+      }}>
+        <Mark color={tk.accent} size={44} width={9} />
+        <p style={{ fontSize: "clamp(24px,4vw,52px)", fontWeight: 300, letterSpacing: "-.03em", margin: 0, color: tk.fg }}>
+          {t("open.done.title")}
+        </p>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+          <button onClick={() => this.finish(true)} style={{
+            fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10, border: "none",
+            background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
+          }}>{t("open.done.tour")}</button>
+          <button onClick={() => this.finish(false)} style={{
+            fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10,
+            border: `1px solid ${tk.w14}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
+          }}>{t("open.done.skip")}</button>
+        </div>
+      </div>
+    );
+  }
+
   render() {
+    if (this.props.phase === "outro") return this.renderOutro();
     const time = clampToGate(this.state.t, this.state.passedGate);
     const S = (a: number, b: number) => seg(time, a, b);
     const E = (a: number, b: number) => ease(seg(time, a, b));
@@ -204,33 +240,6 @@ export class Opening extends React.Component<Props, State> {
                 fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
                 background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
               }}>{t("open.setup.go")}</button>
-            </div>
-          );
-        })()}
-
-        {/* 8 마무리 */}
-        {(() => {
-          const op = E(48200, 49600);
-          if (op < 0.01) return null;
-          return (
-            <div style={{
-              position: "absolute", inset: 0, display: "grid", placeItems: "center", alignContent: "center",
-              gap: 22, padding: "0 10vw", textAlign: "center", opacity: op,
-            }}>
-              <p style={{
-                fontSize: "clamp(24px,4vw,52px)", fontWeight: 300, letterSpacing: "-.03em", margin: 0,
-                transform: `translateY(${(1 - E(48200, 50000)) * 14}px)`,
-              }}>{t("open.done.title")}</p>
-              <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-                <button onClick={() => this.finish(true)} style={{
-                  fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10, border: "none",
-                  background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
-                }}>{t("open.done.tour")}</button>
-                <button onClick={() => this.finish(false)} style={{
-                  fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10,
-                  border: `1px solid ${tk.w14}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
-                }}>{t("open.done.skip")}</button>
-              </div>
             </div>
           );
         })()}
