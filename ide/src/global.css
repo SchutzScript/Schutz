@@ -9,6 +9,9 @@ a:hover { color: var(--accent-hi); }
 ::-webkit-scrollbar-thumb { background: var(--w08); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--w12); }
 ::-webkit-scrollbar-corner { background: transparent; }
+/* 탭 스트립 — 높이가 34px 뿐이라 9px 짜리 가로 스크롤바가 뜨면 탭을 깎아먹는다.
+   숨기고 휠로 굴린다(onWheel). 활성 탭은 _activeTabRef 가 시야로 끌어온다. */
+.sz-tabstrip::-webkit-scrollbar { height: 0; }
 /* ── 모션 시스템 ─────────────────────────────────────────────────────────── */
 :root {
   --dur-fast: 120ms; --dur-med: 260ms; --dur: 240ms; --dur-slow: 400ms;

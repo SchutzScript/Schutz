@@ -14,8 +14,11 @@ import { paneRegistry } from "./MonacoPane";
  */
 
 /** 사용자가 모션 최소화를 켰으면 애니메이션 없이 즉시 적용한다.
- *  CSS 의 prefers-reduced-motion 오버라이드는 JS 타이머로 도는 이 코드를 막지 못한다. */
-function reducedMotion(): boolean {
+ *  CSS 의 prefers-reduced-motion 오버라이드는 JS 타이머로 도는 이 코드를 막지 못한다.
+ *  scrollTo/scrollIntoView 의 behavior:"smooth" 도 마찬가지다 — global.css 의
+ *  `scroll-behavior: auto !important` 는 CSS 속성만 덮고 ScrollOptions 는 못 막는다.
+ *  그래서 부드러운 스크롤을 쓰는 쪽도 이 술어를 직접 물어봐야 한다. */
+export function reducedMotion(): boolean {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
 }
 

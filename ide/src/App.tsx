@@ -25,7 +25,7 @@ import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
-import { typeEdit } from "./editor/editAnimator";
+import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
 import * as lspConv from "./editor/lspConverters";
 import * as dap from "./debug/dapClient";
@@ -4234,6 +4234,48 @@ ${(r.output || "").slice(0, 2000)}`;
     });
   }
 
+  /**
+   * "최신으로" — 예전엔 scrollTop 을 끝값으로 대입해 순간이동했다. 스트리밍 중
+   * 자동 추적(componentDidUpdate)은 매 토큰마다 붙는 거라 즉시여야 맞지만, 사용자가
+   * 직접 누른 이 버튼은 어디로 가는지 보여야 한다.
+   *
+   * behavior 를 직접 고르는 이유: global.css 의 `scroll-behavior: auto !important` 는
+   * CSS 속성만 덮고 ScrollOptions 는 못 막는다 — 모션 최소화 설정이 무시됐을 것이다.
+   */
+  private jumpChatToLatest() {
+    const el = this._chat;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+    this.setState({ chatAway: false });   // 버튼은 도착을 기다리지 않고 바로 걷는다
+  }
+
+  /**
+   * 활성 탭을 보이는 영역으로 끌어온다. 탭 스트립은 overflowX:auto 인데 이걸 아무도
+   * 안 했다 — 파일을 여럿 열면 새 탭이 스트립 바깥에 생겨서, 열었는데 안 보였다.
+   *
+   * 매 렌더마다 부르면 편집할 때마다 스트립이 튀므로, 슬롯별로 마지막에 끌어온 파일을
+   * 기억했다가 실제로 바뀌었을 때만 움직인다.
+   */
+  private _tabShown: Record<string, string> = {};
+  private _activeTabRef = (el: HTMLElement | null) => {
+    if (!el) return;
+    const slot = el.dataset.slot ?? "";
+    const rel = el.dataset.rel ?? "";
+    if (this._tabShown[slot] === rel) return;
+    this._tabShown[slot] = rel;
+    const strip = el.parentElement;
+    if (!strip || strip.scrollWidth <= strip.clientWidth) return;   // 안 넘치면 할 일 없다
+    // scrollIntoView 를 안 쓴다 — behavior:"smooth" 를 주면 이 컨테이너에선 조용히 무시되고
+    // (즉시 모드는 멀쩡히 동작한다) 탭이 화면 밖에 그대로 남는다. 직접 계산해 scrollTo 한다.
+    // offsetLeft 도 못 쓴다: 스트립이 position:static 이라 offsetParent 가 위쪽 요소다.
+    const er = el.getBoundingClientRect(), sr = strip.getBoundingClientRect();
+    const pad = 12;   // 옆 탭이 살짝 걸쳐 보여야 더 있다는 걸 안다
+    let d = 0;
+    if (er.left < sr.left + pad) d = er.left - sr.left - pad;
+    else if (er.right > sr.right - pad) d = er.right - sr.right + pad;
+    if (!d) return;
+    strip.scrollTo({ left: Math.max(0, strip.scrollLeft + d), behavior: reducedMotion() ? "auto" : "smooth" });
+  };
+
   /** 하단에서 멀어지면 "최신으로" 를 띄운다. 새 메시지 도착과 무관하게 항상 돌아갈 길을 준다. */
   private onChatScroll = () => {
     const el = this._chat;
@@ -4342,7 +4384,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderChatTabs()}
         <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
         {s.chatAway && (
-          <button className="hv05 sz-in" onClick={() => { if (this._chat) this._chat.scrollTop = this._chat.scrollHeight; this.setState({ chatAway: false }); }}
+          <button className="hv05 sz-in" onClick={() => this.jumpChatToLatest()}
             style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", zIndex: 5, height: 24, padding: "0 12px", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 12, color: "var(--fg-sub)", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", boxShadow: "var(--shadow-pop)" }}>
             ↓ {t("chat.jumpLatest")}
           </button>
@@ -4575,7 +4617,9 @@ ${(r.output || "").slice(0, 2000)}`;
     const lock = AGDEF.find(d => s.agents[d.id].file === activeRel);
     return (
       <div style={{ flex: "none", height: 34, display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--w05)", background: "var(--bg-panel)" }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "stretch", overflowX: "auto", minWidth: 0 }}>
+        <div className="sz-tabstrip"
+          onWheel={e => { const el = e.currentTarget; if (e.deltaY && el.scrollWidth > el.clientWidth) el.scrollLeft += e.deltaY; }}
+          style={{ flex: 1, display: "flex", alignItems: "stretch", overflowX: "auto", minWidth: 0 }}>
           {tabsHere.map(rel => {
             const on = rel === activeRel;
             const closingTab = s.closingTabs.includes(si + ":" + rel);
@@ -4588,12 +4632,16 @@ ${(r.output || "").slice(0, 2000)}`;
               : rel.split("/").pop();
             return (
               <div key={rel} className={"hv04 " + (closingTab ? "sz-tab-out" : "sz-tab-in")} title={dm ? dm.path + " (diff)" : pv ? pv : rel}
+                ref={on ? this._activeTabRef : undefined} data-slot={si} data-rel={rel}
                 draggable={!closingTab}
                 onDragStart={() => { this._dragTab = { slot: si, rel }; }}
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => { e.preventDefault(); this.reorderTab(si, rel); }}
                 onMouseDown={e => { e.stopPropagation(); if (closingTab) return; this._focusSlot = si; this.selectTab(si, rel); }}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 8px 0 11px", cursor: "pointer", minWidth: 0, maxWidth: 200, borderRight: "1px solid var(--w04)", background: on ? "var(--bg-editor)" : "transparent", transition: "background var(--dur) var(--ease)" }}>
+                // flex:none 이 핵심 — 예전엔 기본값(0 1 auto)이라 탭이 줄어들었다. 아이콘·닫기
+                // 버튼·패딩이 61px 를 먹으니, 11개만 열어도 이름 칸이 13px 로 눌려 파일명이
+                // 사실상 안 보였다. 이제 탭은 내용 크기(최대 200px)를 지키고 스트립이 스크롤된다.
+                style={{ display: "flex", flex: "none", alignItems: "center", gap: 6, padding: "0 8px 0 11px", cursor: "pointer", minWidth: 0, maxWidth: 200, borderRight: "1px solid var(--w04)", background: on ? "var(--bg-editor)" : "transparent", transition: "background var(--dur) var(--ease)" }}>
                 {dm ? <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: on ? "var(--accent)" : "var(--fg-dim3)" }} />
                   : pv ? <span style={{ flex: "none", fontSize: 11, lineHeight: 1, color: on ? "var(--ok)" : "var(--fg-dim2)" }}>◉</span>
                   : <FileIcon rel={rel} size={13} />}
