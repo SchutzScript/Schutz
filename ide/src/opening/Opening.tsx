@@ -1,5 +1,6 @@
 import React from "react";
-import { t } from "../i18n";
+import { t, LANGS, getLang, setLang } from "../i18n";
+import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import {
   BEATS, TOTAL_MS, PANEL_ENTRIES, PANEL_DUR,
@@ -95,6 +96,9 @@ export class Opening extends React.Component<Props, State> {
     if (this.reduced) this.finish(true);   // 연출을 건너뛰므로 바로 투어로 넘긴다
   };
 
+  /** 언어를 바꾸면 이 화면의 글자도 즉시 바뀌어야 한다 — 클래스 컴포넌트라 직접 리렌더. */
+  private pickLang = (l: Lang) => { setLang(l); this.forceUpdate(); };
+
   private pick = (id: string) => {
     this.setState({ theme: id });
     setThemeId(id);
@@ -170,10 +174,32 @@ export class Opening extends React.Component<Props, State> {
               <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
                 {t("open.setup.title")}
               </h2>
-              <p style={{ fontSize: 13.5, color: tk.fgDim, margin: "-14px 0 0", maxWidth: "48ch" }}>
-                {t("open.setup.hint")}
-              </p>
-              <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
+
+              {/* 언어가 먼저다 — 읽지 못하는 화면에서 테마를 고르게 할 수는 없다. */}
+              <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
+                <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>
+                  {t("open.setup.lang")}
+                </div>
+                <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                  {LANGS.map(([id, label]) => {
+                    const on = getLang() === id;
+                    return (
+                      <button key={id} onClick={() => this.pickLang(id)} aria-pressed={on}
+                        style={{
+                          fontFamily: "inherit", fontSize: 12.5, padding: "7px 15px", borderRadius: 8, cursor: "pointer",
+                          background: on ? tk.accent : "transparent", color: on ? tk.onAccent : tk.fgSub,
+                          border: `1px solid ${on ? "transparent" : tk.w14}`, fontWeight: on ? 650 : 400,
+                          transition: "background .2s, color .2s",
+                        }}>{label}</button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase", marginTop: 4 }}>
+                {t("open.setup.theme")}
+              </div>
+              <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", marginTop: -16 }}>
                 {CHOICES.map(id => {
                   const c = THEME_TOKENS[id];
                   const on = this.state.theme === id;
@@ -197,6 +223,7 @@ export class Opening extends React.Component<Props, State> {
                   );
                 })}
               </div>
+              <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
               <button onClick={this.pass} style={{
                 fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
                 background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
@@ -267,6 +294,7 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
       position: "absolute", inset: 0, display: "grid", placeItems: "center",
       padding: "0 8vw", textAlign: "center", opacity: 1 - gone,
     }}>
+      <div>
       <p style={{ fontSize: "clamp(24px,5.4vw,64px)", fontWeight: 300, letterSpacing: "-.03em", lineHeight: 1.22, margin: 0 }}>
         {words.map((w, i) => {
           if (!w.trim()) return w;
@@ -283,6 +311,12 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
           );
         })}
       </p>
+      {/* 명대사는 독일어로 두되 뜻은 준다 — 멋만 부리고 읽는 사람을 두고 가지 않는다 */}
+      <p style={{
+        fontSize: "clamp(12px,1.3vw,16px)", color: tk.fgDim, margin: "18px 0 0", letterSpacing: ".01em",
+        opacity: ease(seg(time, 5600, 6500)) * (1 - out),
+      }}>{t("open.saySub")}</p>
+      </div>
     </div>
   );
 }

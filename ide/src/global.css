@@ -9,6 +9,13 @@ a:hover { color: var(--accent-hi); }
 ::-webkit-scrollbar-thumb { background: var(--w08); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--w12); }
 ::-webkit-scrollbar-corner { background: transparent; }
+/* 화면에서만 감추고 스크린리더에는 남긴다. 정의가 없으면 안내 문구가 좌상단에
+   그대로 노출된다 — 실제로 오프닝 세팅 화면에서 그랬다. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 /* 탭 스트립 — 높이가 34px 뿐이라 9px 짜리 가로 스크롤바가 뜨면 탭을 깎아먹는다.
    숨기고 휠로 굴린다(onWheel). 활성 탭은 _activeTabRef 가 시야로 끌어온다. */
 .sz-tabstrip::-webkit-scrollbar { height: 0; }
