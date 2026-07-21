@@ -22,6 +22,8 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc1.cannot_open_folder": { ko: "폴더를 열 수 없습니다: ", en: "Cannot open folder: ", de: "Ordner kann nicht geöffnet werden: ", ja: "フォルダーを開けません: " },
   "sc1.cmd_new_file": { ko: "새 파일", en: "New File", de: "Neue Datei", ja: "新しいファイル" },
   "sc1.cmd_save": { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },
+  // 포커스된 편집기 없이 저장했을 때 — 무엇이 저장됐는지 말해주지 않으면 아무 일도 안 한 것처럼 보인다
+  "sc1.savedN": { ko: "{n}개 파일 저장됨", en: "Saved {n} file(s)", de: "{n} Datei(en) gespeichert", ja: "{n}件のファイルを保存しました" },
   "sc1.cmd_save_all": { ko: "모두 저장", en: "Save All", de: "Alle speichern", ja: "すべて保存" },
   "sc1.cmd_open_settings": { ko: "설정 열기", en: "Open Settings", de: "Einstellungen öffnen", ja: "設定を開く" },
   "sc1.cmd_toggle_terminal": { ko: "터미널 토글", en: "Toggle Terminal", de: "Terminal umschalten", ja: "ターミナルを切り替え" },
