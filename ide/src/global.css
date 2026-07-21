@@ -156,20 +156,18 @@ button:disabled { opacity: .55; cursor: default !important; }
 .sz-msg-copy:focus-visible { opacity: 1; }
 
 /* ── 언어 전환 ─────────────────────────────────────────────────────────────
-   나갔다 들어온다. 갈아끼우는 순간은 바닥에 있어야 한다 — 페이드가 덮는 건 색이지
-   레이아웃이 아니라서, 옛 글자가 선명한 채로 갈리면 한국어→독일어처럼 글자 폭이 크게
-   달라지는 조합에서 리플로가 그대로 보인다. 타이밍은 i18n.setLang 이 잡는다.
+   뷰 트랜지션의 기본 교차 디졸브를 앱 모션에 맞춰 다듬기만 한다. 연출을 거는 쪽은
+   i18n.setLang 이다.
 
-   흐림을 깊게, 투명도를 얕게 잡은 건 의도다. 단색 패널은 흐려봐야 자기 색이라 거의
-   그대로인데 글자·아이콘만 뭉개졌다 다시 맺힌다 — 바뀌는 건 글자니 효과도 글자에 선다.
-   루트에 transform 은 쓰지 않는다. position:fixed 자식들이 통째로 딸려 움직인다. */
-@keyframes szLangOut {
-  from { opacity: 1;  filter: blur(0); }
-  to   { opacity: .5; filter: blur(5px); }
+   화면을 가리는(어둡게·흐리게) 방식을 두 번 시도했다가 버렸다. 가리면 바뀌는 순간은
+   숨겨지지만 화면 전체가 죽었다 살아나는 게 보인다. 디졸브는 양쪽 다 제 밝기라, 같은
+   픽셀(코드·패널·아이콘)은 아무 일도 없어 보이고 달라진 글자만 제자리에서 녹아 바뀐다.
+
+   기본 250ms 는 살짝 빠르게 끊긴다. 260ms 로 늘리고 앱 공통 --ease 로 맞췄다(의사요소는
+   별도 트리라 커스텀 속성이 안 닿을 수 있어 값을 그대로 적는다).
+   모션 최소화는 setLang 이 JS 로 물어 연출 자체를 건너뛴다 — 여기 규칙은 닿지 않는다. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(.2, .8, .2, 1);
 }
-@keyframes szLangIn {
-  from { opacity: .5; filter: blur(5px); }
-  to   { opacity: 1;  filter: blur(0); }
-}
-.sz-lang-out { animation: szLangOut 150ms var(--ease) forwards; }
-.sz-lang-in  { animation: szLangIn 320ms var(--ease) both; }
