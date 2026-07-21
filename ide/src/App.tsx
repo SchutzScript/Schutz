@@ -172,6 +172,8 @@ interface S {
   openDiffs: Record<string, boolean>;
   /** 트랜스크립트에서 펼친 도구 줄 */
   openTools: Record<string, boolean>;
+  /** 에이전트 모드에서 코드를 잠깐 띄운 상태 — "필요할 때만 떠오름" */
+  sheetOpen: boolean;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -400,7 +402,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -1204,6 +1206,13 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
    *  파일은 이미 디스크에 쓰인 뒤이므로, 여기서 실패해도 데이터는 안전하다 —
    *  최악의 경우 모델을 최종 내용으로 맞추기만 하면 된다. */
   private async animateEditIntoModel(root: string, rel: string, finalText: string, start: number, end: number, find: string, replacement: string) {
+    // 이 파일을 띄우고 있는 팬이 없으면 애니메이션은 아무도 못 본다. 조용히 내용만 맞춘다.
+    //
+    // 없으면 "전부 수락" 이 파일마다 25×40ms 폴링 + 최대 2200ms 타이핑을 **보이지 않는 곳에서**
+    // 돌려, 8개 파일이면 8초를 얼어붙은 채 기다리게 된다. propose_create 는 openFile 을 부르지
+    // 않고(2144~), preload 는 팬 없는 모델을 최대 500개 만든다 — 흔한 경우다.
+    const hosted = this.allOpen().includes(rel);
+    if (!hosted) { projectModels.reload(root, rel, finalText, false); return; }
     // openFile 직후엔 페인이 아직 마운트 전이라 모델이 없다(특히 새 파일) — 잠깐 기다린다
     let m = projectModels.getByRel(rel);
     for (let i = 0; !m && i < 25; i++) {
@@ -3159,6 +3168,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (!mod && e.key === "Escape") {
       const s = this.state;
       if (s.tourOpen) { this.endTour(); return; }
+      if (s.sheetOpen) { this.closeSheet(); return; }
       if (s.cmdOpen) this.closeOverlay("cmd", { cmdOpen: false });
       else if (s.quickOpen) this.closeOverlay("quick", { quickOpen: false });
       else if (s.symOpen) this.closeOverlay("sym", { symOpen: false });
@@ -3369,6 +3379,22 @@ ${(r.output || "").slice(0, 2000)}`;
       return { breakpoints: { ...s.breakpoints, [rel]: next } };
     }, () => { if (dap.isActive()) void dap.updateBreakpoints(this.dbgRelToAbs(rel), next); });
   };
+  /** 에이전트 모드에서 파일을 잠깐 띄운다.
+   *
+   *  팬을 새로 만들거나 재부모화하지 않는다 — 에디터 그리드는 계속 마운트돼 있고
+   *  display:none 으로 숨어 있을 뿐이라, 그걸 트랜스크립트 위로 올리기만 하면 된다.
+   *  그래서 Ctrl+K·찾기·정의로 가기·문제 패널이 시트 안에서 전부 그대로 동작한다. */
+  openSheet(rel: string) {
+    void this.openFile(rel);
+    this.setState({ sheetOpen: true });
+  }
+  /** 사용자가 "이 파일 좀 보자" 라고 한 경우 — 모드에 맞는 자리에 띄운다. */
+  revealFile(rel: string) {
+    if (this.state.uiMode === "agent") this.openSheet(rel);
+    else void this.openFile(rel);
+  }
+  closeSheet() { this.setState({ sheetOpen: false }); }
+
   /** 모드 전환. 지금은 그냥 setState — 연출은 다음 단계에서 이 자리에 들어온다.
    *  워크스페이스가 열려 있으면 그 프로젝트에만 저장한다(대화만 하는 저장소와 손으로
    *  고치는 저장소를 따로 둘 수 있게). 아직 안 열렸으면 전역 기본값이 된다. */
@@ -3716,6 +3742,10 @@ ${(r.output || "").slice(0, 2000)}`;
     // 다음 단계의 변신에서 같은 이름이 두 번 잡히는 문제도 같이 없어진다.
     const ag = s.uiMode === "agent";
     const gone = ag ? { display: "none" as const } : null;
+    // 시트: 에이전트 모드에서 코드를 잠깐 띄운 상태. 에디터 그리드를 새로 만들지 않고
+    // 이미 마운트된 그것을 트랜스크립트 위로 덮는다 — 그래서 그 안의 기능이 전부 살아 있다.
+    const sheet = ag && s.sheetOpen;
+    const editorGone = sheet ? null : gone;
     const anyMenuOpen = !!s.openMenu || s.projOpen;
     const closeMenus = () => this.setState({ openMenu: null, projOpen: false });
 
@@ -3960,7 +3990,7 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
 
         {/* ══ Main ══ */}
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
 
           {/* tool rail */}
           <div data-tour="rail" className="vtRail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4, ...gone }}>
@@ -4008,7 +4038,8 @@ ${(r.output || "").slice(0, 2000)}`;
             style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
 
           {/* ── Editor grid ── */}
-          <div data-tour="editor" className="vtEditor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)", ...gone }}>
+          <div data-tour="editor" className="vtEditor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)",
+            ...(sheet ? { position: "absolute" as const, inset: 0, zIndex: 24, paddingTop: 30, background: "var(--bg-editor)" } : null), ...editorGone }}>
             {this.renderPanes()}
           </div>
 
@@ -4018,6 +4049,14 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* ── Right column ── */}
           {/* 예전엔 이 컬럼 전체가 data-tour="agents" 라 에이전트와 변경 검토가
               한 덩어리로 강조됐다. 둘은 다른 이야기라 앵커를 나눈다. */}
+          {sheet && (
+            <div className="sz-drop" style={{ position: "absolute", left: 0, right: 0, top: 0, height: 30, zIndex: 25, display: "flex", alignItems: "center", gap: 9, padding: "0 12px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)" }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>{t("mode.sheetTitle")}</span>
+              <div style={{ flex: 1 }} />
+              <button className="hv05" onClick={() => this.closeSheet()}
+                style={{ height: 21, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("mode.sheetClose")}</button>
+            </div>
+          )}
           <div className="vtSide" style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)", ...gone }}>
             <div data-tour="agents" style={{ flex: "none", display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderAgents()}</div>
             <div data-tour="review" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderReview()}</div>
@@ -4047,7 +4086,14 @@ ${(r.output || "").slice(0, 2000)}`;
             const left = this.quotaTightest(getManagerId()) ?? this.quotaTightest("claude") ?? this.quotaTightest("gpt") ?? 100;
             return <span title={t("status.quotaTitle")} style={{ fontFamily: MONO, color: left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : "var(--fg-dim)" }}>{quotaSummary}</span>;
           })()}
-          {s.statusInfo && (
+          {ag && s.workspace && (
+            <span style={{ fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.workspace.name}</span>
+          )}
+          {ag && s.cliModel && (
+            <span style={{ fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.cliModel}</span>
+          )}
+          {/* Ln:Col 은 포커스된 편집기가 있어야 뜻이 있다 — 시트를 열었을 때만 남긴다 */}
+          {(!ag || sheet) && s.statusInfo && (
             <>
               <span style={{ fontFamily: MONO }}>{s.statusInfo.lang}</span>
               <span style={{ fontFamily: MONO }}>Ln {s.statusInfo.line}:{s.statusInfo.col}</span>
@@ -5236,6 +5282,10 @@ ${(r.output || "").slice(0, 2000)}`;
             {p.status === "pending" && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w06)", fontFamily: SUIT }}>
                 <div style={{ flex: 1 }} />
+                {opts?.wide && (
+                  <button className="hv05" onClick={() => this.openSheet(p.rel)}
+                    style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("mode.openInSheet")}</button>
+                )}
                 <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
                 <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
               </div>
@@ -5688,7 +5738,7 @@ ${(r.output || "").slice(0, 2000)}`;
             onKeyDown={e => {
               if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ quickSel: (sel + 1) % Math.max(1, list.length) }); }
               else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ quickSel: (sel - 1 + list.length) % Math.max(1, list.length) }); }
-              else if (e.key === "Enter" && list[sel]) { this.openFile(list[sel].rel); closeQuick(); }
+              else if (e.key === "Enter" && list[sel]) { this.revealFile(list[sel].rel); closeQuick(); }
               else if (e.key === "Escape") closeQuick();
             }}
             placeholder={t("palette.quickPlaceholder")}
@@ -5698,7 +5748,7 @@ ${(r.output || "").slice(0, 2000)}`;
             {this.state.workspace && list.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("palette.noFiles")}</div>}
             {list.map((f, i) => (
               <div key={f.rel} ref={i === sel ? this._selRowRef : undefined}
-                onMouseDown={e => { e.preventDefault(); this.openFile(f.rel); closeQuick(); }}
+                onMouseDown={e => { e.preventDefault(); this.revealFile(f.rel); closeQuick(); }}
                 onMouseEnter={() => this.setState({ quickSel: i })}
                 style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: i === sel ? "var(--accent-soft)" : "transparent" }}>
                 <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)" }}>{f.name}</span>

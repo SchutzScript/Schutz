@@ -48,4 +48,7 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Wartet auf Ausführung eines Befehls",
     ja: "コマンド実行の承認待ち",
   },
+  "mode.sheetTitle": { ko: "코드", en: "Code", de: "Code", ja: "コード" },
+  "mode.sheetClose": { ko: "닫기 (Esc)", en: "Close (Esc)", de: "Schließen (Esc)", ja: "閉じる (Esc)" },
+  "mode.openInSheet": { ko: "열기", en: "Open", de: "Öffnen", ja: "開く" },
 };
