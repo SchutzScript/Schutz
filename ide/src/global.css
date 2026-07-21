@@ -171,3 +171,53 @@ button:disabled { opacity: .55; cursor: default !important; }
   animation-duration: 260ms;
   animation-timing-function: cubic-bezier(.2, .8, .2, 1);
 }
+
+/* ── 모드 변신 ─────────────────────────────────────────────────────────────
+   이름은 정적 클래스로 늘 붙어 있고, 연출만 [data-mode-anim] 일 때 갈아끼운다.
+   언어 전환도 같은 이름들을 지나가지만 그쪽은 상자가 안 바뀌어 제자리 교차 디졸브로
+   끝나므로 굳이 다르게 그릴 이유가 없다.
+
+   에이전트 모드에서 레일·에디터·우측 열은 display:none 이고, display:none 서브트리는
+   캡처에서 **빠진다**. 그래서 그 셋은 한쪽 상태에만 존재하게 되고 old(나감)/new(들어옴)
+   중 하나만 생긴다 — 역방향을 위해 따로 뒤집을 필요가 없다. 나가는 그림과 들어오는
+   그림을 각각 써두면 양방향이 저절로 맞는다. */
+.vtTopbar { view-transition-name: sz-topbar; }
+.vtStatus { view-transition-name: sz-status; }
+.vtConversation { view-transition-name: sz-conv; }
+.vtRail { view-transition-name: sz-rail; }
+.vtEditor { view-transition-name: sz-editor; }
+.vtSide { view-transition-name: sz-side; }
+
+/* 상단바와 상태줄은 양쪽에 같은 상자로 존재한다 → 브라우저가 그대로 붙잡아 둔다.
+   그 둘이 미동도 없어야 나머지가 "잘려나간 것" 이 아니라 "변신한 것" 으로 읽힌다. */
+
+@keyframes szModeRailOut  { to   { opacity: 0; transform: translateX(-46px); } }
+@keyframes szModeRailIn   { from { opacity: 0; transform: translateX(-46px); } }
+@keyframes szModeSinkOut  { to   { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes szModeSinkIn   { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+
+[data-mode-anim]::view-transition-old(sz-rail) { animation: szModeRailOut 280ms var(--ease) both; }
+[data-mode-anim]::view-transition-new(sz-rail) { animation: szModeRailIn 380ms var(--ease) both; }
+
+[data-mode-anim]::view-transition-old(sz-editor),
+[data-mode-anim]::view-transition-old(sz-side) { animation: szModeSinkOut 280ms var(--ease) both; }
+[data-mode-anim]::view-transition-new(sz-editor),
+[data-mode-anim]::view-transition-new(sz-side) { animation: szModeSinkIn 380ms var(--ease) both; }
+
+/* 대화창은 양쪽에 있으면서 상자가 통째로 달라지는 유일한 요소 = 주인공.
+   자손이 스냅샷 **이미지**에 구워지므로 그냥 두면 좌하단 272×360 짜리 글자가 창 전체로
+   3배 넘게 늘어난다. 이미지를 자연 크기로 고정해 상자가 커지며 드러내게 한다. */
+[data-mode-anim]::view-transition-old(sz-conv),
+[data-mode-anim]::view-transition-new(sz-conv) {
+  object-fit: none;
+  object-position: top left;
+  width: 100%;
+  height: 100%;
+}
+[data-mode-anim]::view-transition-group(sz-conv) { animation-duration: 420ms; animation-timing-function: var(--ease); }
+[data-mode-anim]::view-transition-group(sz-topbar),
+[data-mode-anim]::view-transition-group(sz-status) { animation-duration: 420ms; }
+
+/* 캡처되는 동안 스스로 움직이는 요소가 있으면 스냅샷이 흔들려 툭툭 끊겨 보인다.
+   :active-view-transition 은 전환이 도는 동안만 참이라 따로 뒷정리할 게 없다. */
+html:active-view-transition .szMoving { animation-play-state: paused !important; transition: none !important; }
