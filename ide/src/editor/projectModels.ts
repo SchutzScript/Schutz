@@ -58,13 +58,20 @@ export function ensure(root: string, rel: string, content: string, lang?: string
   return model;
 }
 
+/** 이 rel 의 모델이 디스크와 다른가 — **팬이 열려 있지 않아도** 판정된다.
+ *  App 의 paneDirty 는 마운트된 에디터만 안다. 크로스파일 이름 바꾸기처럼 모델을 직접
+ *  고치는 경로는 거기에 안 잡히므로, "미저장인가" 를 물을 땐 이 쪽도 같이 봐야 한다. */
+export function isDirty(rel: string): boolean {
+  const key = relIndex.get(rel);
+  if (!key) return false;
+  const m = owned.get(key);
+  return !!m && !m.isDisposed() && m.getValue() !== (savedContent.get(key) ?? "");
+}
+
 /** 디스크와 다른(미저장) 모델의 rel 목록 — 크로스파일 리네임 등 */
 export function dirtyRels(): string[] {
   const out: string[] = [];
-  for (const [rel, key] of relIndex) {
-    const m = owned.get(key);
-    if (m && !m.isDisposed() && m.getValue() !== (savedContent.get(key) ?? "")) out.push(rel);
-  }
+  for (const rel of relIndex.keys()) if (isDirty(rel)) out.push(rel);
   return out;
 }
 /** 디스크에 저장했음을 기록 */

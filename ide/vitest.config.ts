@@ -13,6 +13,12 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/engine/**/*.test.ts", "src/opening/**/*.test.ts"],
+    // 목록을 손으로 관리한다 — App.tsx 를 끌어오는 테스트가 실수로 섞이면 monaco 와
+    // electron 까지 딸려와 이 설정의 전제(가벼운 node 환경)가 깨진다.
+    include: [
+      "src/engine/**/*.test.ts",
+      "src/opening/**/*.test.ts",
+      "src/uiMode.test.ts",
+    ],
   },
 });

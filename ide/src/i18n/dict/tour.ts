@@ -7,6 +7,13 @@
 // 있다" 까지 쓴다 — 위치만 알려주면 투어가 끝난 뒤 아무것도 남지 않는다.
 export const dict: Record<string, Record<string, string>> = {
   "tour.progress": { ko: "{cur} / {total}", en: "{cur} / {total}", de: "{cur} / {total}", ja: "{cur} / {total}" },
+  // 보여줄 수 있는 단계가 하나도 없었을 때. 조용히 닫으면 아무 일도 안 일어난 것처럼 보인다.
+  "tour.noSteps": {
+    ko: "지금 화면에서는 안내할 수 있는 단계가 없습니다.",
+    en: "There are no tour steps available on this screen.",
+    de: "Auf diesem Bildschirm gibt es keine Rundgang-Schritte.",
+    ja: "この画面で案内できるステップがありません。",
+  },
 
   "tour.welcome.title": { ko: "Schutz에 오신 것을 환영합니다", en: "Welcome to Schutz", de: "Willkommen bei Schutz", ja: "Schutzへようこそ" },
   "tour.welcome.body": {

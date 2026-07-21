@@ -464,6 +464,19 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     await this.saveAllDirtyModels(true);
   }
 
+  /** Ctrl+S — 포커스된 팬이 있으면 그것만, 없으면 미저장 모델 전부.
+   *
+   *  paneRegistry.focused 는 사용자가 팬 안을 **실제로 클릭했을 때만** 세팅된다
+   *  (onDidFocusEditorWidget). 그래서 `paneRegistry.focused?.save()` 하나만 두면,
+   *  트리에서 파일을 골라 열기만 한 상태나 크로스파일 이름 바꾸기 직후처럼 팬이
+   *  포커스를 받은 적 없는 흔한 상황에서 Ctrl+S 가 아무 일도 안 하고 아무 말도 안 했다. */
+  async saveActive() {
+    const p = paneRegistry.focused;
+    if (p) { await p.save(); return; }
+    const n = await this.saveAllDirtyModels(true);
+    if (n > 0) this.toast("ok", t("sc1.savedN", { n }));
+  }
+
   /** projectModels의 미저장 모델(열린 파일 포함) 전부 디스크 저장 — 크로스파일 리네임 반영 */
   async saveAllDirtyModels(silent = false): Promise<number> {
     const ws = this.state.workspace;
@@ -788,7 +801,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       window.schutz.watchStart(tree.root); // 외부 변경 감지 시작
       // TS/JS 프로젝트 모델 프리로드 (파일간 인텔리전스) — UI 논블로킹
       setTimeout(() => {
-        void projectModels.preload(tree.root, tree.entries, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel])
+        void projectModels.preload(tree.root, tree.entries, (r, rel) => window.schutz!.readFile(r, rel), this.isDirtyRel)
           .then(res => { if (res.skipped) this.setState({ tsLargeProject: true }); });
       }, 0);
     } catch (e) {
@@ -827,7 +840,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   commands(): Command[] {
     const cmds: Command[] = [
       { id: "newFile", label: t("sc1.cmd_new_file"), hint: "Ctrl+N", run: () => void this.newFileAt("") },
-      { id: "save", label: t("sc1.cmd_save"), hint: "Ctrl+S", run: () => void paneRegistry.focused?.save() },
+      { id: "save", label: t("sc1.cmd_save"), hint: "Ctrl+S", run: () => void this.saveActive() },
       { id: "saveAll", label: t("sc1.cmd_save_all"), hint: "Ctrl+Shift+S", run: () => void this.saveAll() },
       { id: "settings", label: t("sc1.cmd_open_settings"), hint: "Ctrl+,", run: () => this.openO({ settingsOpen: true }) },
       { id: "term", label: t("sc1.cmd_toggle_terminal"), hint: "Ctrl+`", run: () => this.toggleTerm() },
@@ -1739,7 +1752,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   /** 탭 닫기 (미저장이면 확인 후) */
   closeTab(slot: number, rel: string) {
-    if (this.state.paneDirty[rel] && this.isOpen(rel)) {
+    if (this.isDirtyRel(rel) && this.isOpen(rel)) {
       // 같은 파일이 다른 슬롯에도 열려 있지 않을 때만 데이터 유실 → 확인
       const openCount = this.state.tabs.reduce((n, t) => n + (t.includes(rel) ? 1 : 0), 0);
       if (openCount <= 1) { this.openO({ askClose: { rel, slot } }); return; }
@@ -2735,7 +2748,7 @@ ${(r.output || "").slice(0, 2000)}`;
     for (const rel of this.allOpen()) {
       if (!projectModels.isTsLike(rel)) continue;
       window.schutz.readFile(ws.root, rel)
-        .then(text => projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]))
+        .then(text => projectModels.reload(ws.root, rel, text, this.isDirtyRel(rel)))
         .catch(() => { /* 삭제됨 등 무시 */ });
     }
   }
@@ -2761,7 +2774,7 @@ ${(r.output || "").slice(0, 2000)}`;
       projectModels.dropMissing(ws.root, present);
     }
     // 대량 변경(브랜치 전환/pull/stash pop): 열지 않은 preload 모델도 디스크로 재로드해 stale 진단 방지
-    if (opts?.bulk) void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
+    if (opts?.bulk) void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), this.isDirtyRel);
     // 열린 파일: dirty 아니면 모델 내용을 디스크와 맞춤 (공유 모델 setValue → 라이브 반영, 리마운트 없음)
     for (const rel of this.allOpen()) {
       // 편집 중(dirty)인 파일도 '읽기는' 한다 — 건너뛰면 외부 변경을 감지할 기회 자체가 없어
@@ -2772,7 +2785,7 @@ ${(r.output || "").slice(0, 2000)}`;
         // 비동기 readFile 사이 워크스페이스 전환 또는 편집 시작 가능 → 재확인해 사용자 편집/새 repo 클로버 방지
         // 워크스페이스 '전환' 만 걸러야 한다. 객체 동일성으로 비교하면 이 함수가 위에서 setState(workspace: tree) 로
         // 교체한 새 객체와 항상 달라져 가드가 매번 걸리고, 결과적으로 외부 변경이 열린 에디터에 반영되지 않았다.
-        .then(text => { if (this.state.workspace?.root !== ws.root) return; projectModels.reload(ws.root, rel, text, !!this.state.paneDirty[rel]); })
+        .then(text => { if (this.state.workspace?.root !== ws.root) return; projectModels.reload(ws.root, rel, text, this.isDirtyRel(rel)); })
         .catch(() => { /* 삭제됨 등 */ });
     }
     void this.loadGit();
@@ -2800,7 +2813,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
   /** 브랜치 전환 */
   async gitCheckout(branch: string) {
-    if (Object.values(this.state.paneDirty).some(Boolean)) { this.toast("error", t("sc3.unsavedChanges")); return; }
+    if (this.anyDirty()) { this.toast("error", t("sc3.unsavedChanges")); return; }
     const ok = await this.gitDo("checkout", { branch });
     this.setState({ branchOpen: false });
     if (ok) { this.toast("ok", t("sc3.branchSwitched", { branch })); await this.syncFromDisk({ bulk: true }); }
@@ -3121,7 +3134,7 @@ ${(r.output || "").slice(0, 2000)}`;
     // 대화는 턴이 끝날 때만 저장돼서, 스트리밍 중에 끄면 그 주고받음이 통째로 사라졌다.
     // 슬래시 명령 응답처럼 턴 밖에서 생긴 메시지도 마찬가지 — 나가기 직전에 한 번 더 저장한다.
     try { this.saveSession(); } catch { /* 저장 실패가 종료를 막으면 안 된다 */ }
-    if (Object.values(this.state.paneDirty).some(Boolean)) {
+    if (this.anyDirty()) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -3257,7 +3270,8 @@ ${(r.output || "").slice(0, 2000)}`;
       this.toast("error", t("sc3.replaceResultsStale")); return;
     }
     // #7: 열린 파일에 미저장 편집이 있으면 디스크 치환과 충돌(Save All 이 치환을 클로버 → 데이터 손실) → 먼저 저장 요구
-    const dirtyOpen = this.allOpen().filter(rel => this.state.paneDirty[rel] && !this.parseDiffKey(rel));
+    const dirtyOpen = Array.from(new Set([...this.allOpen(), ...projectModels.dirtyRels()]))
+      .filter(rel => this.isDirtyRel(rel) && !this.parseDiffKey(rel));
     if (dirtyOpen.length) { this.toast("error", t("sc3.replaceSaveFirst", { files: dirtyOpen.slice(0, 6).join(", ") })); return; }
     if (!window.confirm(t("sc3.replaceAllConfirm", { q, rep: this.state.replaceVal }))) return;
     try {
@@ -3267,7 +3281,7 @@ ${(r.output || "").slice(0, 2000)}`;
       if (r.partial) this.toast("error", t("sc3.replacePartial", { files: r.files, changed: r.changed }));
       else this.toast("ok", t("sc3.replaceResult", { files: r.files, changed: r.changed }));
       // 모든 non-dirty owned 모델 재로드 — 열린 탭뿐 아니라 preload(닫힌) 모델도 디스크 반영(#8: 나중에 열면 stale 방지). dirty 는 위에서 차단됨.
-      void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), rel => !!this.state.paneDirty[rel]);
+      void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), this.isDirtyRel);
       this.setState(st => { const pv = { ...st.paneVer }; for (const p of this.allOpen(st)) pv[p] = (pv[p] ?? 0) + 1; return { paneVer: pv }; });
       void this.runSearch(q);
     } catch (e) { this.toast("error", t("sc3.replaceFailed") + (e instanceof Error ? e.message : String(e))); }
@@ -3342,6 +3356,18 @@ ${(r.output || "").slice(0, 2000)}`;
       return { breakpoints: { ...s.breakpoints, [rel]: next } };
     }, () => { if (dap.isActive()) void dap.updateBreakpoints(this.dbgRelToAbs(rel), next); });
   };
+  /** 이 파일이 미저장인가 — **팬이 열려 있지 않아도** 참일 수 있다.
+   *
+   *  paneDirty 는 마운트된 MonacoPane 이 알려주는 것뿐이다. 크로스파일 이름 바꾸기
+   *  (applyLspWorkspaceEdit)는 모델을 직접 고치고 paneDirty 는 건드리지 않으므로, 팬이
+   *  없는 파일의 편집은 paneDirty 만 보면 "깨끗함" 으로 읽힌다. 그 상태로 syncFromDisk 가
+   *  projectModels.reload 를 isDirty=false 로 부르면 setValue 로 통째로 덮어써서
+   *  **편집이 조용히 사라진다.** 미저장 여부를 묻는 자리는 전부 이 술어를 쓴다. */
+  private isDirtyRel = (rel: string): boolean => !!this.state.paneDirty[rel] || projectModels.isDirty(rel);
+  /** 어디든 미저장이 있는가 (종료·브랜치 전환 가드용) */
+  private anyDirty(): boolean {
+    return Object.values(this.state.paneDirty).some(Boolean) || projectModels.dirtyRels().length > 0;
+  }
   // MonacoPane 콜백 — 안정 참조(arrow property)로 두어 React.memo 가 불필요한 리렌더를 차단하게 한다
   private handleDirtyChange = (rel: string, d: boolean) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }));
   private handleStatus = (info: any) => this.setState({ statusInfo: info });
@@ -3795,7 +3821,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "file.settings": this.openO({ openMenu: null, settingsOpen: true }); return;
                                 case "file.newWindow": window.schutz?.newWindow(); this.setState({ openMenu: null }); return;
                                 case "file.new": this.setState({ openMenu: null }); void this.newFileAt(""); return;
-                                case "file.save": this.setState({ openMenu: null }); void paneRegistry.focused?.save(); return;
+                                case "file.save": this.setState({ openMenu: null }); void this.saveActive(); return;
                                 case "file.saveAll": this.setState({ openMenu: null }); void this.saveAll(); return;
                                 case "ai.models": this.openO({ openMenu: null, settingsOpen: true }); return;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
@@ -4797,7 +4823,7 @@ ${(r.output || "").slice(0, 2000)}`;
             const closingTab = s.closingTabs.includes(si + ":" + rel);
             const dm = this.parseDiffKey(rel);
             const pv = this.parsePreviewKey(rel);
-            const dirty = !dm && !pv && s.paneDirty[rel];
+            const dirty = !dm && !pv && this.isDirtyRel(rel);
             // 프리뷰 rel 은 URL 이라 "/" 로 잘라 쓰면 이름이 빈 문자열이 된다 — host:port 로 라벨을 만든다
             const name = dm ? (dm.path.split("/").pop() + " ⇆")
               : pv ? this.previewLabel(pv)
@@ -4979,12 +5005,72 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── 우 패널: 변경 검토 (워크스페이스 모드 — Claude 편집 제안) ──
-  renderProposals() {
-    const s = this.state;
+  /** 제안 카드 한 장 — 우측 검토 패널과, 곧 들어올 에이전트 모드 트랜스크립트가 함께 쓴다.
+   *  두 곳에서 같은 카드를 그려야 하므로 map 콜백 안에 있던 것을 그대로 들어냈다.
+   *  wide: 창 폭을 다 쓰는 자리용 — break-all 은 진짜 코드를 글자 단위로 찢는다. */
+  renderProposalCard(p: Proposal, opts?: { wide?: boolean }) {
     const pstMap: Record<string, [string, string]> = {
       pending: [t("misc.statusPending"), "#C4A882"], accepted: [t("misc.statusAccepted"), "var(--ok)"],
       rejected: [t("misc.statusRejected"), "#C97B7B"], failed: [t("misc.statusFailed"), "#C97B7B"],
     };
+        const [sl, sc] = pstMap[p.status];
+        return (
+          <div key={p.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
+            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "var(--ok)" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
+            <div style={{ padding: "10px 13px 9px 16px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
+                <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "var(--accent)", border: `1px solid ${(this.agDef(p.agent)?.color ?? "var(--accent)") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
+                <div style={{ flex: 1 }} />
+                {p.auto && <span style={{ flex: "none", fontSize: 9.5, color: "var(--accent)", background: "var(--accent-soft)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("misc.auto")}</span>}
+                <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
+              {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
+            </div>
+            {/* diff 는 접었다 펼친다. 예전엔 maxHeight 180 + 중첩 스크롤이라 아래 코드가 안 보이는데
+                스크롤 대신 드래그 선택이 됐고, 수락/거절 버튼까지 그 잘린 영역 안에 있어 손이 안 닿았다. */}
+            {(() => {
+              const rows = [
+                ...(p.find ? p.find.split("\n").map(l => ({ k: "-" as const, l })) : []),
+                ...p.replace.split("\n").map(l => ({ k: "+" as const, l })),
+              ];
+              const LIMIT = 14, PEEK = 8;
+              const long = rows.length > LIMIT;
+              const open = !!this.state.openDiffs[p.id];
+              const shown = long && !open ? rows.slice(0, PEEK) : rows;
+              return (
+                <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
+                  {shown.map((r, i) => (
+                    <div key={r.k + i} className={p.status === "pending" && r.k === "+" ? "sz-in" : undefined}
+                      style={{ display: "flex", background: r.k === "-" ? "rgba(201,123,123,.1)" : "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
+                      <span style={{ flex: "none", width: 16, textAlign: "center", color: r.k === "-" ? "#C97B7B" : "var(--ok)", userSelect: "none" }}>{r.k === "-" ? "−" : "+"}</span>
+                      <span style={{ ...(opts?.wide ? { whiteSpace: "pre" as const, overflowX: "auto" as const } : { whiteSpace: "pre-wrap" as const, wordBreak: "break-all" as const }), color: r.k === "-" ? "#C99A9A" : "#B7CBBA" }}>{r.l || " "}</span>
+                    </div>
+                  ))}
+                  {long && (
+                    <button className="hv05" onClick={() => this.setState(st => ({ openDiffs: { ...st.openDiffs, [p.id]: !st.openDiffs[p.id] } }))}
+                      style={{ width: "100%", height: 26, fontSize: 10.5, fontFamily: SUIT, cursor: "pointer", border: "none", borderTop: "1px solid var(--w05)", color: "var(--fg-dim)", background: "transparent" }}>
+                      {open ? t("misc.diffCollapse") : t("misc.diffExpand", { n: rows.length - PEEK })}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+            {/* 버튼은 diff 밖 — 코드가 아무리 길어도 항상 닿는다 */}
+            {p.status === "pending" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w06)", fontFamily: SUIT }}>
+                <div style={{ flex: 1 }} />
+                <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
+                <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
+              </div>
+            )}
+          </div>
+        );
+  }
+
+  renderProposals() {
+    const s = this.state;
     const pending = s.proposals.filter(p => p.status === "pending").length;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -5000,62 +5086,7 @@ ${(r.output || "").slice(0, 2000)}`;
               <button className="hv05" onClick={() => s.proposals.forEach(p => this.rejectProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("misc.rejectAll")}</button>
             </div>
           )}
-          {s.proposals.map(p => {
-            const [sl, sc] = pstMap[p.status];
-            return (
-              <div key={p.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
-                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "var(--ok)" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
-                <div style={{ padding: "10px 13px 9px 16px" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
-                    <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "var(--accent)", border: `1px solid ${(this.agDef(p.agent)?.color ?? "var(--accent)") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
-                    <div style={{ flex: 1 }} />
-                    {p.auto && <span style={{ flex: "none", fontSize: 9.5, color: "var(--accent)", background: "var(--accent-soft)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("misc.auto")}</span>}
-                    <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
-                  {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
-                </div>
-                {/* diff 는 접었다 펼친다. 예전엔 maxHeight 180 + 중첩 스크롤이라 아래 코드가 안 보이는데
-                    스크롤 대신 드래그 선택이 됐고, 수락/거절 버튼까지 그 잘린 영역 안에 있어 손이 안 닿았다. */}
-                {(() => {
-                  const rows = [
-                    ...(p.find ? p.find.split("\n").map(l => ({ k: "-" as const, l })) : []),
-                    ...p.replace.split("\n").map(l => ({ k: "+" as const, l })),
-                  ];
-                  const LIMIT = 14, PEEK = 8;
-                  const long = rows.length > LIMIT;
-                  const open = !!s.openDiffs[p.id];
-                  const shown = long && !open ? rows.slice(0, PEEK) : rows;
-                  return (
-                    <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", fontFamily: MONO, fontSize: 10.5, lineHeight: "18px" }}>
-                      {shown.map((r, i) => (
-                        <div key={r.k + i} className={p.status === "pending" && r.k === "+" ? "sz-in" : undefined}
-                          style={{ display: "flex", background: r.k === "-" ? "rgba(201,123,123,.1)" : "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
-                          <span style={{ flex: "none", width: 16, textAlign: "center", color: r.k === "-" ? "#C97B7B" : "var(--ok)", userSelect: "none" }}>{r.k === "-" ? "−" : "+"}</span>
-                          <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", color: r.k === "-" ? "#C99A9A" : "#B7CBBA" }}>{r.l || " "}</span>
-                        </div>
-                      ))}
-                      {long && (
-                        <button className="hv05" onClick={() => this.setState(st => ({ openDiffs: { ...st.openDiffs, [p.id]: !st.openDiffs[p.id] } }))}
-                          style={{ width: "100%", height: 26, fontSize: 10.5, fontFamily: SUIT, cursor: "pointer", border: "none", borderTop: "1px solid var(--w05)", color: "var(--fg-dim)", background: "transparent" }}>
-                          {open ? t("misc.diffCollapse") : t("misc.diffExpand", { n: rows.length - PEEK })}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-                {/* 버튼은 diff 밖 — 코드가 아무리 길어도 항상 닿는다 */}
-                {p.status === "pending" && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderTop: "1px solid var(--w06)", fontFamily: SUIT }}>
-                    <div style={{ flex: 1 }} />
-                    <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
-                    <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {s.proposals.map(p => this.renderProposalCard(p))}
         </div>
       </div>
     );
@@ -5992,6 +6023,8 @@ ${(r.output || "").slice(0, 2000)}`;
     const h = this.clampChatH(this.state.chatH, avail);
     if (h !== this.state.chatH) this.setState({ chatH: h });
   };
+  /** 이번 투어에서 단계를 하나라도 실제로 보여줬는가 — 끝났을 때 완주인지 불발인지 가른다. */
+  private _tourShown = false;
   startTour() {
     window.addEventListener("resize", this._tourResize);
     // 중간에 창을 닫았으면 그 단계부터. 인덱스가 아니라 id 로 찾는다 — 단계 순서가
@@ -6002,13 +6035,17 @@ ${(r.output || "").slice(0, 2000)}`;
       const at = saved ? TOUR_STEPS.findIndex(x => x.id === saved) : -1;
       if (at > 0) from = at;
     } catch { /* */ }
+    this._tourShown = false;
     // 다른 오버레이/모달은 모두 닫고 시작 — 투어(z240)가 덮어 가려진 채로 남지 않도록
     this.setState({
       tourOpen: true, tourStep: from, openMenu: null, projOpen: false,
       settingsOpen: false, cmdOpen: false, quickOpen: false, symOpen: false, searchOpen: false,
       aboutOpen: false, commandsOpen: false, mcpOpen: false, usageOpen: false, keysOpen: false,
       extDetail: null, extPanel: null, askClose: null, closing: [],
-    });
+      // 재개 지점을 tourStep 으로 바로 밀어넣지 않고 tourStepTo 를 거친다. 직접 넣으면
+      // when/before/앵커 검증을 통째로 건너뛰어, 앵커가 없는 단계에서 재개될 때 아무것도
+      // 강조되지 않는 빈 카드가 뜬다.
+    }, () => this.tourStepTo(from, 1));
   }
   /** 투어가 앱을 건드리는 유일한 통로. tour.ts 가 App 을 import 하지 않게 한다. */
   private tourHost(): TourHost {
@@ -6025,7 +6062,10 @@ ${(r.output || "").slice(0, 2000)}`;
    */
   private tourStepTo(i: number, dir: 1 | -1 = 1) {
     if (i < 0) return;
-    if (i >= TOUR_STEPS.length) { this.endTour(); return; }
+    // 끝까지 갔는데 한 단계도 못 보여줬다면 완주가 아니라 불발이다. 예전엔 둘 다
+    // endTour 로 흘러가서, 앵커가 하나도 없는 상황에서 투어를 한 번 열었다는 이유만으로
+    // tutorialDone 이 영구히 기록되고 자동 시작이 두 번 다시 안 뜨는 상태가 됐다.
+    if (i >= TOUR_STEPS.length) { if (this._tourShown) this.endTour(); else this.abortTour(); return; }
     const step = TOUR_STEPS[i];
     const host = this.tourHost();
     if (step.when && !step.when(host)) { this.tourStepTo(i + dir, dir); return; }
@@ -6035,11 +6075,13 @@ ${(r.output || "").slice(0, 2000)}`;
       // 건너뛴다 — 예전엔 조용히 중앙 카드로 퇴화해서 아무것도 강조되지 않았다.
       requestAnimationFrame(() => {
         if (step.anchor && !anchorRect(step.anchor)) { this.tourStepTo(i + dir, dir); return; }
+        this._tourShown = true;
         try { localStorage.setItem("schutz.tourStep", step.id); } catch { /* */ }
       });
     });
   }
 
+  /** 완주(또는 사용자가 그만 보겠다고 닫음) — 다시 자동으로 뜨지 않는다. */
   endTour() {
     window.removeEventListener("resize", this._tourResize);
     try {
@@ -6047,6 +6089,15 @@ ${(r.output || "").slice(0, 2000)}`;
       localStorage.removeItem("schutz.tourStep");   // 완주했으면 이어보기 지점도 지운다
     } catch { /* ignore */ }
     this.setState({ tourOpen: false });
+  }
+
+  /** 불발 — 보여줄 수 있는 단계가 하나도 없었다. tutorialDone 을 **쓰지 않는다**:
+   *  못 본 것을 봤다고 기록하면 다시는 볼 기회가 없어진다. */
+  private abortTour() {
+    window.removeEventListener("resize", this._tourResize);
+    try { localStorage.removeItem("schutz.tourStep"); } catch { /* ignore */ }
+    this.setState({ tourOpen: false });
+    this.toast("error", t("tour.noSteps"));
   }
   renderTour() {
     if (!this.state.tourOpen) return null;
