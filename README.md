@@ -5,7 +5,8 @@
 <h1 align="center">Schutz</h1>
 
 <p align="center">
-  An AI-native IDE that shows you the AI editing your code, live.
+  <strong>Die KI schreibt. Du entscheidest.</strong><br>
+  <sub>An AI-native IDE that shows you the AI editing your code, live.</sub>
 </p>
 
 <p align="center">
