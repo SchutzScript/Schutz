@@ -3,7 +3,7 @@ import { setStoredKey, getOAuth, setOAuth } from "./ai/provider";
 import { testProvider } from "./ai/registry";
 import { setThemeId, applyTheme, THEME_TOKENS } from "./theme";
 import { setEditorPrefs, setAutonomy, applyUiFont } from "./settings";
-import { LANGS, getLang, setLang, t } from "./i18n";
+import { LANGS, getLang, setLang, onLangChange, t } from "./i18n";
 import { Logo } from "./icons";
 
 /** Schutz 온보딩 6단계 — 디자인 핸드오프 프로토타입 포팅 */
@@ -86,6 +86,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   };
 
   private _oauthOff: (() => void) | null = null;
+  private _langOff: (() => void) | null = null;
 
   /** [계정으로 로그인] — 브라우저 OAuth 승인 플로우 시작 */
   async startOauth(id: string) {
@@ -112,6 +113,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
   componentDidMount() {
     applyTheme(this.state.theme);
     void this.detectCli();
+    // setLang 은 전환 연출 뒤에 커밋한다 — 구독하지 않으면 글자가 옛 언어에 머문다.
+    this._langOff = onLangChange(() => this.forceUpdate());
     if (window.schutz) {
       this._oauthOff = window.schutz.onOauthResult(line => {
         try {
@@ -138,6 +141,8 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
     this._timers.forEach(clearTimeout);
     this._oauthOff?.();
     this._oauthOff = null;
+    this._langOff?.();
+    this._langOff = null;
   }
 
   go(step: number) { this.setState({ step: Math.max(1, Math.min(6, step)) }); }
@@ -220,7 +225,7 @@ export class Onboarding extends React.Component<{ onFinish: () => void }, S> {
           {LANGS.map(([code, name]) => {
             const on = getLang() === code;
             return (
-              <button key={code} onClick={() => { setLang(code); this.forceUpdate(); }}
+              <button key={code} onClick={() => setLang(code)}
                 style={{ height: 30, padding: "0 13px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, border: on ? "1px solid #8FA893" : "1px solid rgba(255,255,255,.12)", background: on ? "rgba(143,168,147,.14)" : "transparent", color: on ? "#A9BCA9" : "#8B948C" }}>{name}</button>
             );
           })}

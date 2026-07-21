@@ -1,5 +1,5 @@
 import React from "react";
-import { t, LANGS, getLang, setLang } from "../i18n";
+import { t, LANGS, getLang, setLang, onLangChange } from "../i18n";
 import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
@@ -38,6 +38,7 @@ export class Opening extends React.Component<Props, State> {
   private raf = 0;
   private last = 0;
   private reduced = false;
+  private langOff: (() => void) | null = null;
 
   componentDidMount() {
     try { this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* */ }
@@ -47,10 +48,13 @@ export class Opening extends React.Component<Props, State> {
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.tick);
     window.addEventListener("keydown", this.onKey);
+    this.langOff = onLangChange(() => this.forceUpdate());
   }
   componentWillUnmount() {
     cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey);
+    this.langOff?.();
+    this.langOff = null;
   }
 
   /** 아무 키나 누르면 빠져나간다 — 붙잡아두는 게 아니라 보여주는 것이라 길이 늘 열려 있어야 한다. */
@@ -82,8 +86,9 @@ export class Opening extends React.Component<Props, State> {
     this.props.onStartDemo();
   };
 
-  /** 언어를 바꾸면 이 화면의 글자도 즉시 바뀌어야 한다 — 클래스 컴포넌트라 직접 리렌더. */
-  private pickLang = (l: Lang) => { setLang(l); this.forceUpdate(); };
+  /** 언어를 바꾸면 이 화면의 글자도 바뀌어야 한다 — 클래스 컴포넌트라 구독해서 직접 리렌더.
+   *  setLang 은 전환 연출 뒤에 커밋하므로 호출 직후에 그리면 아직 옛 언어가 나온다. */
+  private pickLang = (l: Lang) => { setLang(l); };
 
   private pick = (id: string) => {
     this.setState({ theme: id });

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **The progress beam sat frozen at 8% for the whole run.** Its width came only from the completion ratio of the plan list, which real agent runs never populate — only the scripted demo does. Every actual run fell through to a hardcoded fallback and never moved. It now advances per round.
+- **Toasts were left mounted as invisible ghosts.** Their dismissal timers lived in the shared pool that starting or stopping an agent wipes wholesale, so any toast on screen at that moment never left the state. They now own their timers, matching what tab closing already did for the same reason.
+- **Switching language now transitions in both directions.** Only the arrival was faded before, so the old strings were still fully opaque at the frame everything changed — which is exactly when a Korean-to-German width change is most visible. The screen now blurs out, swaps at the bottom, and comes back. It also applies everywhere language can be picked: the first-run setup screen and onboarding previously had no transition at all.
+
 ### Notes for installers
 
 - **Windows SmartScreen warning.** The installer is not code-signed yet, so Windows shows "unknown publisher." Click **More info → Run anyway** to proceed. This is expected for an unsigned build; signing is planned.
