@@ -3022,7 +3022,7 @@ ${(r.output || "").slice(0, 2000)}`;
     window.addEventListener("resize", this._clampChatOnResize);
     applyTheme(getThemeId());
     applyUiFont(); // 저장된 UI 폰트를 전역 적용
-    this._langOff = onLangChange(() => { this.forceUpdate(); this.playLangSwap(); }); // 언어 변경 시 전체 리렌더
+    this._langOff = onLangChange(() => this.forceUpdate()); // 언어 변경 시 전체 리렌더 (연출은 i18n 이 건다)
     // 데스크톱 앱: 데모 없이 빈 상태에서 시작 + Claude Code CLI(구독 인증) 감지
     if (window.schutz) {
       this.setState(s => ({ ...this.normSlots([], [], s.layout), leftTab: "tree" } as any));
@@ -3086,19 +3086,6 @@ ${(r.output || "").slice(0, 2000)}`;
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
-  /** 언어가 바뀐 순간의 전환 — 모든 문자열과 글자 폭이 한꺼번에 갈리는 걸 부드럽게 덮는다.
-   *  루트에 클래스를 얹었다 빼는 방식이라 React 트리를 건드리지 않는다. */
-  private _langSwapTimer: ReturnType<typeof setTimeout> | undefined;
-  private playLangSwap() {
-    const root = document.getElementById("root") ?? document.body;
-    if (!root) return;
-    root.classList.remove("sz-lang-swap");
-    void root.offsetWidth;                 // 리플로우 강제 — 연속 전환에도 매번 다시 재생되게
-    root.classList.add("sz-lang-swap");
-    clearTimeout(this._langSwapTimer);
-    this._langSwapTimer = setTimeout(() => root.classList.remove("sz-lang-swap"), 420);
-  }
-
   componentWillUnmount() {
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
