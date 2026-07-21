@@ -1,6 +1,7 @@
 // 다국어(i18n) — 경량 t() + 언어 사전. localStorage 영속(theme.ts get/set 패턴).
 // 클래스 컴포넌트는 onLangChange 구독 → forceUpdate 로 리렌더한다.
 import { flushSync } from "react-dom";
+import { reducedMotion } from "./motion";
 import { MESSAGES } from "./i18n/messages";
 
 export type Lang = "ko" | "en" | "de" | "ja";
@@ -51,12 +52,6 @@ export function getLang(): Lang { return current; }
 // 연출을 i18n 이 소유하는 이유: 진입점이 셋(설정·온보딩·오프닝 세팅)인데 예전엔 App 만
 // 자기 리스너에서 연출을 걸었다. 그래서 첫 실행 오프닝에서 언어를 고르면 아무 일도
 // 일어나지 않았다 — 정확히 사람이 이 앱을 처음 만지는 자리에서.
-
-/** CSS 의 `animation-duration:.01ms !important` 는 뷰 트랜지션 의사요소에 닿지 않는다 —
- *  모션 최소화는 JS 에서 직접 묻고 연출 없이 즉시 커밋한다. */
-function reducedMotion(): boolean {
-  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
-}
 
 /** 전환이 예약됐지만 아직 커밋 안 된 언어. 중복 판정은 반드시 이걸 먼저 본다 —
  *  커밋이 늦춰지는 동안 `current` 는 **옛 언어**라, 그것만 보면 "독일어 눌렀다가 곧바로

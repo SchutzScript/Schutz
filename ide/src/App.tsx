@@ -45,7 +45,8 @@ import {
   getActiveVsxTheme, setActiveVsxTheme, getActiveIconTheme, setActiveIconTheme,
 } from "./settings";
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
-import { getUiMode, setUiMode, applyUiMode, UI_MODES, type UiMode } from "./uiMode";
+import { flushSync } from "react-dom";
+import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
 import { DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS } from "./opening/demoScript";
@@ -3371,8 +3372,12 @@ ${(r.output || "").slice(0, 2000)}`;
   toggleUiMode(m: UiMode) {
     if (m === this.state.uiMode) return;
     setUiMode(m, this.state.workspace?.root);
-    applyUiMode(m);
-    this.setState({ uiMode: m, openMenu: null, projOpen: false });
+    // flushSync 를 주입한다 — uiMode.ts 는 React 를 몰라야 하고(테스트가 node 로 가볍게
+    // 돌아야 한다), 그렇다고 비동기로 그리면 브라우저가 옛 화면을 "새 화면" 으로 잡는다.
+    switchUiMode(m, () => {
+      applyUiMode(m);
+      this.setState({ uiMode: m, openMenu: null, projOpen: false });
+    }, flushSync);
   }
 
   /** 이 파일이 미저장인가 — **팬이 열려 있지 않아도** 참일 수 있다.
@@ -3779,7 +3784,7 @@ ${(r.output || "").slice(0, 2000)}`;
         )}
 
         {/* ══ Header ══ */}
-        <div className="titlebar" style={{ flex: "none", height: 54, display: "flex", alignItems: "center", gap: 10, padding: window.schutz ? "2px 150px 0 14px" : "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)", position: "relative", zIndex: 50 }}>
+        <div className="titlebar vtTopbar" style={{ flex: "none", height: 54, display: "flex", alignItems: "center", gap: 10, padding: window.schutz ? "2px 150px 0 14px" : "0 14px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)", position: "relative", zIndex: 50 }}>
           <Logo size={24} />
 
           {/* project switcher */}
@@ -3948,14 +3953,14 @@ ${(r.output || "").slice(0, 2000)}`;
 
         {/* progress beam */}
         <div style={{ flex: "none", height: 2.5, background: "#141715" }}>
-          <div style={{ height: "100%", width: beamW, opacity: beamOp, background: "linear-gradient(90deg,#4D5D53,#7D9183,var(--accent-hi))", transition: "width .5s ease,opacity .8s ease" }} />
+          <div className="szMoving" style={{ height: "100%", width: beamW, opacity: beamOp, background: "linear-gradient(90deg,#4D5D53,#7D9183,var(--accent-hi))", transition: "width .5s ease,opacity .8s ease" }} />
         </div>
 
         {/* ══ Main ══ */}
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
 
           {/* tool rail */}
-          <div data-tour="rail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4, ...gone }}>
+          <div data-tour="rail" className="vtRail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4, ...gone }}>
             <button data-tour="rail-tree" className="hv07" title={t("sc4.railProject")} onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: s.leftTab === "tree" ? "rgba(143,168,147,.16)" : "transparent" }}>
               <FolderIcon color={s.leftTab === "tree" ? "var(--accent-hi)" : "#6E776F"} />
             </button>
@@ -4000,7 +4005,7 @@ ${(r.output || "").slice(0, 2000)}`;
             style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
 
           {/* ── Editor grid ── */}
-          <div data-tour="editor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)", ...gone }}>
+          <div data-tour="editor" className="vtEditor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)", ...gone }}>
             {this.renderPanes()}
           </div>
 
@@ -4010,7 +4015,7 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* ── Right column ── */}
           {/* 예전엔 이 컬럼 전체가 data-tour="agents" 라 에이전트와 변경 검토가
               한 덩어리로 강조됐다. 둘은 다른 이야기라 앵커를 나눈다. */}
-          <div style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)", ...gone }}>
+          <div className="vtSide" style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)", ...gone }}>
             <div data-tour="agents" style={{ flex: "none", display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderAgents()}</div>
             <div data-tour="review" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderReview()}</div>
           </div>
@@ -4020,7 +4025,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {(s.termOpen || this._termMounted) && this.renderTerm()}
 
         {/* ══ Status bar ══ */}
-        <div style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "var(--bg-panel)", borderTop: "1px solid var(--w06)", fontSize: 11, color: "var(--fg-dim)" }}>
+        <div className="vtStatus" style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "var(--bg-panel)", borderTop: "1px solid var(--w06)", fontSize: 11, color: "var(--fg-dim)" }}>
           {(s.git?.branch || s.workspace?.branch) && (
             <button className="hv08" onClick={() => { this.setState({ leftTab: "git" }); void this.loadGit(); }}
               style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)", background: "transparent", border: "none", cursor: "pointer", height: 18, padding: "0 5px", borderRadius: 4 }}>
@@ -4624,7 +4629,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const s = this.state;
     const ag = s.uiMode === "agent";
     return (
-      <div data-tour="chat" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div data-tour="chat" className="vtConversation" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />
@@ -4704,7 +4709,7 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
         )}
         <div style={{ flex: "none", padding: "10px 12px", borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
-          <div style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
+          <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
             {(() => {
               const models = this.modelPalette();
               const list = models.length ? [] : this.slashList();

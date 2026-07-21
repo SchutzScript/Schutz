@@ -1,3 +1,5 @@
+import { reducedMotion } from "./motion";
+
 // UI 모드 — 이 앱이 어떤 모양으로 서 있는지.
 //
 //   editor : 지금까지의 모양. 레일·파일 트리·탭·에디터·우측 패널.
@@ -67,3 +69,37 @@ export function clearUiModeFor(root: string): void {
 export function applyUiMode(m: UiMode): void {
   try { document.documentElement.dataset.mode = m; } catch { /* ignore */ }
 }
+
+// ── 변신 ───────────────────────────────────────────────────────────────────
+// setLang(i18n.ts)이 검증한 패턴을 그대로 쓴다. 거기서 배운 네 가지가 여기서도 그대로
+// 필요하다: 기능 감지 / 모션 최소화는 JS 로 질의 / flushSync / ready 의 reject 삼키기.
+//
+// 다만 언어 전환과 결정적으로 다른 점이 하나 있다. 언어 전환은 상자가 안 바뀌어 제자리
+// 교차 디졸브면 충분했지만, 모드 전환은 **상자가 통째로 달라진다**. 그래서 구조 영역마다
+// view-transition-name 을 붙여 브라우저가 옛 상자에서 새 상자로 각각 이어 붙이게 한다.
+// 이름을 리스트 항목에 붙이면 안 된다 — 같은 이름이 두 번 잡히면 전환 전체가 중단된다.
+
+/** 연출 중임을 알리는 루트 속성. CSS 가 이걸 보고 모드 전용 키프레임을 켠다.
+ *  (언어 전환도 같은 이름들을 지나가지만 그쪽은 상자가 안 바뀌므로 기본 디졸브로 둔다.) */
+const ANIM_ATTR = "modeAnim";
+
+export function switchUiMode(next: UiMode, commit: () => void, flush: (fn: () => void) => void): void {
+  const doc = document as Document & {
+    startViewTransition?: (cb: () => void) => { ready: Promise<void>; finished: Promise<void> };
+  };
+  const start = doc.startViewTransition;
+  if (reducedMotion() || typeof start !== "function") { commit(); return; }
+
+  try {
+    document.documentElement.dataset[ANIM_ATTR] = next === "agent" ? "to-agent" : "to-editor";
+    // flushSync 가 없으면 브라우저가 아직 옛 화면인 상태를 "새 화면" 으로 잡아
+    // 아무것도 안 바뀐 디졸브가 된다 — 언어 전환에서 이미 확인한 함정이다.
+    const vt = start.call(doc, () => flush(commit));
+    void vt.ready.catch(() => { /* 도중에 다른 전환이 끼어들면 reject 된다 — 정상 */ });
+    void vt.finished.finally(() => { try { delete document.documentElement.dataset[ANIM_ATTR]; } catch { /* */ } });
+  } catch {
+    try { delete document.documentElement.dataset[ANIM_ATTR]; } catch { /* */ }
+    commit();   // 연출이 실패해도 모드는 바뀌어야 한다
+  }
+}
+
