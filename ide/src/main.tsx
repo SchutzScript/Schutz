@@ -6,9 +6,13 @@ import { Onboarding } from "./Onboarding";
 import { applyTheme, getThemeId } from "./theme";
 import { applyUiFont } from "./settings";
 import { applyLang } from "./i18n";
+import { applyUiMode, getUiMode } from "./uiMode";
 
 // 첫 페인트 전에 테마/폰트/언어를 적용 — 저장된 Paper(라이트) 등에서 다크 플래시 방지, <html lang> 동기화
-try { applyTheme(getThemeId()); applyUiFont(); applyLang(); } catch { /* ignore */ }
+// 첫 페인트 전에 모드까지 찍는다 — 없으면 에이전트 모드 사용자가 에디터 레이아웃을
+// 한 프레임 보고 지나간다. 여기선 워크스페이스를 모르니 전역 기본값이고, App 이 프로젝트를
+// 열면서 그 프로젝트 값으로 다시 맞춘다.
+try { applyTheme(getThemeId()); applyUiFont(); applyLang(); applyUiMode(getUiMode()); } catch { /* ignore */ }
 
 const DONE_KEY = "schutz.onboarded";     // 기존 설정 마법사 완료
 const OPEN_KEY = "schutz.openingSeen";   // 신규 오프닝 시청 완료
