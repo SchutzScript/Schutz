@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Notes for installers
+
+- **Windows SmartScreen warning.** The installer is not code-signed yet, so Windows shows "unknown publisher." Click **More info → Run anyway** to proceed. This is expected for an unsigned build; signing is planned.
+
 ## [0.0.3]
 
 The release that made the manager agent tell the truth, and taught Schutz to run commands.
