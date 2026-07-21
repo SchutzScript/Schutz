@@ -180,7 +180,6 @@ interface S {
   termInput: string;
   settingsOpen: boolean;
   /** 설정 모달 활성 섹션 탭 */
-  settingsTab: string;
   /** UI 대시보드/모달 (채팅 대신) */
   aboutOpen: boolean;
   usageOpen: boolean;
@@ -393,7 +392,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, settingsTab: "editor", aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, closing: [], closingTabs: [], testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }

@@ -31,11 +31,15 @@ Most AI coding tools hand you a finished diff and ask you to trust it. Schutz sh
 
 Download the latest build from the [Releases page](https://github.com/SchutzScript/Schutz/releases).
 
-| Platform | Availability |
+| Platform | Download |
 |---|---|
 | Windows | `SchutzSetup-<version>.exe` installer |
-| macOS | Build from source |
-| Linux | Build from source |
+| macOS | `.dmg` (Intel and Apple Silicon) |
+| Linux | `.AppImage` or `.deb` |
+
+### A note on the Windows warning
+
+The installer is not code-signed yet, so Windows SmartScreen shows **"Windows protected your PC / unknown publisher."** This is expected for an unsigned app, not a sign of anything wrong. To proceed: click **More info**, then **Run anyway**. Signing is planned; until then the warning builds down as more people run the app.
 
 ## Quick start
 
