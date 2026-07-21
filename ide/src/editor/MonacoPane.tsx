@@ -4,6 +4,7 @@ import { activeMonacoTheme } from "../ext/activeTheme";
 import { getEditorPrefs, codeFontStack } from "../settings";
 import * as projectModels from "./projectModels";
 import { t } from "../i18n";
+import { useLang } from "../i18n/useLang";
 // @ts-ignore — monaco-vim 타입 미제공
 import { initVimMode } from "monaco-vim";
 
@@ -53,6 +54,8 @@ type LoadState = "loading" | "ready" | "error";
 
 /** 실제 파일을 여는 Monaco 편집 페인 (Electron 전용 — window.schutz 필요) */
 function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint }: Props) {
+  // React.memo 가 부모의 forceUpdate 를 막으므로 언어는 여기서 직접 구독한다.
+  const langTick = useLang();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
@@ -240,7 +243,8 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
     }
     bpDecoRef.current = editor.deltaDecorations(bpDecoRef.current, decos);
     if (stoppedLine) editor.revealLineInCenter(stoppedLine);
-  }, [breakpoints, stoppedLine, state]);
+    // langTick — hover 메시지의 t() 가 여기서 굳으므로, 언어가 바뀌면 다시 돌아야 한다.
+  }, [breakpoints, stoppedLine, state, langTick]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, position: "relative" }}>

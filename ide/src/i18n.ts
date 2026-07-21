@@ -1,5 +1,6 @@
 // 다국어(i18n) — 경량 t() + 언어 사전. localStorage 영속(theme.ts get/set 패턴).
 // 클래스 컴포넌트는 onLangChange 구독 → forceUpdate 로 리렌더한다.
+import { flushSync } from "react-dom";
 import { MESSAGES } from "./i18n/messages";
 
 export type Lang = "ko" | "en" | "de" | "ja";
@@ -33,56 +34,58 @@ export function onLangChange(cb: () => void): () => void { listeners.add(cb); re
 export function getLang(): Lang { return current; }
 
 // ── 전환 연출 ──────────────────────────────────────────────────────────────
-// 두 박자다: 흐려서 내보내고 → 바닥에서 갈아끼우고 → 선명하게 들인다.
+// 테마를 바꿀 때처럼 — 어두워지지도, 흐려지지도, 깜빡이지도 않고 그냥 갈린다.
 //
-// 예전엔 들어오는 쪽만 페이드했다. 그러면 옛 글자가 100% 불투명한 상태에서 한 프레임에
-// 갈리고, 한국어→독일어처럼 글자 폭이 크게 달라지는 조합에선 그 리플로가 가장 잘 보이는
-// 순간에 일어난다. 페이드가 덮는 건 색이지 레이아웃이 아니라서, 순서가 바뀌어야 했다.
+// 두 번을 헛짚었다. 처음엔 들어오는 쪽만 페이드했다(옛 글자가 100% 불투명한 상태에서 한
+// 프레임에 갈리니 리플로가 그대로 보임). 다음엔 흐려서 내보냈다 들였다(이번엔 안 튀지만
+// 화면 전체가 눈에 띄게 죽었다 살아난다 — 설정 하나 바꾸는 값으로는 과하다).
+//
+// 둘 다 같은 착각에서 나왔다. **화면을 가려서** 바뀌는 순간을 숨기려 한 것이다. 뷰 트랜지션은
+// 가리지 않는다 — 옛 화면을 스냅샷으로 잡아두고 새 화면을 그 위에 겹쳐 교차 디졸브한다.
+// 둘 다 제 밝기 그대로다. 대부분의 픽셀(코드·패널·아이콘)은 양쪽이 같아서 아무 일도 안
+// 일어난 것처럼 보이고, 실제로 달라진 글자만 제자리에서 녹아 바뀐다.
+//
+// 겹침 처리도 브라우저가 한다 — 연출 중에 또 누르면 앞 전환이 스킵되고 새 전환이 선다.
+// 그래서 예약 큐도, 타이머도, 클래스 뒷정리도 필요 없다.
 //
 // 연출을 i18n 이 소유하는 이유: 진입점이 셋(설정·온보딩·오프닝 세팅)인데 예전엔 App 만
-// 자기 리스너에서 클래스를 얹었다. 그래서 첫 실행 오프닝에서 언어를 고르면 아무 일도
+// 자기 리스너에서 연출을 걸었다. 그래서 첫 실행 오프닝에서 언어를 고르면 아무 일도
 // 일어나지 않았다 — 정확히 사람이 이 앱을 처음 만지는 자리에서.
-const SWAP_OUT_MS = 150;
-const SWAP_IN_MS = 320;
-let swapTimer: ReturnType<typeof setTimeout> | undefined;
-let swapRaf = 0;
-/** 연출 중 예약된 언어 — 도중에 다시 눌러도 마지막 선택으로 수렴한다. */
-let queued: Lang | null = null;
 
-/** CSS 의 `animation-duration:.01ms !important` 는 JS 타이머를 막지 못한다 — 직접 묻는다.
- *  안 물으면 모션 최소화에서 화면이 바닥값에 붙은 채 150ms 를 서 있게 된다. */
+/** CSS 의 `animation-duration:.01ms !important` 는 뷰 트랜지션 의사요소에 닿지 않는다 —
+ *  모션 최소화는 JS 에서 직접 묻고 연출 없이 즉시 커밋한다. */
 function reducedMotion(): boolean {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
 }
-function swapRoot(): HTMLElement | null {
-  try { return document.getElementById("root") ?? document.body ?? null; } catch { return null; }
-}
+
+/** 전환이 예약됐지만 아직 커밋 안 된 언어. 중복 판정은 반드시 이걸 먼저 본다 —
+ *  커밋이 늦춰지는 동안 `current` 는 **옛 언어**라, 그것만 보면 "독일어 눌렀다가 곧바로
+ *  한국어(=현재 언어)로 되돌리기" 가 조기 반환에 걸려 조용히 씹히고 독일어로 끝난다. */
+let pending: Lang | null = null;
 
 export function setLang(l: Lang): void {
-  if (!(ALL as string[]).includes(l) || l === (queued ?? current)) return;
-  const root = swapRoot();
-  if (!root || reducedMotion()) { commitLang(l); return; }
+  if (!(ALL as string[]).includes(l) || l === (pending ?? current)) return;
 
-  queued = l;
-  clearTimeout(swapTimer);
-  cancelAnimationFrame(swapRaf);
-  root.classList.remove("sz-lang-in");
-  root.classList.add("sz-lang-out");
-  swapTimer = setTimeout(() => {
-    const next = queued ?? l;
-    queued = null;
-    commitLang(next);
-    // out 은 forwards 라 바닥값을 물고 있다. 새 글자는 그 바닥에서 나타나므로 한 프레임
-    // 늦게 클래스를 갈아도 번쩍이지 않는다 — React 가 언제 그리든 안전하다.
-    swapRaf = requestAnimationFrame(() => {
-      root.classList.remove("sz-lang-out");
-      root.classList.add("sz-lang-in");
-      swapTimer = setTimeout(() => root.classList.remove("sz-lang-in"), SWAP_IN_MS);
-    });
-  }, SWAP_OUT_MS);
+  const start = (document as Document & {
+    startViewTransition?: (cb: () => void) => { ready: Promise<void> };
+  }).startViewTransition;
+  if (reducedMotion() || typeof start !== "function") { commitLang(l); return; }
+
+  pending = l;
+  try {
+    // flushSync 가 있어야 콜백 안에서 DOM 이 다 갈린다. 비동기로 그리면 브라우저가 아직
+    // 옛 화면인 상태를 "새 화면"으로 잡아 아무것도 안 바뀐 디졸브가 된다.
+    const vt = start.call(document, () => flushSync(() => commitLang(l)));
+    // 연출 중에 또 누르면 앞 전환이 스킵되면서 ready 가 reject 된다 — 정상 경로다.
+    void vt.ready.catch(() => { /* ignore */ });
+  } catch {
+    commitLang(l);   // 연출이 실패해도 언어는 바뀌어야 한다
+  }
 }
 
 function commitLang(l: Lang): void {
+  // 예약분을 먼저 턴다 — 이 커밋이 조기 반환하더라도 다음 클릭이 막히면 안 된다.
+  if (pending === l) pending = null;
   if (l === current) return;
   current = l;
   try { localStorage.setItem(LANG_KEY, l); } catch { /* ignore */ }

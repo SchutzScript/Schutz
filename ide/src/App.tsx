@@ -168,7 +168,9 @@ interface S {
   /** 제안 카드에서 diff 를 펼친 것 (id → true) */
   openDiffs: Record<string, boolean>;
   /** 열린 터미널 탭들 (멀티 터미널) */
-  terms: { id: string; title: string }[];
+  // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
+  // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
+  terms: { id: string; n: number }[];
   agents: Record<string, AgentState>;
   /** 실제로 연 프로젝트 폴더 (Electron 전용). null이면 데모 모드 */
   workspace: SchutzWorkspaceTree | null;
@@ -390,7 +392,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, quota: {}, askRun: null, terms: [{ id: "t1", title: t("sc1.terminal_1") }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -1074,7 +1076,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   addTerm() {
     this._termSeq++;
     const id = "t" + this._termSeq + "_" + (this._uid++);
-    this.setState(s => ({ terms: [...s.terms, { id, title: t("sc1.terminal_prefix") + (s.terms.length + 1) }], termTab: id, termOpen: true } as any));
+    this.setState(s => ({ terms: [...s.terms, { id, n: s.terms.length + 1 }], termTab: id, termOpen: true } as any));
   }
   /** 터미널 탭 닫기 (셸은 XtermView 언마운트 시 kill) */
   closeTerm(id: string) {
@@ -5174,7 +5176,7 @@ ${(r.output || "").slice(0, 2000)}`;
             return (
               <div key={t.id} className="hvTermTab" onMouseDown={() => this.setState({ termTab: t.id, termOpen: true })}
                 style={{ height: 24, padding: "0 6px 0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
-                {t.title}
+                {t2("sc1.terminal_prefix") + t.n}
                 {s.terms.length > 1 && (
                   <button className="hvDim" title={termCloseTitle} onMouseDown={e => { e.stopPropagation(); this.closeTerm(t.id); }}
                     style={{ width: 15, height: 15, fontSize: 9, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>

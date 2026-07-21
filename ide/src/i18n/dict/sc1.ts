@@ -71,7 +71,6 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc1.code_exchange_failed": { ko: "코드 교환 실패", en: "Code exchange failed", de: "Code-Austausch fehlgeschlagen", ja: "コード交換に失敗" },
   "sc1.code_exchange_error": { ko: "코드 교환 오류: ", en: "Code exchange error: ", de: "Code-Austauschfehler: ", ja: "コード交換エラー: " },
   "sc1.connected_ok": { ko: "✓ 연결됨", en: "✓ Connected", de: "✓ Verbunden", ja: "✓ 接続済み" },
-  "sc1.terminal_1": { ko: "터미널 1", en: "Terminal 1", de: "Terminal 1", ja: "ターミナル 1" },
   "sc1.terminal_prefix": { ko: "터미널 ", en: "Terminal ", de: "Terminal ", ja: "ターミナル " },
   "sc1.desktop_only_project": { ko: "프로젝트 열기는 데스크톱 앱에서만 가능합니다. Schutz 앱(설치본 또는 npm run electron)에서 실행해 주세요.", en: "Opening a project is only available in the desktop app. Please run it in the Schutz app (installed build or npm run electron).", de: "Ein Projekt kann nur in der Desktop-App geöffnet werden. Bitte führen Sie es in der Schutz-App aus (Installation oder npm run electron).", ja: "プロジェクトを開けるのはデスクトップアプリのみです。Schutz アプリ（インストール版または npm run electron）で実行してください。" },
   "sc1.orig_not_found": { ko: "원문을 찾을 수 없습니다 (파일이 변경됨)", en: "Original text not found (file changed)", de: "Originaltext nicht gefunden (Datei geändert)", ja: "元のテキストが見つかりません (ファイルが変更されました)" },
