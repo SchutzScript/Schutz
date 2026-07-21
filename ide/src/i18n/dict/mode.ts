@@ -36,4 +36,16 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Gilt nur für dieses Projekt.",
     ja: "このプロジェクトにのみ適用されます。",
   },
+  "mode.transcriptEmpty": {
+    ko: "아래에 요청을 적으면 여기에 흐릅니다 — 무엇을 읽고 무엇을 고쳤는지 한 줄기로.",
+    en: "Type a request below and it flows here — everything read and changed, in one thread.",
+    de: "Schreiben Sie unten eine Anfrage — alles Gelesene und Geänderte erscheint hier in einem Strang.",
+    ja: "下に依頼を書くとここに流れます — 何を読み何を変えたか、ひと続きで。",
+  },
+  "mode.approvalWaiting": {
+    ko: "명령 실행을 기다리는 중",
+    en: "Waiting to run a command",
+    de: "Wartet auf Ausführung eines Befehls",
+    ja: "コマンド実行の承認待ち",
+  },
 };

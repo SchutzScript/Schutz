@@ -46,6 +46,7 @@ import {
 } from "./settings";
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { flushSync } from "react-dom";
+import { buildTimeline } from "./agentTimeline";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
@@ -169,6 +170,8 @@ interface S {
   askRun: { command: string; rationale: string; agent: string } | null;
   /** 제안 카드에서 diff 를 펼친 것 (id → true) */
   openDiffs: Record<string, boolean>;
+  /** 트랜스크립트에서 펼친 도구 줄 */
+  openTools: Record<string, boolean>;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -397,7 +400,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -4584,7 +4587,9 @@ ${(r.output || "").slice(0, 2000)}`;
     };
 
     return (
-      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 3, padding: "0 12px 6px", overflowX: "auto" }}>
+      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 3, padding: "0 12px 6px",
+        paddingLeft: this.state.uiMode === "agent" ? "max(18px, calc((100% - 88ch) / 2))" : undefined,
+        overflowX: "auto" }}>
         {tab("all", t("chat.tabAll"))}
         <span style={{ flex: "none", width: 1, height: 13, background: "var(--w07)", margin: "0 3px" }} />
         {ids.map(id => tab(id, this.agDef(id).name, this.agDef(id).color))}
@@ -4596,6 +4601,8 @@ ${(r.output || "").slice(0, 2000)}`;
   renderAskRun() {
     const a = this.state.askRun;
     if (!a) return null;
+    // 에이전트 모드는 모달을 쓰지 않는다. 같은 answerRun 을 흐름 안 카드와 고정 바가 부른다.
+    if (this.state.uiMode === "agent") return null;
     const d = this.agDef(a.agent);
     return (
       <div className="sz-backdrop" onClick={() => this.answerRun(false)}
@@ -4625,12 +4632,128 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── 좌 패널: 대화 ──
+  /** 트랜스크립트 한 줄기 — 대화·도구·제안·대기 중인 승인을 시간순으로 합친다.
+   *
+   *  visibleMessages() 를 그대로 재사용한다. 그 함수는 chatTab 이 "all" 이면 조기
+   *  반환하는데(에이전트 모드엔 탭이 없으니 늘 그렇다), 그 뒤에 있는 i-1 인접 페어링
+   *  휴리스틱은 도구 줄이 섞이면 깨진다. **조기 반환을 "정리" 하지 말 것** — 그게
+   *  여기서 유일하게 안전을 보장하는 장치다. */
+  private renderAgentRows() {
+    const s = this.state;
+    const rows = buildTimeline({
+      messages: this.visibleMessages(), tools: s.tools, proposals: s.proposals, ask: s.askRun,
+    });
+    if (!rows.length) {
+      return <div style={{ fontSize: 12.5, color: "var(--fg-dim2)", padding: "18px 2px", fontFamily: SUIT }}>{t("mode.transcriptEmpty")}</div>;
+    }
+    return rows.map(r => {
+      if (r.k === "msg") return this.renderChatMsg(r.v as ChatMsg);
+      if (r.k === "tool") return this.renderToolRow(r.v as ToolItem);
+      if (r.k === "prop") return this.renderProposalCard(r.v as Proposal, { wide: true });
+      return this.renderApprovalCard(r.v as { command: string; rationale: string; agent: string });
+    });
+  }
+
+  /** 도구 호출 한 줄. CLI 의 리듬을 만드는 자리라 모노스페이스다.
+   *  기본은 접힘 — 펼치면 실제 출력이 나온다(run_command 만 out 을 남긴다). */
+  private renderToolRow(ti: ToolItem) {
+    const open = !!this.state.openTools[ti.id];
+    const color = this.agDef(ti.agent)?.color ?? "var(--accent)";
+    const canOpen = !!ti.out;
+    return (
+      <div key={ti.id} className="sz-in" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div onClick={canOpen ? () => this.setState(st => ({ openTools: { ...st.openTools, [ti.id]: !st.openTools[ti.id] } })) : undefined}
+          style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 20, cursor: canOpen ? "pointer" : "default", fontFamily: MONO, fontSize: 11.5 }}>
+          <span style={{ flex: "none", width: 9, fontSize: 8, color: "var(--fg-dim)" }}>{canOpen ? (open ? "▾" : "▸") : ""}</span>
+          <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: color, opacity: ti.st === "run" ? 1 : .5 }} />
+          <span style={{ flex: "none", color: "var(--fg-sub)" }}>{ti.verb}</span>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-dim)" }}>{ti.path}</span>
+          <div style={{ flex: 1 }} />
+          {ti.st === "run"
+            ? <span style={{ flex: "none", width: 9, height: 9, borderRadius: "50%", border: "1.5px solid var(--w14)", borderTopColor: color, animation: "szSpin .8s linear infinite" }} />
+            : <span style={{ flex: "none", fontSize: 10.5, color: "var(--fg-dim2)" }}>{ti.note}</span>}
+        </div>
+        {open && ti.out && (
+          <pre style={{ margin: "0 0 0 23px", padding: "8px 10px", maxHeight: 320, overflow: "auto", fontFamily: MONO, fontSize: 11, lineHeight: 1.6, color: "var(--fg-code)", background: "var(--bg-editor)", border: "1px solid var(--w06)", borderRadius: 8, whiteSpace: "pre" }}>{ti.out}</pre>
+        )}
+      </div>
+    );
+  }
+
+  /** 승인 — 흐름 안에 그대로 놓인다. 모달이 아니다. */
+  private renderApprovalCard(a: { command: string; rationale: string; agent: string }) {
+    const d = this.agDef(a.agent);
+    return (
+      <div key="askrun" className="sz-in" style={{ background: "var(--bg-card)", border: "1px solid #C4A88240", borderRadius: 10, padding: "11px 13px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.color, flex: "none" }} />
+          <span style={{ fontSize: 12, fontWeight: 650, color: "var(--fg)" }}>{t("run.askTitle")}</span>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{d.name}</span>
+        </div>
+        {a.rationale && <div style={{ fontSize: 12, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 8, fontFamily: SUIT }}>{a.rationale}</div>}
+        <div style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7, color: "var(--fg)", background: "var(--bg-editor)", border: "1px solid var(--w07)", borderRadius: 8, padding: "9px 11px", maxHeight: 180, overflow: "auto", whiteSpace: "pre", overflowX: "auto" }}>
+          <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>{a.command}
+        </div>
+        <div style={{ display: "flex", gap: 7, marginTop: 10 }}>
+          <div style={{ flex: 1 }} />
+          <button className="hv05" onClick={() => this.answerRun(false)}
+            style={{ height: 26, padding: "0 12px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("run.reject")}</button>
+          <button className="hvAccent" onClick={() => this.answerRun(true)}
+            style={{ height: 26, padding: "0 15px", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("run.approve")}</button>
+        </div>
+      </div>
+    );
+  }
+
+  /** 컴포저 바로 위에 **고정**되는 승인 줄.
+   *
+   *  카드만 있으면 위로 스크롤해 시야에서 사라질 수 있는데, askRunApproval 의 promise 에는
+   *  타임아웃도 취소 경로도 없다. 화면 밖으로 나간 카드 하나가 에이전트 루프를 영원히
+   *  세운다. 스크롤되는 표면만으로는 이 보장을 만들 수 없어서 바를 따로 둔다. */
+  private renderApprovalBar() {
+    const a = this.state.askRun;
+    if (!a) return null;
+    return (
+      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 9, padding: "7px 14px", paddingLeft: "max(18px, calc((100% - 88ch) / 2))", paddingRight: "max(18px, calc((100% - 88ch) / 2))", borderTop: "1px solid #C4A88233", background: "color-mix(in srgb, #C4A882 8%, transparent)" }}>
+        <span style={{ fontSize: 11.5, color: "#D8C09A", fontFamily: SUIT }}>{t("mode.approvalWaiting")}</span>
+        <span style={{ minWidth: 0, flex: 1, fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>$ {a.command}</span>
+        <button className="hv05" onClick={() => this.answerRun(false)}
+          style={{ flex: "none", height: 22, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("run.reject")}</button>
+        <button className="hvAccent" onClick={() => this.answerRun(true)}
+          style={{ flex: "none", height: 22, padding: "0 13px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("run.approve")}</button>
+      </div>
+    );
+  }
+
+  /** 대화 한 줄 — 두 모드가 같은 것을 그린다. 에이전트 모드는 폭만 달라진다. */
+  private renderChatMsg(m: ChatMsg) {
+    return (
+          <div key={m.id} className="sz-in sz-msg" style={{ display: "flex", gap: 8, position: "relative" }}>
+            <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
+            {/* 복사 — 긴 답변을 드래그로 긁어내는 건 사실상 불가능했다. hover 시에만 나타난다 */}
+            <button className="sz-msg-copy hv05" title={t("chat.copyMsg")}
+              onClick={() => { navigator.clipboard.writeText(m.text ?? "").then(() => this.toast("ok", t("chat.copied")), () => { /* 클립보드 거부 */ }); }}
+              style={{ position: "absolute", top: -2, right: 0, height: 19, padding: "0 7px", fontSize: 9.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "var(--bg-card)", border: "1px solid var(--w08)" }}>⧉</button>
+            <div style={{ minWidth: 0 }}>
+              {/* 에이전트 색으로 라벨 — 전에는 전부 같은 --accent 라 이름 글자만 달랐다.
+                  AGDEF.color 는 에이전트 패널·제안 배지·AI 로그가 이미 쓰는 관용구다. */}
+              {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: this.chatAgentColor(m.agent), marginBottom: 2 }}>{m.who}</div>}
+              <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word", color: m.role === "user" ? "#E0E5E0" : "var(--fg-sub2)", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
+                {m.text}
+                {m.streaming && <span style={{ display: "inline-block", width: 2, height: 12, marginLeft: 2, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
+              </div>
+            </div>
+          </div>
+    );
+  }
+
   renderChat() {
     const s = this.state;
     const ag = s.uiMode === "agent";
     return (
       <div data-tour="chat" className="vtConversation" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
+        <div style={{ flex: "none", height: ag ? 40 : 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />
           {window.schutz && s.cliAgents.claude?.ok && s.workspace && !s.running && (
@@ -4653,29 +4776,15 @@ ${(r.output || "").slice(0, 2000)}`;
             ↓ {t("chat.jumpLatest")}
           </button>
         )}
-        <div ref={el => { this._chat = el; }} onScroll={this.onChatScroll} style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", scrollbarGutter: "stable", padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {this.visibleMessages().map(m => (
-            <div key={m.id} className="sz-in sz-msg" style={{ display: "flex", gap: 8, position: "relative" }}>
-              <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
-              {/* 복사 — 긴 답변을 드래그로 긁어내는 건 사실상 불가능했다. hover 시에만 나타난다 */}
-              <button className="sz-msg-copy hv05" title={t("chat.copyMsg")}
-                onClick={() => { navigator.clipboard.writeText(m.text ?? "").then(() => this.toast("ok", t("chat.copied")), () => { /* 클립보드 거부 */ }); }}
-                style={{ position: "absolute", top: -2, right: 0, height: 19, padding: "0 7px", fontSize: 9.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "var(--bg-card)", border: "1px solid var(--w08)" }}>⧉</button>
-              <div style={{ minWidth: 0 }}>
-                {/* 에이전트 색으로 라벨 — 전에는 전부 같은 --accent 라 이름 글자만 달랐다.
-                    AGDEF.color 는 에이전트 패널·제안 배지·AI 로그가 이미 쓰는 관용구다. */}
-                {m.role === "ai" && m.who && <div style={{ fontSize: 10, color: this.chatAgentColor(m.agent), marginBottom: 2 }}>{m.who}</div>}
-                <div style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word", color: m.role === "user" ? "#E0E5E0" : "var(--fg-sub2)", fontWeight: m.role === "user" ? 500 : 400, fontFamily: SUIT }}>
-                  {m.text}
-                  {m.streaming && <span style={{ display: "inline-block", width: 2, height: 12, marginLeft: 2, background: "var(--accent)", verticalAlign: -1, animation: "szBlink 1s steps(1) infinite" }} />}
-                </div>
-              </div>
-            </div>
-          ))}
+        <div ref={el => { this._chat = el; }} onScroll={this.onChatScroll} style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", scrollbarGutter: "stable",
+            padding: ag ? "16px max(18px, calc((100% - 88ch) / 2)) 22px" : "0 16px 14px",
+            display: "flex", flexDirection: "column", gap: ag ? 13 : 10 }}>
+          {ag ? this.renderAgentRows() : this.visibleMessages().map(m => this.renderChatMsg(m))}
         </div>
         </div>
+        {ag && this.renderApprovalBar()}
         {window.schutz && s.workspace && (
-          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", position: "relative", borderTop: "1px solid var(--w06)" }}>
+          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, position: "relative", borderTop: "1px solid var(--w06)" }}>
             <button className="hv05" title={t("chat.attachFileTitle")} onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}
               style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachFile")}</button>
             <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
@@ -4708,7 +4817,7 @@ ${(r.output || "").slice(0, 2000)}`;
             })()}
           </div>
         )}
-        <div style={{ flex: "none", padding: "10px 12px", borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
+        <div style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
           <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
             {(() => {
               const models = this.modelPalette();

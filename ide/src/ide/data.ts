@@ -53,6 +53,9 @@ export interface ToolItem {
   path: string;
   st: "run" | "done" | "stopped";
   note: string;
+  /** 실제 출력 — 에이전트 모드 트랜스크립트에서 도구 줄을 펼치면 나온다.
+   *  화면용이라 8KB 에서 자르고 저장하지 않는다(세션은 대화만 담는다). */
+  out?: string;
 }
 
 export interface ReviewFile {
