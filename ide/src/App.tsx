@@ -6,7 +6,7 @@ import {
 } from "./ide/data";
 import {
   GitBranchIcon, SearchIcon,
-  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon, DebugIcon, McpIcon, Logo,
+  FolderIcon, FlowIcon, TermIcon, GearIcon, TermStatusIcon, DebugIcon, McpIcon, Logo, ModeGlyph,
 } from "./icons";
 import { FileIcon } from "./fileIcons";
 import {
@@ -45,6 +45,7 @@ import {
   getActiveVsxTheme, setActiveVsxTheme, getActiveIconTheme, setActiveIconTheme,
 } from "./settings";
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
+import { getUiMode, setUiMode, applyUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
 import { DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS } from "./opening/demoScript";
@@ -251,6 +252,9 @@ interface S {
   leftW: number;
   rightW: number;
   chatH: number;
+  /** 이 창이 어떤 모양으로 서 있는지. getUiMode() 를 렌더에서 매번 읽지 않고 state 로 드는 이유는
+   *  componentDidUpdate 가 모드 변화를 보고 Monaco 를 다시 레이아웃해야 하기 때문이다. */
+  uiMode: UiMode;
   /** 마크다운 미리보기 중인 rel 집합 */
   mdPreview: Record<string, boolean>;
   /** 찾기·바꾸기 모드(검색 오버레이) */
@@ -414,6 +418,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     cmdOpen: false, cmdQuery: "", cmdSel: 0, modelPickFor: null,
     toasts: [],
     leftW: (() => { try { return Math.max(200, Math.min(520, +(localStorage.getItem("schutz.leftW") || 272))); } catch { return 272; } })(),
+    uiMode: getUiMode(),   // 워크스페이스는 아직 없다 — 전역 기본값. 열릴 때 프로젝트 값으로 다시 맞춘다
     rightW: (() => { try { return Math.max(240, Math.min(600, +(localStorage.getItem("schutz.rightW") || 336))); } catch { return 336; } })(),
     // 대화 높이. 예전엔 트리와 대화가 둘 다 flex:1 이라 50/50 으로 고정이었다.
     chatH: (() => { try { return Math.max(CHAT_MIN_H, +(localStorage.getItem("schutz.chatH") || 360)); } catch { return 360; } })(),
@@ -784,6 +789,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
         docs: window.schutz ? {} : freshDocs(), files: [], plan: [], tools: [], chips: {},
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
+        // 프로젝트마다 모드를 따로 기억한다 — 설정이 없으면 전역 기본값으로 떨어진다
+        uiMode: getUiMode(tree.root),
         agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
         git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
       } as any), () => {
@@ -844,6 +851,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       { id: "saveAll", label: t("sc1.cmd_save_all"), hint: "Ctrl+Shift+S", run: () => void this.saveAll() },
       { id: "settings", label: t("sc1.cmd_open_settings"), hint: "Ctrl+,", run: () => this.openO({ settingsOpen: true }) },
       { id: "term", label: t("sc1.cmd_toggle_terminal"), hint: "Ctrl+`", run: () => this.toggleTerm() },
+      { id: "uiMode", label: t("mode.command"), hint: "Ctrl+Shift+M", run: () => this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent") },
       { id: "split1", label: t("sc1.cmd_split1"), run: () => this.setLayout(1) },
       { id: "split2", label: t("sc1.cmd_split2"), run: () => this.setLayout(2) },
       { id: "split4", label: t("sc1.cmd_split4"), run: () => this.setLayout(4) },
@@ -3209,6 +3217,7 @@ ${(r.output || "").slice(0, 2000)}`;
     else if (k === "tab") { e.preventDefault(); this.cycleMru(e.shiftKey ? -1 : 1); }
     else if (k === ",") { e.preventDefault(); this.openO({ settingsOpen: true }); }
     else if (k === "`") { e.preventDefault(); this.toggleTerm(); }
+    else if (k === "m" && e.shiftKey) { e.preventDefault(); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); }
   };
 
   /** Ctrl+Tab MRU 탭 순환 */
@@ -3356,6 +3365,16 @@ ${(r.output || "").slice(0, 2000)}`;
       return { breakpoints: { ...s.breakpoints, [rel]: next } };
     }, () => { if (dap.isActive()) void dap.updateBreakpoints(this.dbgRelToAbs(rel), next); });
   };
+  /** 모드 전환. 지금은 그냥 setState — 연출은 다음 단계에서 이 자리에 들어온다.
+   *  워크스페이스가 열려 있으면 그 프로젝트에만 저장한다(대화만 하는 저장소와 손으로
+   *  고치는 저장소를 따로 둘 수 있게). 아직 안 열렸으면 전역 기본값이 된다. */
+  toggleUiMode(m: UiMode) {
+    if (m === this.state.uiMode) return;
+    setUiMode(m, this.state.workspace?.root);
+    applyUiMode(m);
+    this.setState({ uiMode: m, openMenu: null, projOpen: false });
+  }
+
   /** 이 파일이 미저장인가 — **팬이 열려 있지 않아도** 참일 수 있다.
    *
    *  paneDirty 는 마운트된 MonacoPane 이 알려주는 것뿐이다. 크로스파일 이름 바꾸기
@@ -3564,6 +3583,15 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this.props.playOpening && !_pp?.playOpening && this.state.openingPhase === "off") {
       this.setState({ openingPhase: "intro" });
     }
+    // 모드가 바뀌면 Monaco 를 다시 재어준다. automaticLayout 은 display:none 안에서
+    // 0×0 으로 측정하고, 다시 보일 때 ResizeObserver 가 뒤늦게 따라오면서 한 프레임
+    // 어긋난 크기가 보인다. 명시적으로 한 번 재면 그 깜빡임이 없어진다.
+    if (_ps && _ps.uiMode !== this.state.uiMode) {
+      applyUiMode(this.state.uiMode);
+      requestAnimationFrame(() => {
+        for (const p of paneRegistry.panes.values()) { try { p.editor.layout(); } catch { /* 이미 dispose */ } }
+      });
+    }
     // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
     if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
       this._lastTabsRef = this.state.tabs; this._lastActiveRef = this.state.active;
@@ -3674,6 +3702,12 @@ ${(r.output || "").slice(0, 2000)}`;
     const beamW = s.running ? Math.max(6, Math.min(96, beamPct)) + "%" : "100%";
     const beamOp = s.running ? 1 : (pendingFiles > 0 ? 0.55 : 0.2);
     const flow = s.leftTab === "flow";
+    // 에이전트 모드는 **아무것도 언마운트하지 않는다.** 메인 행의 다섯 자식을 display:none 으로
+    // 감추고 좌측 열만 넓힌다. Monaco·PTY·LSP 가 그대로 살아 있어 저장·종료 가드·파일 락이
+    // 손대지 않아도 동일하게 동작하고, display:none 서브트리는 뷰 트랜지션 캡처에서도 빠져
+    // 다음 단계의 변신에서 같은 이름이 두 번 잡히는 문제도 같이 없어진다.
+    const ag = s.uiMode === "agent";
+    const gone = ag ? { display: "none" as const } : null;
     const anyMenuOpen = !!s.openMenu || s.projOpen;
     const closeMenus = () => this.setState({ openMenu: null, projOpen: false });
 
@@ -3826,6 +3860,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.models": this.openO({ openMenu: null, settingsOpen: true }); return;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
+                                case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
                                 case "view.split4": this.setLayout(4); return;
                                 case "view.split2": this.setLayout(2); return;
@@ -3871,6 +3906,31 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
 
           <div style={{ flex: 1 }} />
+
+          {/* 모드 알약 — 반드시 <button> 이어야 한다. global.css 가 .titlebar 를
+              -webkit-app-region: drag 로 만들고 button/input/[data-nodrag] 만 예외라,
+              styled <div> 로 두면 창 끌기 영역에 먹혀 클릭 자체가 안 된다. */}
+          <div data-tour="mode" style={{ display: "flex", gap: 2, padding: 2, borderRadius: 8, background: "var(--w03)", border: "1px solid var(--w08)" }}>
+            {UI_MODES.map(m => {
+              const on = s.uiMode === m;
+              return (
+                <button key={m} title={t("mode.switchTitle")} aria-pressed={on} onClick={() => this.toggleUiMode(m)}
+                  style={{
+                    height: 22, display: "flex", alignItems: "center", gap: 5, padding: "0 9px",
+                    fontFamily: "inherit", fontSize: 11.5, fontWeight: on ? 650 : 500, cursor: "pointer",
+                    borderRadius: 6, border: "none", whiteSpace: "nowrap",
+                    color: on ? "var(--accent-hi)" : "var(--fg-dim)",
+                    background: on ? "rgba(143,168,147,.16)" : "transparent",
+                    transition: "background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease)",
+                  }}>
+                  <ModeGlyph mode={m} color={on ? "var(--accent-hi)" : "#6E776F"} />
+                  {t("mode." + m)}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ width: 1, height: 16, background: "var(--w08)", margin: "0 2px" }} />
+
           {(() => { const mcpRunning = s.mcpServers.filter(x => x.running).length; return (
             <button data-tour="mcp" className="hv07" title={t("title.mcp")} onClick={() => this.openMcp()} style={{ ...iconBtn, position: "relative" }}>
               <McpIcon size={14} color={mcpRunning > 0 ? "var(--accent-hi)" : "#6E776F"} />
@@ -3895,7 +3955,7 @@ ${(r.output || "").slice(0, 2000)}`;
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
 
           {/* tool rail */}
-          <div data-tour="rail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4 }}>
+          <div data-tour="rail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4, ...gone }}>
             <button data-tour="rail-tree" className="hv07" title={t("sc4.railProject")} onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: s.leftTab === "tree" ? "rgba(143,168,147,.16)" : "transparent" }}>
               <FolderIcon color={s.leftTab === "tree" ? "var(--accent-hi)" : "#6E776F"} />
             </button>
@@ -3923,34 +3983,34 @@ ${(r.output || "").slice(0, 2000)}`;
 
           {/* ── Left column ── */}
           <div ref={el => { this._leftCol = el; }}
-            style={{ flex: "none", width: s.leftW, display: "flex", flexDirection: "column", borderRight: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
-            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
+            style={{ flex: ag ? 1 : "none", width: ag ? "auto" : s.leftW, minWidth: 0, display: "flex", flexDirection: "column", borderRight: ag ? "none" : "1px solid var(--w06)", background: ag ? "var(--bg-root)" : "var(--bg-panel)" }}>
+            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", ...gone }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
-            <div data-tour="left-panel" key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: TREE_MIN_H, display: "flex", flexDirection: "column" }}>
+            <div data-tour="left-panel" key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: ag ? 0 : TREE_MIN_H, display: "flex", flexDirection: "column", ...gone }}>
               {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
             </div>
             {/* 트리↔대화 세로 리사이즈 핸들 */}
             <div onMouseDown={e => this.startChatResize(e)} title={t("sc4.resizeHandleV")}
-              style={{ flex: "none", height: 5, cursor: "row-resize", background: "transparent", zIndex: 30 }} className="szResize" />
+              style={{ flex: "none", height: 5, cursor: "row-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
             {this.renderChat()}
           </div>
           {/* 좌 리사이즈 핸들 */}
           <div onMouseDown={e => this.startResize("left", e)} title={t("sc4.resizeHandle")}
-            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
+            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
 
           {/* ── Editor grid ── */}
-          <div data-tour="editor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)" }}>
+          <div data-tour="editor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)", ...gone }}>
             {this.renderPanes()}
           </div>
 
           {/* 우 리사이즈 핸들 */}
           <div onMouseDown={e => this.startResize("right", e)} title={t("sc4.resizeHandle")}
-            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
+            style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
           {/* ── Right column ── */}
           {/* 예전엔 이 컬럼 전체가 data-tour="agents" 라 에이전트와 변경 검토가
               한 덩어리로 강조됐다. 둘은 다른 이야기라 앵커를 나눈다. */}
-          <div style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)" }}>
+          <div style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)", ...gone }}>
             <div data-tour="agents" style={{ flex: "none", display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderAgents()}</div>
             <div data-tour="review" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderReview()}</div>
           </div>
@@ -4562,8 +4622,9 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 좌 패널: 대화 ──
   renderChat() {
     const s = this.state;
+    const ag = s.uiMode === "agent";
     return (
-      <div data-tour="chat" style={{ flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div data-tour="chat" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />

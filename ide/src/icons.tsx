@@ -10,6 +10,27 @@ export const GitBranchIcon = ({ size = 11, color = "#8FA893", sw = 1.4 }: { size
   </svg>
 );
 
+/** 모드 알약의 12px 글리프 — 남의 제품 로고가 아니라 **레이아웃 자체**를 그린다.
+ *  editor: 좁은·넓은·좁은 세로 밴드(패널·에디터·패널). agent: 폭이 줄어드는 가로 규칙선 위의 프롬프트. */
+export const ModeGlyph = ({ mode, color = "#6E776F" }: { mode: string; color?: string }) => (
+  <svg width="12" height="12" viewBox="0 0 16 16" style={{ flex: "none" }}>
+    {mode === "agent" ? (
+      <g fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round">
+        <path d="M2 4.5 H13" />
+        <path d="M2 8 H10" />
+        <path d="M2 11.5 H6.5" />
+        <path d="M9.5 10.4 L11.4 12 L9.5 13.6" />
+      </g>
+    ) : (
+      <g fill="none" stroke={color} strokeWidth="1.4">
+        <rect x="1.6" y="2.6" width="2.6" height="10.8" rx="1" />
+        <rect x="5.6" y="2.6" width="4.8" height="10.8" rx="1" />
+        <rect x="11.8" y="2.6" width="2.6" height="10.8" rx="1" />
+      </g>
+    )}
+  </svg>
+);
+
 export const SearchIcon = () => (
   <svg width="14" height="14" viewBox="0 0 16 16">
     <circle cx="7" cy="7" r="4.2" fill="none" stroke="#6E776F" strokeWidth="1.4" />
