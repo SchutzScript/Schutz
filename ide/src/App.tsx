@@ -92,6 +92,8 @@ function accel(s: string): string {
 interface S {
   statusKey: "idle" | "thinking" | "tool" | "review" | "stopped";
   running: boolean;
+  /** 실행 진행도 0..1 — 진행 빔이 읽는다. plan 이 비어도(실제 실행) 라운드로 채운다. */
+  runProgress: number;
   messages: ChatMsg[];
   input: string;
   plan: PlanItem[];
@@ -378,7 +380,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   private fileLocks = new Map<string, string>();
 
   state: S = {
-    statusKey: "idle", running: false, messages: [], input: "",
+    statusKey: "idle", running: false, runProgress: 0, messages: [], input: "",
     plan: [], tools: [], files: [], docs: window.schutz ? {} : freshDocs(), chips: {}, // 데스크톱엔 데모 문서를 심지 않는다(실제 파일을 가림)
     tabs: [[TM]], active: [TM], leftTab: "flow", expanded: null,
     breakpoints: {}, debug: null, debugConsole: [],
@@ -516,15 +518,25 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   // ── 토스트 ──
+  /** 토스트 전용 타이머. 탭 닫기와 같은 이유로 _timers 풀 밖에 둔다 —
+   *  clearTimers()(startRun/stopRun)가 이 타이머를 지우면 토스트가 제거되지 않고
+   *  좀비로 남는다(leaving 상태로 opacity 0 인 채 마운트된 유령). */
+  private _toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   toast(kind: ToastItem["kind"], text: string) {
     const id = "to" + (this._uid++);
     this.setState(s => ({ toasts: [...s.toasts, { id, kind, text }] }));
-    this.qt(() => this.dismissToast(id), 3600);
+    this._toastTimers.set(id, setTimeout(() => this.dismissToast(id), 3600));
   }
-  /** 나가는 애니메이션 후 제거 (keep-mounted 220ms) */
+  /** 나가는 애니메이션 후 제거. exit 애니메이션(280ms)이 끝난 뒤 언마운트해야
+   *  페이드가 중간에 잘리지 않는다(예전 220ms 는 애니메이션보다 짧아 툭 사라졌다). */
   dismissToast(id: string) {
+    clearTimeout(this._toastTimers.get(id));
     this.setState(s => ({ toasts: s.toasts.map(t => t.id === id ? { ...t, leaving: true } : t) }));
-    this.qt(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 220);
+    this._toastTimers.set(id, setTimeout(() => {
+      this._toastTimers.delete(id);
+      this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) }));
+    }, 300));
   }
 
   async newFileAt(dirRel: string) {
@@ -2307,6 +2319,9 @@ ${(r.output || "").slice(0, 2000)}`;
     try {
       for (let round = 0; round < DEFAULT_POLICY.maxRoundsPerRun; round++) {
         rounds = round + 1;
+        // 라운드가 진행될수록 빔을 채운다. 몇 라운드 만에 끝날지 미리 알 수 없으므로
+        // 남은 거리의 일부씩 좁혀 96% 에 수렴시킨다(끝날 때 finally 가 100% 로 만든다).
+        if (opts.isManager) this.setState(s => ({ runProgress: s.runProgress + (0.92 - s.runProgress) * 0.4 }));
         const aiId = "a" + (this._uid++);
         this.setState(s => ({
           messages: [...s.messages, { id: aiId, role: "ai" as const, who, agent: agentId, text: "", streaming: true }],
@@ -2415,8 +2430,10 @@ ${(r.output || "").slice(0, 2000)}`;
         if (opts.isManager && finalText) this.history.push({ role: "assistant", content: finalText });
         // 모든 에이전트 루프가 끝났을 때만 running 해제 (인라인/mcp생성 사이드플로는 세지 않는다)
         if (!this.engine.runs.hasActiveAgentRuns()) {
+          // 빔을 100% 로 채운 채 멈춘다(transition 이 끝까지 달린다). running=false 가 되면
+          // beamW 가 "100%" 를 쓰므로 runProgress 는 다음 실행 시작 때 다시 0 으로 초기화된다.
           this.setState(s => ({
-            running: false,
+            running: false, runProgress: 1,
             statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle",
           }), () => this.saveSession());
         }
@@ -2941,7 +2958,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (!managerId) return;
     this.history.push({ role: "user", content: text });
     this.setState(s => ({
-      running: true, statusKey: "thinking", input: "",
+      running: true, runProgress: 0.06, statusKey: "thinking", input: "",
       messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: managerId, text: display }],
     }));
     const seed: NeutralMsg[] = this.history.map(m => ({ role: m.role as "user" | "assistant", text: m.content }));
@@ -3091,6 +3108,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this._layoutT) { clearTimeout(this._layoutT); this._layoutT = null; }
     if (this._markerTimer) { clearTimeout(this._markerTimer); this._markerTimer = null; } // 언마운트 후 _scanMarkers setState 방지(_timers 풀 밖)
     for (const k of Object.keys(this._closeTimers)) clearTimeout(this._closeTimers[k]);
+    this._toastTimers.forEach(clearTimeout); this._toastTimers.clear(); // 토스트 전용 타이머(_timers 풀 밖)
     this._cliOff?.();
     this._cliOff = null;
     this._oauthOff?.();
@@ -3633,7 +3651,12 @@ ${(r.output || "").slice(0, 2000)}`;
     const quotaSummary = this.quotaText(getManagerId()) ?? this.quotaText("claude") ?? this.quotaText("gpt");
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     const doneCount = s.plan.filter(p => p.st === "done").length;
-    const beamW = s.running ? (s.plan.length ? Math.max(8, Math.round((doneCount / s.plan.length) * 100)) + "%" : "8%") : "100%";
+    // plan 이 있으면(데모) 항목 완료율, 없으면(실제 실행) 라운드 진행도를 쓴다.
+    // 예전엔 plan 이 없으면 무조건 "8%" 라, 실제 AI 실행 내내 빔이 8% 에 굳어 있었다.
+    const beamPct = s.plan.length
+      ? Math.round((doneCount / s.plan.length) * 100)
+      : Math.round(s.runProgress * 100);
+    const beamW = s.running ? Math.max(6, Math.min(96, beamPct)) + "%" : "100%";
     const beamOp = s.running ? 1 : (pendingFiles > 0 ? 0.55 : 0.2);
     const flow = s.leftTab === "flow";
     const anyMenuOpen = !!s.openMenu || s.projOpen;
