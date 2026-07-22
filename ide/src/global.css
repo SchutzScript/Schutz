@@ -173,21 +173,26 @@ button:disabled { opacity: .55; cursor: default !important; }
 }
 
 /* ── 모드 변신 ─────────────────────────────────────────────────────────────
-   이름은 정적 클래스로 늘 붙어 있고, 연출만 [data-mode-anim] 일 때 갈아끼운다.
-   언어 전환도 같은 이름들을 지나가지만 그쪽은 상자가 안 바뀌어 제자리 교차 디졸브로
-   끝나므로 굳이 다르게 그릴 이유가 없다.
+   이름은 **변신하는 동안에만** 붙는다. [data-mode-anim] 은 switchUiMode 가 캡처 전에
+   달고 finished 에서 뗀다(uiMode.ts) — 옛 상태와 새 상태 양쪽 캡처 시점에 살아 있다.
+
+   예전엔 정적 클래스로 늘 붙여두고 "언어 전환도 같은 이름을 지나가지만 상자가 안 바뀌니
+   무해하다" 고 봤다. 무해하지 않았다. 이름이 붙은 요소는 root 스냅샷에서 **떨어져 나와
+   자기 그룹**이 되고, 그 그룹들은 root 위에 그려진다. 그래서 언어를 바꾸면 오프닝
+   오버레이(z-index 500, 이름 없음 → root 안)가 IDE 패널 그룹들에 덮여 사라지고, 뒤에
+   있던 에디터·트리·검토 패널이 그대로 드러났다. 모달이 떠 있을 때도 같은 일이 난다.
 
    에이전트 모드에서 레일·에디터·우측 열은 display:none 이고, display:none 서브트리는
    캡처에서 **빠진다**. 그래서 그 셋은 한쪽 상태에만 존재하게 되고 old(나감)/new(들어옴)
    중 하나만 생긴다 — 역방향을 위해 따로 뒤집을 필요가 없다. 나가는 그림과 들어오는
    그림을 각각 써두면 양방향이 저절로 맞는다. */
-.vtTopbar { view-transition-name: sz-topbar; }
-.vtStatus { view-transition-name: sz-status; }
-.vtConversation { view-transition-name: sz-conv; }
-.vtRail { view-transition-name: sz-rail; }
-.vtAside { view-transition-name: sz-aside; }
-.vtEditor { view-transition-name: sz-editor; }
-.vtSide { view-transition-name: sz-side; }
+[data-mode-anim] .vtTopbar { view-transition-name: sz-topbar; }
+[data-mode-anim] .vtStatus { view-transition-name: sz-status; }
+[data-mode-anim] .vtConversation { view-transition-name: sz-conv; }
+[data-mode-anim] .vtRail { view-transition-name: sz-rail; }
+[data-mode-anim] .vtAside { view-transition-name: sz-aside; }
+[data-mode-anim] .vtEditor { view-transition-name: sz-editor; }
+[data-mode-anim] .vtSide { view-transition-name: sz-side; }
 
 /* 상단바와 상태줄은 양쪽에 같은 상자로 존재한다 → 브라우저가 그대로 붙잡아 둔다.
    그 둘이 미동도 없어야 나머지가 "잘려나간 것" 이 아니라 "변신한 것" 으로 읽힌다. */
