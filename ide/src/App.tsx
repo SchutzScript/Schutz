@@ -57,7 +57,7 @@ import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tou
 import { Opening } from "./opening/Opening";
 import {
   DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS,
-  DEMO_TYPE_SLOWDOWN, DEMO_ZOOM_FONT, DEMO_ZOOM_MS,
+  DEMO_TYPE_SLOWDOWN, DEMO_ZOOM_FONT, DEMO_ZOOM_MS, DEMO_CMD, DEMO_CMD_OUT,
 } from "./opening/demoScript";
 import type { TourHost } from "./tour";
 
@@ -6863,13 +6863,22 @@ ${(r.output || "").slice(0, 2000)}`;
         return;
       }
 
-      case "work": {
+      case "look": {
         // 사용자가 보낸 것처럼 대화에 남기고 입력창을 비운다
         this.setState(s => ({
           messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: "claude", text: t("open.ask") }],
           input: "",
         }));
         this.setAgent("claude", { status: "edit", file: DEMO_FILE });
+        // 에디터 모드에서 도구 줄은 왼쪽 패널의 **흐름 탭**에 쌓인다. 트리 탭인 채로
+        // 두면 줄은 만들어지는데 화면 어디에도 안 보인다 — 이 박자가 통째로 헛돈다.
+        // (에이전트 모드는 트랜스크립트에 그대로 흐르므로 건드릴 게 없다.)
+        if (this.state.uiMode === "editor") this.setState({ leftTab: "flow" });
+        // 찾고 읽는 걸 **보여준다**. 예전 시연엔 도구 줄이 한 줄도 없어서, 상태만
+        // "편집 중" 으로 바뀌고 결과가 튀어나왔다 — 그건 다른 도구와 구분이 안 되는
+        // 그림이고, "무엇을 읽었는지 다 보인다" 는 이 앱의 약속과도 어긋난다.
+        await this.demoTool("search", DEMO_FIND, 900);
+        await this.demoTool("read", DEMO_FILE, 700);
         // 에이전트 모드에선 편집기가 숨어 있어 openFile 만으로는 아무것도 안 보인다.
         // 시트를 띄운다 — 코드가 필요할 때만 떠오른다는 그 동작을 데모가 그대로 가르친다.
         this.revealFile(DEMO_FILE);
@@ -6916,9 +6925,50 @@ ${(r.output || "").slice(0, 2000)}`;
         return;
       }
 
+      case "ask2": {
+        // 두 번째 요청. 한 번 고치고 끝나면 "한 번 쓰고 마는 도구" 로 보인다.
+        const text = t("open.ask2");
+        for (let i = 1; i <= text.length; i++) {
+          if (this._demoAbort) return;
+          this.setState({ input: text.slice(0, i) }, () => this.autoGrowInput());
+          await this.demoSleep(TYPE_INTERVAL_MS);
+        }
+        this.setState(s => ({
+          messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: "claude", text }],
+          input: "",
+        }));
+        return;
+      }
+
+      case "run": {
+        // 명령은 **묻고 나서** 돌린다. 무엇을 돌릴지 먼저 보여주는 이 카드가 이 앱에서
+        // 제일 중요한 안전장치인데 시연에 없었다. 진짜로 실행하지는 않는다 — 시연은
+        // 셸도 API 도 건드리지 않는다(그래서 출력도 각본에 적힌 문자열이다).
+        this.setState({ askRun: { command: DEMO_CMD, rationale: t("open.runWhy"), agent: "claude" } });
+        await this.demoSleep(2600);
+        if (this._demoAbort) { this.setState({ askRun: null }); return; }
+        this.setState({ askRun: null });
+        await this.demoTool("run", DEMO_CMD, 1200, DEMO_CMD_OUT);
+        this.setState(s => ({
+          messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: this.agDef("claude").name, agent: "claude", text: t("open.runDone") }],
+        }));
+        this.setAgent("claude", { status: "idle", file: null });
+        return;
+      }
+
       case "done":
         return;
     }
+  }
+
+  /** 시연용 도구 줄 하나 — 떴다가 끝난다. 실제 실행 경로와 같은 상태를 쓰므로
+   *  트랜스크립트도 검토 패널도 진짜일 때와 똑같이 그린다. */
+  private async demoTool(verb: string, path: string, ms: number, out?: string) {
+    const id = "t" + (this._uid++);
+    this.addTool(id, "claude", t("open.tool." + verb), path);
+    await this.demoSleep(ms);
+    if (this._demoAbort) return;
+    this.setTool(id, { st: "done", ...(out ? { out } : {}) });
   }
 
   /** 한 프로젝트의 저장된 대화를 전부 지운다. **데모 프로젝트에만** 쓴다 —

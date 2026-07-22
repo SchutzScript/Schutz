@@ -13,9 +13,11 @@
 export type DemoStepId =
   | "reveal"    // 오버레이가 걷히고 진짜 앱이 드러난다
   | "ask"       // 대화 입력창에 요청이 타이핑된다
-  | "work"      // 에이전트가 파일을 연다
+  | "look"      // 에이전트가 찾고 읽는다 — 도구 줄이 하나씩 쌓인다
   | "propose"   // 제안이 검토 패널에 올라온다
   | "accept"    // 수락 → 코드가 타이핑되며 바뀐다
+  | "ask2"      // 두 번째 요청 — 대화가 이어진다
+  | "run"       // 명령을 돌려도 되냐고 묻고, 승인하면 출력이 흐른다
   | "done";     // 마무리
 
 export interface DemoStep {
@@ -33,13 +35,30 @@ export const DEMO_STEPS: readonly DemoStep[] = [
   // 사용자에게는 설정을 끝내자마자 무언가가 제멋대로 움직이는 것으로 보인다.
   { id: "reveal",  waitMs: 3000, caption: "assemble" },
   { id: "ask",     waitMs: 2400, caption: "ask" },
-  { id: "work",    waitMs: 2400 },
+  // 이 앱의 약속은 "무엇을 읽고 무엇을 고쳤는지 다 보인다" 인데, 예전 시연엔 도구 줄이
+  // **한 줄도** 안 나왔다. 상태만 "편집 중" 으로 바뀌고 결과가 튀어나왔다 — 그건 다른
+  // 도구와 구분되지 않는 그림이다.
+  { id: "look",    waitMs: 2200, caption: "look" },
   // 제안이 먼저 올라오고, 그 다음에 수락해야 코드가 바뀐다 — 실제 제품 순서 그대로다.
   // 순서를 뒤집으면 "파일에 바로 안 들어간다" 는 말이 화면과 어긋난다.
   { id: "propose", waitMs: 2400, caption: "approve" },
   { id: "accept",  waitMs: 3000, caption: "rewrite" },
-  { id: "done",    waitMs: 3200 },
+  // 한 번 고치고 끝나면 "한 번 쓰고 마는 도구" 로 보인다. 이어서 다음 걸 시킨다.
+  { id: "ask2",    waitMs: 2400, caption: "again" },
+  { id: "run",     waitMs: 2600, caption: "runAsk" },
+  { id: "done",    waitMs: 3000 },
 ];
+
+/** 두 번째 요청이 부르는 명령. 진짜로 돌리지 않는다 — 시연은 API 도 셸도 건드리지 않는다.
+ *  승인 카드와 출력 줄이 어떻게 생겼는지만 보여준다. */
+export const DEMO_CMD = "npm test";
+/** 승인 뒤 터미널 자리에 흐르는 출력. 지어낸 문장이 아니라 이 샘플에서 나올 법한 모양이다. */
+export const DEMO_CMD_OUT = [
+  "PASS  src/components/Footer.test.jsx",
+  "  ✓ renders the current year (12 ms)",
+  "",
+  "Tests: 1 passed, 1 total",
+].join("\n");
 
 /** 요청 한 글자당 타이핑 간격(ms). 사람이 읽으면서 따라올 수 있는 속도. */
 export const TYPE_INTERVAL_MS = 72;

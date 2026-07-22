@@ -135,4 +135,51 @@ export const dict: Record<string, Record<string, string>> = {
   "open.done.skip": {
     ko: "바로 시작", en: "Jump right in", de: "Direkt loslegen", ja: "すぐ始める",
   },
+
+  // ── 시연: 두 번째 턴 ────────────────────────────────────────────────
+  "open.ask2": {
+    ko: "테스트 한 번 돌려서 확인해줘",
+    en: "Run the tests and check it",
+    de: "Führ die Tests aus und prüf es",
+    ja: "テストを実行して確認して",
+  },
+  "open.runWhy": {
+    ko: "바꾼 연도 계산이 실제로 통과하는지 확인합니다.",
+    en: "To confirm the new year calculation actually passes.",
+    de: "Um zu prüfen, ob die neue Jahresberechnung wirklich durchläuft.",
+    ja: "変更した年の計算が実際に通るか確認します。",
+  },
+  "open.runDone": {
+    ko: "통과했습니다. 연도는 이제 매년 알아서 바뀝니다.",
+    en: "Passed. The year now updates itself every year.",
+    de: "Bestanden. Das Jahr aktualisiert sich jetzt von selbst.",
+    ja: "通りました。年はこれから毎年自動で変わります。",
+  },
+  // 도구 줄에 붙는 동사. 짧아야 한다 — 알약 한 줄이다.
+  "open.tool.search": { ko: "찾기", en: "Search", de: "Suchen", ja: "検索" },
+  "open.tool.read": { ko: "읽기", en: "Read", de: "Lesen", ja: "読み取り" },
+  "open.tool.run": { ko: "실행", en: "Run", de: "Ausführen", ja: "実行" },
+
+  // ── 시연 자막 3개 ───────────────────────────────────────────────────
+  "open.cap.look.t": { ko: "찾는 것부터 보입니다", en: "You see it looking", de: "Sie sehen das Suchen", ja: "探すところから見えます" },
+  "open.cap.look.b": {
+    ko: "무엇을 검색하고 어떤 파일을 열었는지 한 줄씩 남습니다. 눌러서 그 안을 펼쳐 볼 수도 있어요.",
+    en: "Every search and every file it opens leaves a line. Click one to unfold what it saw.",
+    de: "Jede Suche und jede geöffnete Datei hinterlässt eine Zeile. Klicken Sie eine an, um zu sehen, was sie enthielt.",
+    ja: "何を検索し、どのファイルを開いたかが一行ずつ残ります。押せば中身も開けます。",
+  },
+  "open.cap.again.t": { ko: "대화는 이어집니다", en: "The conversation continues", de: "Das Gespräch geht weiter", ja: "会話は続きます" },
+  "open.cap.again.b": {
+    ko: "한 번 고치고 끝이 아닙니다. 방금 한 일을 기억한 채로 다음 걸 시킬 수 있어요.",
+    en: "It doesn't stop after one fix. Ask for the next thing — it still remembers what it just did.",
+    de: "Nach einer Korrektur ist nicht Schluss. Fragen Sie nach dem Nächsten — es weiß noch, was es gerade tat.",
+    ja: "一度直して終わりではありません。今やったことを覚えたまま、次を頼めます。",
+  },
+  "open.cap.runAsk.t": { ko: "명령은 물어보고 돌립니다", en: "Commands are asked, not assumed", de: "Befehle werden erfragt, nicht angenommen", ja: "コマンドは尋ねてから実行します" },
+  "open.cap.runAsk.b": {
+    ko: "무엇을 돌릴지 먼저 보여주고 기다립니다. 승인하기 전에는 아무것도 실행되지 않아요.",
+    en: "It shows you the exact command and waits. Nothing runs until you approve it.",
+    de: "Es zeigt Ihnen den genauen Befehl und wartet. Nichts läuft, bevor Sie zustimmen.",
+    ja: "何を実行するかを先に見せて待ちます。承認するまで何も実行されません。",
+  },
 };

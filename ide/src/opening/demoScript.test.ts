@@ -27,9 +27,24 @@ describe("데모 각본", () => {
     for (const s of DEMO_STEPS) expect(s.waitMs).toBeGreaterThan(0);
   });
 
-  it("자막이 붙은 단계는 화면이 알아서 움직이는 구간뿐", () => {
-    const withCap = DEMO_STEPS.filter(s => s.caption).map(s => s.id);
-    expect(withCap).toEqual(["reveal", "ask", "propose", "accept"]);
+  // 화면이 알아서 움직이는 동안 설명이 없으면 그냥 구경만 하게 된다. 마무리(done)만
+  // 예외다 — 그 자리엔 곧 마무리 카드가 뜨므로 자막이 겹친다.
+  it("마무리를 뺀 모든 단계에 자막이 붙는다", () => {
+    for (const s of DEMO_STEPS) {
+      if (s.id === "done") expect(s.caption).toBeUndefined();
+      else expect(s.caption, s.id).toBeTruthy();
+    }
+  });
+
+  // 시연이 보여줘야 하는 것: 찾고 읽는 과정 · 대화가 이어짐 · 명령은 물어보고 돌린다.
+  // 예전엔 파일 하나를 한 줄 고치고 끝이라, 다른 도구와 구분되는 그림이 하나도 없었다.
+  it("한 번 고치고 끝나지 않는다", () => {
+    const ids = DEMO_STEPS.map(s => s.id);
+    expect(ids).toContain("look");   // 도구 줄
+    expect(ids).toContain("ask2");   // 두 번째 요청
+    expect(ids).toContain("run");    // 명령 승인
+    expect(ids.indexOf("ask2")).toBeGreaterThan(ids.indexOf("accept"));
+    expect(ids.indexOf("look")).toBeLessThan(ids.indexOf("propose"));
   });
 });
 
