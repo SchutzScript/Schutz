@@ -199,6 +199,8 @@ interface S {
   impOpen: boolean;
   impRows: ImpRow[] | null;
   impThisOnly: boolean;
+  /** 어느 도구에서 온 것만 볼지. "all" = 전부. */
+  impAgent: "all" | CliAgent;
   /** 지금 가져오는 중인 파일. 두 번 누르는 걸 막고 그 줄에만 표시를 낸다. */
   impBusy: string | null;
   /** 에이전트 모드 오른쪽 산출물 패널 폭(px). 드래그로 바뀌고 저장된다. */
@@ -432,7 +434,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
-    impOpen: false, impRows: null, impThisOnly: true, impBusy: null,
+    impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
@@ -2990,7 +2992,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 가져오기 화면을 연다. 목록은 열 때마다 새로 읽는다 — 다른 창에서 나눈 대화가
    *  그 사이에 늘었을 수 있고, 캐시를 무효화할 신호가 우리에겐 없다. */
   openImport() {
-    this.setState({ impOpen: true, impRows: null });
+    this.setState({ impOpen: true, impRows: null, impAgent: "all" });
     void this.loadImportRows();
   }
 
@@ -5174,7 +5176,8 @@ ${(r.output || "").slice(0, 2000)}`;
     // Windows 는 경로 대소문자를 안 가린다. Codex 는 실제로 `c:\Users\…` 를, Claude Code 는
     // `C:\Users\…` 를 적는다 — 그대로 비교하면 같은 폴더가 남남이 된다.
     const mine = root ? rows.filter(r => r.cwd.toLowerCase() === root) : rows;
-    const shown = s.impThisOnly && root ? mine : rows;
+    const scoped = s.impThisOnly && root ? mine : rows;
+    const shown = s.impAgent === "all" ? scoped : scoped.filter(r => r.agent === s.impAgent);
 
     const close = () => this.closeImport();
     const day = (ms: number) => {
@@ -5206,12 +5209,40 @@ ${(r.output || "").slice(0, 2000)}`;
               style={{ border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 3 }}>✕</button>
           </div>
 
+          {/* 어디서 작업한 것인지로 나눈다. 도구마다 대화의 결이 다르다 — 무엇을 찾는지
+              이미 알고 온 사람에게는 이 한 줄이 목록 전체를 훑는 것보다 빠르다.
+              세는 대상은 **지금 범위 안**이다("이 프로젝트만" 을 켜면 그 안에서 센다) —
+              탭 숫자를 더한 값이 아래 목록과 안 맞으면 둘 중 하나가 거짓말이 된다. */}
+          {s.impRows !== null && scoped.length > 0 && (
+            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 3, padding: "8px 12px 2px" }}>
+              {([["all", t("chat.tabAll"), ""],
+                 ["claude", "Claude Code", "#C67A4A"],
+                 ["codex", "Codex", "#6E8FA8"]] as const).map(([id, label, color]) => {
+                const n = id === "all" ? scoped.length : scoped.filter(r => r.agent === id).length;
+                // 하나도 없는 도구는 탭을 주지 않는다 — 눌러봐야 빈 목록이다.
+                if (!n) return null;
+                const on = s.impAgent === id;
+                return (
+                  <button key={id} className="hvTermTab" onClick={() => this.setState({ impAgent: id })}
+                    style={{ height: 24, padding: "0 10px", display: "flex", alignItems: "center", gap: 6,
+                      fontSize: 11, fontWeight: on ? 600 : 500, fontFamily: "inherit", cursor: "pointer",
+                      borderRadius: 7, border: "none", color: on ? "var(--fg)" : "var(--fg-dim)",
+                      background: on ? "var(--w06)" : "transparent" }}>
+                    {color && <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: color, flex: "none" }} />}
+                    {label}
+                    <span style={{ fontSize: 9.5, color: "var(--fg-dim2)" }}>{n}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 8px" }}>
             {s.impRows === null ? (
               <div style={{ padding: "26px 12px", fontSize: 12, color: "var(--fg-dim2)" }}>{t("imp.scanning")}</div>
             ) : shown.length === 0 ? (
               <div style={{ padding: "26px 12px", fontSize: 12, lineHeight: 1.7, color: "var(--fg-dim2)" }}>
-                {rows.length === 0 ? t("imp.none") : t("imp.noneHere")}
+                {rows.length === 0 ? t("imp.none") : scoped.length === 0 ? t("imp.noneHere") : t("imp.noneAgent")}
               </div>
             ) : shown.map(r => {
               const busy = s.impBusy === r.file;
