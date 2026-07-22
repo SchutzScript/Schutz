@@ -121,6 +121,45 @@ export function applyTheme(id: string): void {
   r.setProperty("--accent-soft", t.accentSoft);
   // 데스크톱: OS 타이틀바 버튼(최소화/닫기) 색도 테마 추종
   try { (window as any).schutz?.setOverlay?.(t.bgPanel, t.fgSub); } catch { /* ignore */ }
+  void paintAppIcon(t.accent);
+}
+
+/** 창·작업표시줄 아이콘을 테마 색으로 다시 칠한다.
+ *
+ *  앱 **안**의 로고는 PNG 를 CSS 마스크로 쓰고 --accent 로 칠하므로 테마를 그냥 따라간다.
+ *  하지만 창 아이콘은 OS 가 그리는 것이라 CSS 가 닿지 않는다 — 픽셀에 색이 박혀 있어야 한다.
+ *  그래서 같은 원본의 알파만 남기고 색을 갈아끼운 PNG 를 만들어 메인에 넘긴다.
+ *
+ *  테마별 PNG 를 미리 만들어 두지 않는 이유: 원본이 하나로 남아야 로고를 고칠 때 색깔
+ *  사본들이 조용히 옛것으로 남지 않는다. 테마가 늘어도 여기서 따로 할 일이 없다.
+ *
+ *  같은 색을 두 번 칠하지 않는다 — applyTheme 은 부팅·테마 변경·오프닝에서 여러 번 불린다. */
+let lastIconColor = "";
+async function paintAppIcon(color: string): Promise<void> {
+  const api = (window as any).schutz;
+  if (!api?.setAppIcon || color === lastIconColor) return;
+  lastIconColor = color;
+  try {
+    const img = new Image();
+    img.src = "./assets/logo-t.png";
+    await img.decode();
+    // 256px 면 작업표시줄·Alt+Tab 어디서도 충분하고, 원본(816px)을 그대로 보내면
+    // 데이터 URL 이 몇 MB 가 된다.
+    const N = 256;
+    const c = document.createElement("canvas");
+    c.width = N; c.height = N;
+    const g = c.getContext("2d");
+    if (!g) return;
+    g.drawImage(img, 0, 0, N, N);
+    // source-in: 이미 그려진 알파 안쪽만 칠한다 — 모양은 원본 그대로, 색만 바뀐다.
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = color;
+    g.fillRect(0, 0, N, N);
+    api.setAppIcon(c.toDataURL("image/png"));
+  } catch {
+    // 아이콘을 못 바꿔도 앱은 돈다. 다음 테마 변경 때 다시 시도할 수 있게 표식을 지운다.
+    lastIconColor = "";
+  }
 }
 
 export function isLightTheme(id: string): boolean {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require("electron");
 const { DEMO_FILES } = require("./demoFiles.cjs");
 const path = require("path");
 const fs = require("fs/promises");
@@ -509,6 +509,24 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
 ipcMain.on("schutz:setOverlay", (e, color, symbolColor) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   try { win?.setTitleBarOverlay({ color, symbolColor, height: 54 }); } catch { /* 미지원 무시 */ }
+});
+
+// 창·작업표시줄 아이콘도 테마를 따라간다.
+//
+// 아이콘은 OS 가 그리므로 CSS 변수가 닿지 않는다 — 앱 안의 로고는 PNG 를 마스크로 쓰고
+// --accent 로 칠하지만, 창 아이콘은 픽셀에 색이 박혀 있어야 한다. 그래서 렌더러가
+// 원본(logo-t.png)의 알파는 그대로 두고 색만 갈아끼운 PNG 를 만들어 넘긴다.
+//
+// 테마별 파일을 미리 만들어 두지 않는 이유: 원본이 하나로 남아야 로고를 고칠 때 색깔
+// 사본들이 조용히 옛것으로 남지 않는다. 테마가 늘어도 따로 할 일이 없다.
+ipcMain.on("schutz:setAppIcon", (e, dataUrl) => {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/png;base64,")) return;
+  if (dataUrl.length > 2_000_000) return;   // 256px PNG 면 한참 아래다 — 그 위는 우리가 만든 게 아니다
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try {
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (!img.isEmpty()) win?.setIcon(img);
+  } catch { /* 아이콘을 못 바꿔도 앱은 돈다 */ }
 });
 
 // 파일/폴더 이름 변경 · 삭제
