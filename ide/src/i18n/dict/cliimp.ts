@@ -43,6 +43,13 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Keine aus diesem Projekt. Haken oben entfernen, um alle zu sehen.",
     ja: "このプロジェクトのものはありません。上のチェックを外すと全部表示されます。",
   },
+  // 탭 때문에 비어 보이는 경우. "대화가 없습니다" 로 뭉뚱그리면 다른 탭에 있는 걸 못 찾는다.
+  "imp.noneAgent": {
+    ko: "이 도구로 나눈 대화는 없습니다. 위에서 다른 탭을 보세요.",
+    en: "Nothing from this tool. Try another tab above.",
+    de: "Nichts aus diesem Werkzeug. Probieren Sie oben einen anderen Reiter.",
+    ja: "このツールの会話はありません。上の別のタブをご覧ください。",
+  },
   "imp.turns": { ko: "{n}마디", en: "{n} messages", de: "{n} Nachrichten", ja: "{n}件" },
   "imp.import": { ko: "가져오기", en: "Import", de: "Holen", ja: "取り込む" },
   "imp.cancel": { ko: "취소", en: "Cancel", de: "Abbrechen", ja: "キャンセル" },
