@@ -185,6 +185,8 @@ export const dict: Record<string, Record<string, string>> = {
 
   // ── 세팅 2쪽 ────────────────────────────────────────────────────────
   // 1쪽은 무엇을 보는가(언어·테마·모양), 2쪽은 무엇으로 일하는가(AI·자율성·키맵·글꼴).
+  // 시연 도중의 탈출구. "건너뛰기" 만으로는 무엇을 건너뛰는지 애매해서 대상을 밝힌다.
+  "open.demoSkip": { ko: "시연 건너뛰기", en: "Skip the demo", de: "Demo überspringen", ja: "デモをスキップ" },
   "open.setup.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
   "open.setup.ai": { ko: "AI 연결", en: "Connect AI", de: "KI verbinden", ja: "AI 接続" },
   "open.setup.autonomy": { ko: "어디까지 맡길까요", en: "How much to hand over", de: "Wie viel übergeben", ja: "どこまで任せますか" },

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage, Tray, Menu } = require("electron");
 const { DEMO_FILES } = require("./demoFiles.cjs");
 const path = require("path");
 const fs = require("fs/promises");
@@ -525,9 +525,52 @@ ipcMain.on("schutz:setAppIcon", (e, dataUrl) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   try {
     const img = nativeImage.createFromDataURL(dataUrl);
-    if (!img.isEmpty()) win?.setIcon(img);
+    if (img.isEmpty()) return;
+    win?.setIcon(img);
+    syncTray(img);
   } catch { /* 아이콘을 못 바꿔도 앱은 돈다 */ }
 });
+
+// ── 트레이(숨겨진 아이콘 표시) ──────────────────────────────────────────────
+//
+// 창을 닫아도 사라지지 않고 여기 남는다. 창 아이콘과 **같은 그림**을 쓴다 — 렌더러가
+// 테마 색으로 칠해 보내주는 그 PNG 다. 따로 자산을 두면 테마를 바꿨을 때 트레이만
+// 옛 색으로 남는다.
+//
+// 16px 로 줄여서 준다. 트레이는 작게 그려지는데 256px 짜리를 그대로 주면 OS 가 축소하며
+// 획이 뭉갠다.
+let tray = null;
+function syncTray(img) {
+  try {
+    const small = img.resize({ width: 16, height: 16, quality: "best" });
+    if (!tray) {
+      tray = new Tray(small);
+      tray.setToolTip("Schutz");
+      tray.setContextMenu(Menu.buildFromTemplate([
+        { label: "Schutz", enabled: false },
+        { type: "separator" },
+        // 창이 여럿이면 마지막에 만든 것을 띄운다 — 트레이에서 고를 방법이 없으니
+        // 하나로 정해두는 게 맞다.
+        { label: "열기", click: () => {
+          const w = BrowserWindow.getAllWindows().pop();
+          if (w) { if (w.isMinimized()) w.restore(); w.show(); w.focus(); }
+        } },
+        { label: "새 창", click: () => { try { createWindow(); } catch { /* */ } } },
+        { type: "separator" },
+        { label: "종료", click: () => app.quit() },
+      ]));
+      // 좌클릭은 메뉴 없이 바로 창으로 — 트레이의 기본 기대다.
+      tray.on("click", () => {
+        const w = BrowserWindow.getAllWindows().pop();
+        if (w) { if (w.isMinimized()) w.restore(); w.show(); w.focus(); }
+      });
+    } else {
+      tray.setImage(small);
+    }
+  } catch { /* 트레이가 없는 환경도 있다 — 없어도 앱은 돈다 */ }
+}
+// 앱이 끝날 때 놓아준다. 안 그러면 종료 후에도 아이콘이 남아 클릭하면 아무 일도 안 난다.
+app.on("before-quit", () => { try { tray?.destroy(); } catch { /* */ } tray = null; });
 
 // 파일/폴더 이름 변경 · 삭제
 ipcMain.handle("schutz:renameEntry", async (_e, root, relFrom, relTo) => {
