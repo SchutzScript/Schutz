@@ -546,7 +546,14 @@ export class Opening extends React.Component<Props, State> {
                   가운데로 맞춰졌다 — "다음" 이 쪽을 넘길 때마다 위아래로 튀었다.
                   둘을 가르면 내비의 y 는 창 높이에만 달리므로 어느 쪽에서든 같다. */}
               <div style={{
-                flex: 1, minHeight: 0, overflowY: "auto",
+                flex: 1, minHeight: 0,
+                // 넘칠 때만 세로로 구른다. 가로는 **잘라낸다** — 쪽 전환이 translateX 로
+                // 미끄러져 들어오는데, 그게 스크롤 가능 영역으로 잡혀 전환 때마다 가로
+                // 스크롤바가 떴다 사라졌다(실측 최대 14px). 그 바가 자리를 먹었다 돌려주니
+                // 내용이 같이 흔들렸다.
+                overflowY: "auto", overflowX: "hidden",
+                // 세로 바가 생기고 없어질 때 폭이 튀지 않게 자리를 늘 비워둔다.
+                scrollbarGutter: "stable",
                 display: "grid", placeItems: "center", alignContent: "center",
                 gap: 26, paddingTop: "clamp(16px,4vh,52px)", paddingBottom: 18,
               }}>
