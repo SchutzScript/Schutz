@@ -81,6 +81,18 @@ export const dict: Record<string, Record<string, string>> = {
   // ── 진행 중 자막 ───────────────────────────────────────────────────
   // 조립 뒤엔 화면이 알아서 움직이는데 왜 그러는지 설명이 없으면 그냥 구경만 하게 된다.
   // 각 장면마다 제목 한 줄 + 설명 한 줄. 영화 자막처럼 하단에 고정한다.
+  // 첫 화면의 크레딧. 뒤에 붙는 건 실제로 우리가 올라선 것들이다(ide/data.ts).
+  // AI 제공자를 여기 적지 않는 이유: Schutz 는 사용자의 Claude·Codex 를 그대로 쓸 뿐,
+  // 그쪽이 우리를 보증하지 않는다. 확인할 수 있는 것만 적는다.
+  // 줄 전체가 번역 대상이다. 앞에 붙이는 라벨로 만들었더니 한국어가 "구동 ELECTRON ·
+  // MONACO · REACT" 가 됐다 — 영어는 앞, 한국어·일본어는 뒤에 붙는 말이라 어순이 다르다.
+  "open.poweredBy": {
+    ko: "{engine} 기반",
+    en: "Powered by {engine}",
+    de: "Basiert auf {engine}",
+    ja: "{engine} で動作",
+  },
+
   "open.cap.assemble.t": { ko: "화면은 네 부분입니다", en: "Four parts to the screen", de: "Vier Bereiche", ja: "画面は4つの領域です" },
   "open.cap.assemble.b": {
     ko: "왼쪽에 파일과 대화, 가운데에 편집기, 오른쪽에 에이전트와 변경 검토.",

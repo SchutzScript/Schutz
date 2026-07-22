@@ -3,6 +3,7 @@ import { t, LANGS, getLang, setLang, onLangChange } from "../i18n";
 import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiMode";
+import { ENGINE_CREDIT } from "../ide/data";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
 /**
@@ -191,17 +192,32 @@ export class Opening extends React.Component<Props, State> {
         <div aria-hidden style={{
           position: "absolute", left: "20%", top: "8%", width: "60%", aspectRatio: "1",
           borderRadius: "50%", filter: "blur(70px)", background: tk.accent, pointerEvents: "none",
-          opacity: (light ? 0.16 : 0.3) * E(300, 2500) * (time < 12000 ? 1 : 0.5),
+          opacity: (light ? 0.16 : 0.3) * E(300, 2500) * (time < 13800 ? 1 : 0.5),
           transition: "opacity .6s ease, background .6s ease",
         }} />
 
-        {/* 1 마크 */}
-        <div aria-hidden style={{
-          position: "absolute", inset: 0, display: "grid", placeItems: "center",
-          opacity: Math.max(0, S(0, 400) - S(3200, 3800)),
-          transform: `scale(${1 + E(3200, 3800) * 0.12})`,
+        {/* 1 마크 · 이름 · 크레딧 — 획이 그려지고, 이름이 붙고, 무엇 위에 섰는지가 따라온다.
+            예전엔 마크만 지나가서 **제품 이름이 오프닝 어디에도 없었다.** */}
+        <div style={{
+          position: "absolute", inset: 0, display: "grid", placeItems: "center", alignContent: "center",
+          gap: "clamp(14px,1.6vw,26px)", textAlign: "center",
+          opacity: Math.max(0, S(0, 400) - S(4800, 5400)),
+          transform: `scale(${1 + E(4800, 5400) * 0.12})`,
         }}>
-          <Mark color={tk.accent} size="13vw" dash={620 * (1 - E(400, 2400))} />
+          <div aria-hidden><Mark color={tk.accent} size="13vw" dash={620 * (1 - E(400, 2400))} /></div>
+          {/* 이름은 획이 닫힌 뒤에 붙는다 — 같이 뜨면 무엇이 그려지는 중인지 흐려진다 */}
+          <h1 style={{
+            margin: 0, fontSize: "clamp(30px,5vw,62px)", fontWeight: 300, letterSpacing: "-.04em",
+            lineHeight: 1, color: tk.fg,
+            opacity: E(2200, 3000), transform: `translateY(${(1 - E(2200, 3000)) * 10}px)`,
+          }}>Schutz</h1>
+          <div style={{
+            fontSize: "clamp(10px,1.05vw,13px)", letterSpacing: ".14em", textTransform: "uppercase",
+            color: tk.fgDim, fontWeight: 600,
+            opacity: E(3000, 3800) * 0.9, transform: `translateY(${(1 - E(3000, 3800)) * 6}px)`,
+          }}>
+            {t("open.poweredBy", { engine: ENGINE_CREDIT })}
+          </div>
         </div>
 
         {/* 2 선언 */}
@@ -209,7 +225,7 @@ export class Opening extends React.Component<Props, State> {
 
         {/* 3 세팅 — 여기서 멈춘다 */}
         {(() => {
-          const inP = E(9500, 10400), outP = this.state.passedGate ? E(12000, 12700) : 0;
+          const inP = E(11300, 12200), outP = this.state.passedGate ? E(13800, 14500) : 0;
           const op = inP * (1 - outP);
           if (op < 0.01) return null;
           return (
@@ -391,11 +407,16 @@ function ImportGlyph({ color }: { color: string }) {
   );
 }
 
-/** 선언 — 단어가 흐림에서 하나씩 풀린다 */
+/** 선언 — 단어가 흐림에서 하나씩 풀린다.
+ *
+ *  시각이 beats.ts 와 **따로** 적혀 있다. 비트는 "언제 무엇이 무대에 있나" 를 정하고,
+ *  여기 숫자는 그 안에서의 연출이라 성격이 다르다. 다만 비트를 밀 때 이쪽을 같이 안
+ *  밀면 앞 장면 위에 겹쳐 뜬다 — 실제로 마크 구간을 늘렸을 때 이름 위로 선언이 올라왔다.
+ *  비트를 건드리면 이 파일의 숫자도 함께 본다. */
 function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
   const words = t("open.say").split(/(\s+)/);
-  const out = ease(seg(time, 8800, 9500));
-  const gone = ease(seg(time, 9000, 9600));
+  const out = ease(seg(time, 10600, 11300));
+  const gone = ease(seg(time, 10800, 11400));
   if (gone >= 1) return null;
   let wi = -1;
   return (
@@ -408,7 +429,7 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
         {words.map((w, i) => {
           if (!w.trim()) return w;
           wi++;
-          const p = ease(seg(time, 3900 + wi * 90, 4600 + wi * 90));
+          const p = ease(seg(time, 5700 + wi * 90, 6400 + wi * 90));
           const em = w.startsWith("*") && w.endsWith("*");
           return (
             <span key={i} style={{
@@ -423,7 +444,7 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
       {/* 명대사는 독일어로 두되 뜻은 준다 — 멋만 부리고 읽는 사람을 두고 가지 않는다 */}
       <p style={{
         fontSize: "clamp(12px,1.3vw,16px)", color: tk.fgDim, margin: "18px 0 0", letterSpacing: ".01em",
-        opacity: ease(seg(time, 5600, 6500)) * (1 - out),
+        opacity: ease(seg(time, 7400, 8300)) * (1 - out),
       }}>{t("open.saySub")}</p>
       </div>
     </div>

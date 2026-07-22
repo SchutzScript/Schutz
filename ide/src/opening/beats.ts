@@ -31,18 +31,21 @@ export interface Beat {
   holdAt?: number;
 }
 
+// mark 구간이 5400 인 이유: 획이 다 그려진(2400) 뒤에 이름과 크레딧이 차례로 떠야
+// 한다. 예전엔 3600 에 끝나서 마크만 지나가고 **제품 이름이 오프닝 어디에도 없었다**.
+// 뒤 비트를 전부 같은 폭(1800)만큼 밀었다 — 간격은 그대로고 시작만 늦다.
 export const BEATS: readonly Beat[] = [
   { id: "mark",     at: 0 },
-  { id: "say",      at: 3600 },
-  { id: "setup",    at: 9500, gate: true, holdAt: 10500 },
-  { id: "assemble", at: 12000 },
-  { id: "ask",      at: 20000 },
-  { id: "rewrite",  at: 26000 },
-  { id: "approve",  at: 37500 },
-  { id: "settle",   at: 46000 },
+  { id: "say",      at: 5400 },
+  { id: "setup",    at: 11300, gate: true, holdAt: 12300 },
+  { id: "assemble", at: 13800 },
+  { id: "ask",      at: 21800 },
+  { id: "rewrite",  at: 27800 },
+  { id: "approve",  at: 39300 },
+  { id: "settle",   at: 47800 },
 ];
 
-export const TOTAL_MS = 52000;
+export const TOTAL_MS = 53800;
 
 /**
  * 진행 중 자막. 조립 뒤엔 화면이 알아서 움직이는데 설명이 없으면 그냥 구경만 하게
@@ -102,10 +105,10 @@ export function ease(x: number): number {
 export interface PanelEntry { key: "rail" | "left" | "editor" | "right"; at: number; dx: number; dy: number; }
 
 export const PANEL_ENTRIES: readonly PanelEntry[] = [
-  { key: "rail",   at: 12400, dx: -120, dy: 0 },
-  { key: "left",   at: 13100, dx: -160, dy: 0 },
-  { key: "editor", at: 13900, dx: 0,    dy: 130 },
-  { key: "right",  at: 14700, dx: 160,  dy: 0 },
+  { key: "rail",   at: 14200, dx: -120, dy: 0 },
+  { key: "left",   at: 14900, dx: -160, dy: 0 },
+  { key: "editor", at: 15700, dx: 0,    dy: 130 },
+  { key: "right",  at: 16500, dx: 160,  dy: 0 },
 ];
 
 /** 조립 애니메이션 길이. 라벨은 이보다 조금 늦게 떴다가 사라진다. */
