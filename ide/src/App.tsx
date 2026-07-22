@@ -5100,6 +5100,51 @@ ${(r.output || "").slice(0, 2000)}`;
     this.newConversation();
   }
 
+  /** 컴포저 안 도구줄 — 첨부·에이전트·보내기. 대화 앱은 이걸 전부 입력 상자 안에 둔다. */
+  private renderComposerTools() {
+    const s = this.state;
+    const canSend = (!!s.input.trim() || s.attach.length > 0) && !s.running;
+    const chip: React.CSSProperties = {
+      height: 26, padding: "0 11px", fontSize: 11.5, fontFamily: SUIT, cursor: "pointer",
+      borderRadius: 13, color: "var(--fg-sub2)", background: "transparent", border: "1px solid var(--w08)",
+    };
+    const ids = [...new Set([...this.configuredAgents(), ...s.messages.map(m => m.agent).filter((a): a is string => !!a && a !== "schutz")])];
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px 10px", background: "var(--bg-root)", borderRadius: "0 0 19px 19px" }}>
+        {window.schutz && s.workspace && (
+          <>
+            <button className="hv05" style={chip} title={t("chat.attachFileTitle")}
+              onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}>{t("chat.attachFile")}</button>
+            <button className="hv05" style={chip} title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}>{t("chat.attachSelection")}</button>
+          </>
+        )}
+        {/* 에이전트가 둘 이상일 때만 고를 이유가 생긴다 — 하나뿐이면 선택지가 아니라 잡음이다 */}
+        {ids.length >= 2 && ids.map(id => {
+          const on = s.chatTab === id;
+          return (
+            <button key={id} className="hv05" onClick={() => this.switchChatTab(on ? "all" : id)}
+              style={{ ...chip, display: "flex", alignItems: "center", gap: 6,
+                color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: this.chatAgentColor(id) }} />
+              {this.agDef(id)?.name ?? id}
+            </button>
+          );
+        })}
+        <div style={{ flex: 1 }} />
+        {/* 실행 중엔 같은 자리가 중지 버튼이 된다 — 멈추려고 다른 곳을 찾을 이유가 없다 */}
+        {s.running ? (
+          <button className="hvRed2" onClick={() => this.stopRun()} title={t("chat.stop")}
+            style={{ height: 34, width: 34, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit", cursor: "pointer", borderRadius: 17, color: "#CE9A9A", background: "rgba(201,123,123,.10)", border: "1px solid rgba(201,123,123,.3)" }}>
+            <span style={{ width: 9, height: 9, borderRadius: 2, background: "#C98A8A" }} />
+          </button>
+        ) : (
+          <button className="hvAccent" onClick={() => this.send()} disabled={!canSend} title={t("chat.send")}
+            style={{ height: 34, width: 34, fontSize: 15, fontWeight: 700, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 17, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
+        )}
+      </div>
+    );
+  }
+
   private renderApprovalBar() {
     const a = this.state.askRun;
     if (!a) return null;
@@ -5142,7 +5187,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const ag = s.uiMode === "agent";
     return (
       <div data-tour="chat" className="vtConversation" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: "none", height: ag ? 40 : 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
+        <div style={{ display: ag ? "none" : "flex", flex: "none", height: 34, alignItems: "center", gap: 8, padding: "0 16px", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />
           {window.schutz && s.cliAgents.claude?.ok && s.workspace && !s.running && (
@@ -5157,7 +5202,7 @@ ${(r.output || "").slice(0, 2000)}`;
             </button>
           )}
         </div>
-        {this.renderChatTabs()}
+        {!ag && this.renderChatTabs()}
         <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
         {s.chatAway && (
           <button className="hv05 sz-in" onClick={() => this.jumpChatToLatest()}
@@ -5173,11 +5218,13 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
         {ag && this.renderApprovalBar()}
         {window.schutz && s.workspace && (
-          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, position: "relative", borderTop: "1px solid var(--w06)" }}>
-            <button className="hv05" title={t("chat.attachFileTitle")} onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}
-              style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachFile")}</button>
-            <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
-              style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachSelection")}</button>
+          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: ag ? "0 0 6px" : "8px 12px 2px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, position: "relative", borderTop: ag ? "none" : "1px solid var(--w06)" }}>
+            {!ag && <>
+              <button className="hv05" title={t("chat.attachFileTitle")} onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}
+                style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachFile")}</button>
+              <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
+                style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachSelection")}</button>
+            </>}
             {s.attach.map((a, i) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 4, height: 21, padding: "0 4px 0 8px", fontSize: 10.5, fontFamily: MONO, borderRadius: 6, color: "var(--accent-hi)", background: "var(--accent-soft)", border: "1px solid var(--w08)" }}>
                 {a.kind === "selection" ? "✂" : "@"} {a.label}
@@ -5207,7 +5254,7 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
         )}
         <div style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
-          <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: ag ? 20 : 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
+          <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: ag ? 20 : 10, ...(ag ? { display: "flex" as const, flexDirection: "column" as const } : null), background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
             {(() => {
               const models = this.modelPalette();
               const list = models.length ? [] : this.slashList();
@@ -5282,17 +5329,20 @@ ${(r.output || "").slice(0, 2000)}`;
               }}
               placeholder={t("chat.inputPlaceholder")}
               style={{ width: "100%", background: "var(--bg-root)", border: "none",
-                borderRadius: ag ? 19 : 8.5,
+                borderRadius: ag ? "19px 19px 0 0" : 8.5,
                 minHeight: ag ? 52 : 34, maxHeight: ag ? 240 : 148,
                 padding: ag ? "15px 20px" : "8px 13px",
                 color: "var(--fg)", fontSize: ag ? 14.5 : 12.5, lineHeight: ag ? 1.6 : 1.5,
                 fontFamily: SUIT, outline: "none", display: "block", resize: "none", overflowY: "auto" }} />
+            {/* 도구는 상자 **안**에 산다. 밖에 띄워두면 입력창과 별개의 줄로 읽혀 위쪽이
+                어수선해진다. 첨부·에이전트 선택·보내기가 한 줄에 모인다. */}
+            {ag && this.renderComposerTools()}
           </div>
-          {(() => {
+          {!ag && (() => {
             const canSend = (!!this.state.input.trim() || this.state.attach.length > 0) && !this.state.running;
             return (
               <button className="hvAccent" onClick={() => this.send()} disabled={!canSend} title={this.state.running ? t("chat.sending") : t("chat.send")}
-                style={{ height: ag ? 44 : 37, width: ag ? 44 : 40, fontSize: ag ? 16 : 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: ag ? 22 : 9, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", fontWeight: 700, transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
+                style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 9, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", fontWeight: 700, transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
             );
           })()}
         </div>
@@ -5584,17 +5634,23 @@ ${(r.output || "").slice(0, 2000)}`;
     };
         const [sl, sc] = pstMap[p.status];
         return (
-          <div key={p.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
-            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "var(--ok)" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
-            <div style={{ padding: "10px 13px 9px 16px" }}>
+          <div key={p.id} className="sz-pop" style={{ position: "relative", background: opts?.wide ? "transparent" : "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: opts?.wide ? 12 : 10, overflow: "hidden" }}>
+            {/* 좌측 스파인은 **좁은 검토 패널**에서 눈에 띄라고 만든 장치다. 읽는 화면에
+                그대로 얹으면 카드 하나가 문단보다 시끄럽다 — 넓은 자리에선 뺀다. */}
+            {!opts?.wide && (
+              <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: p.status === "accepted" ? "var(--ok)" : p.status === "rejected" || p.status === "failed" ? "#C97B7B" : "var(--accent)", zIndex: 2, animation: p.status === "pending" ? "szGlow 2s ease-in-out infinite" : "none", transition: "background var(--dur) var(--ease)" }} />
+            )}
+            <div style={{ padding: opts?.wide ? "11px 14px 10px" : "10px 13px 9px 16px" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
+                <span style={{ fontFamily: MONO, fontSize: opts?.wide ? 12.5 : 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel}</span>
                 <span style={{ flex: "none", fontSize: 9.5, color: this.agDef(p.agent)?.color ?? "var(--accent)", border: `1px solid ${(this.agDef(p.agent)?.color ?? "var(--accent)") + "50"}`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{this.agDef(p.agent)?.name ?? p.agent}</span>
                 <div style={{ flex: 1 }} />
                 {p.auto && <span style={{ flex: "none", fontSize: 9.5, color: "var(--accent)", background: "var(--accent-soft)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("misc.auto")}</span>}
-                <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>
+                {opts?.wide
+                  ? <span key={p.status} style={{ fontSize: 11, whiteSpace: "nowrap", color: p.status === "pending" ? "var(--fg-dim)" : sc }}>{sl}</span>
+                  : <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>}
               </div>
-              <div style={{ fontSize: 11, color: "var(--fg-sub2)", marginTop: 4 }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
+              <div style={{ fontSize: opts?.wide ? 12.5 : 11, lineHeight: opts?.wide ? 1.65 : 1.4, color: "var(--fg-sub2)", marginTop: opts?.wide ? 6 : 4, fontFamily: SUIT }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
               {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
             </div>
             {/* diff 는 접었다 펼친다. 예전엔 maxHeight 180 + 중첩 스크롤이라 아래 코드가 안 보이는데
