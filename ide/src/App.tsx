@@ -47,7 +47,8 @@ import {
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { flushSync } from "react-dom";
 import { buildTimeline } from "./agentTimeline";
-import { groupByDay, parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
+import { carryOver, groupByDay, parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
+import { CLI_HEAD_BYTES, CLI_MSG_CAP, CLI_TAIL_BYTES, parseBody, parseHead, type CliAgent } from "./cliChats";
 
 /** 렌더 메서드 밖에서 모드를 묻는 자리 — render() 의 지역 변수 ag 를 쓸 수 없다. */
 const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
@@ -59,6 +60,18 @@ import type { TourHost } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
 interface InlineRange { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }
+/** 가져오기 목록 한 줄. 파일 **앞부분**만 읽어 채운 것이라 본문은 아직 없다. */
+interface ImpRow {
+  agent: CliAgent;
+  /** 절대 경로. 열 때 그대로 돌려주고, 메인이 알려진 디렉터리 안인지 다시 검사한다. */
+  file: string;
+  title: string;
+  /** 그 대화가 돌던 폴더. 지금 워크스페이스와 맞춰 "이 프로젝트만" 을 거른다. */
+  cwd: string;
+  bytes: number;
+  updatedAt: number;
+}
+
 interface Proposal {
   id: string;
   rel: string;
@@ -182,6 +195,12 @@ interface S {
   convId: string | null;
   /** 사이드바 아래쪽에 무엇을 보이는지 — 최근 항목이 기본. */
   asideTab: "recents" | "artifacts";
+  /** 지난 대화 가져오기 화면. 목록은 열 때 읽고 닫으면 버린다 — 839개 줄을 계속 들고 있을 이유가 없다. */
+  impOpen: boolean;
+  impRows: ImpRow[] | null;
+  impThisOnly: boolean;
+  /** 지금 가져오는 중인 파일. 두 번 누르는 걸 막고 그 줄에만 표시를 낸다. */
+  impBusy: string | null;
   /** 에이전트 모드 오른쪽 산출물 패널 폭(px). 드래그로 바뀌고 저장된다. */
   agentSideW: number;
   /** 열린 터미널 탭들 (멀티 터미널) */
@@ -413,6 +432,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
+    impOpen: false, impRows: null, impThisOnly: true, impBusy: null,
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
@@ -896,6 +916,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       { id: "settings", label: t("sc1.cmd_open_settings"), hint: "Ctrl+,", run: () => this.openO({ settingsOpen: true }) },
       { id: "term", label: t("sc1.cmd_toggle_terminal"), hint: "Ctrl+`", run: () => this.toggleTerm() },
       { id: "uiMode", label: t("mode.command"), hint: "Ctrl+Shift+M", run: () => this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent") },
+      // 사이드바는 에이전트 모드에만 있다. 명령으로도 열어두지 않으면 에디터 모드를 고른
+      // 사람에게는 첫 실행 화면이 유일한 입구이고, 거기서 "나중에" 를 누르면 길이 없어진다.
+      { id: "importChats", label: t("imp.command"), run: () => this.openImport() },
       { id: "split1", label: t("sc1.cmd_split1"), run: () => this.setLayout(1) },
       { id: "split2", label: t("sc1.cmd_split2"), run: () => this.setLayout(2) },
       { id: "split4", label: t("sc1.cmd_split4"), run: () => this.setLayout(4) },
@@ -2906,9 +2929,13 @@ ${(r.output || "").slice(0, 2000)}`;
     // 빈 대화는 목록에 올리지 않는다. /new 를 누르고 아무 말도 안 하면 "새 대화" 한 줄이
     // 최근 항목에 남아, 다음 /new 마다 빈 줄이 쌓인다.
     if (!msgs.length) return;
-    this.writeConvIndex(upsert(this.convIndex(), {
+    const idx = this.convIndex();
+    this.writeConvIndex(upsert(idx, {
       id, title: titleFrom(msgs, t("conv.untitled")),
       updatedAt: Date.now(), msgCount: msgs.length,
+      // 출처는 계산해서 나오지 않는다 — 흘려 넣지 않으면 가져온 대화에 한 마디만 더 해도
+      // 배지가 사라진다. carryOver 의 주석에 이유가 있다.
+      ...carryOver(idx, id),
     }));
   }
 
@@ -2938,6 +2965,120 @@ ${(r.output || "").slice(0, 2000)}`;
       try { const k = this.curConvKey(); if (k) localStorage.setItem(k, id); } catch { /* ignore */ }
       this.restoreSession();
     });
+  }
+
+  // ── 지난 대화 가져오기 ─────────────────────────────────────────────────────
+  //
+  // 형식 해석은 cliChats.ts 가, 파일 읽기는 메인이 한다. 여기 있는 건 그 둘을 잇고
+  // 결과를 Schutz 대화로 앉히는 일뿐이다.
+
+  /** 오프닝에서 투어까지 골랐는데 가져오기가 먼저 뜬 경우. 가져오기가 닫히면 이어서 연다. */
+  private _tourAfterImport = false;
+  /** 오프닝 세팅에서 고른 값. Opening 은 데모 중 언마운트되므로 여기 둔다. */
+  private _wantsImport = false;
+
+  /** 가져오기 화면을 닫는다 — 가져와서 닫히든 취소로 닫히든 여기 한 곳을 지난다.
+   *  두 경로가 갈리면 미뤄둔 투어가 한쪽에서만 시작된다. */
+  private closeImport() {
+    this.setState({ impOpen: false, impRows: null });
+    if (this._tourAfterImport) {
+      this._tourAfterImport = false;
+      this.qt(() => this.startTour(), 500);
+    }
+  }
+
+  /** 가져오기 화면을 연다. 목록은 열 때마다 새로 읽는다 — 다른 창에서 나눈 대화가
+   *  그 사이에 늘었을 수 있고, 캐시를 무효화할 신호가 우리에겐 없다. */
+  openImport() {
+    this.setState({ impOpen: true, impRows: null });
+    void this.loadImportRows();
+  }
+
+  /** 목록을 채운다. 각 파일의 **앞부분만** 읽어 제목을 뽑는다(파일 하나가 218MB 다). */
+  private async loadImportRows() {
+    if (!window.schutz?.cliChatList) { this.setState({ impRows: [] }); return; }
+    const rows: ImpRow[] = [];
+    for (const agent of ["claude", "codex"] as CliAgent[]) {
+      let res;
+      try { res = await window.schutz.cliChatList(agent, CLI_HEAD_BYTES[agent]); } catch { continue; }
+      for (const r of res?.rows ?? []) {
+        const h = parseHead(agent, r.head, t("conv.untitled"));
+        rows.push({ agent, file: r.file, bytes: r.bytes, updatedAt: r.updatedAt, title: h.title, cwd: h.cwd });
+      }
+    }
+    rows.sort((a, b) => b.updatedAt - a.updatedAt);
+    this.setState({ impRows: rows });
+  }
+
+  /** 한 줄을 Schutz 대화로 데려온다.
+   *
+   *  원본 파일은 **읽기만** 한다. 지우지도 옮기지도 않는다 — 가져오기가 잘못돼도 Claude Code
+   *  쪽에서 그 대화는 그대로 열린다. */
+  private async importCliChat(row: ImpRow) {
+    if (this.state.impBusy) return;
+    this.setState({ impBusy: row.file });
+    try {
+      const res = await window.schutz!.cliChatRead(row.agent, row.file, CLI_TAIL_BYTES);
+      if (!res || res.error || typeof res.text !== "string") {
+        this.toast("error", t("imp.failed", { err: res?.error ?? "?" }));
+        return;
+      }
+      const body = parseBody(row.agent, res.text, CLI_MSG_CAP);
+      const messages: ChatMsg[] = [];
+      const tools: ToolItem[] = [];
+      // 말과 도구가 한 배열로 오는 덕에 순서가 남아 있다. _uid 를 번갈아 매기면
+      // 트랜스크립트(agentTimeline)가 원래 순서대로 다시 엮는다.
+      for (const it of body.items) {
+        if (it.kind === "msg") {
+          // agent 는 "schutz" 로 둔다. 이 대화를 이어받는 건 우리 에이전트이고, 남의
+          // 에이전트 id 를 심으면 색·필터·컨텍스트 분리가 없는 에이전트를 가리키게 된다.
+          messages.push({
+            id: (it.role === "user" ? "u" : "a") + (this._uid++),
+            role: it.role, agent: "schutz", text: it.text,
+            ...(it.role === "ai" ? { who: row.agent === "claude" ? "Claude Code" : "Codex" } : {}),
+          });
+        } else {
+          tools.push({ id: "t" + (this._uid++), agent: "schutz", verb: it.name, path: it.detail, st: "done", note: "" });
+        }
+      }
+      if (!messages.length) { this.toast("error", t("imp.empty")); return; }
+
+      const id = "c" + Date.now().toString(36);
+      const bk = this.convBodyKey(id);
+      if (!bk) return;
+      // 지금 대화를 확정하고 자리를 비운 다음에 앉힌다 — 순서가 바뀌면 지금 것이 덮인다.
+      this.saveSession();
+      try {
+        localStorage.setItem(bk, JSON.stringify({ messages, history: [], tools, proposals: [] }));
+      } catch {
+        this.toast("error", t("mode.sessionTrimmed"));
+        return;
+      }
+      this.writeConvIndex(upsert(this.convIndex(), {
+        id, title: row.title, updatedAt: row.updatedAt || Date.now(),
+        msgCount: messages.length, source: row.agent,
+      }));
+      this.history = [];
+      this.engine.reset();
+      this._cliSession = null;
+      this._codexSession = null;
+      this.setState({ convId: id, messages: [], tools: [], proposals: [], input: "" }, () => {
+        try { const k = this.curConvKey(); if (k) localStorage.setItem(k, id); } catch { /* ignore */ }
+        this.restoreSession();
+        this.closeImport();
+        this.toast("ok", t("imp.done", { title: row.title }));
+        // 자른 것은 잘랐다고 말한다. 조용히 버리면 "예전 대화가 사라졌다" 가 된다.
+        //
+        // 두 가지 잘림을 구분해야 한다. droppedMsgs 는 **파서가 본 것 중** 버린 수라서,
+        // 파일을 통째로 읽지 못했으면 그 숫자가 거짓말이 된다 — 218MB 짜리에서 마지막
+        // 24MB 만 읽고 "이 앞의 1마디는 가져오지 않았습니다" 라고 말한 적이 있다. 안 읽은
+        // 194MB 에 몇 마디가 있었는지는 셀 방법이 없으니, 셀 수 있는 척하지 않는다.
+        if (res.partial) this.toast("info", t("imp.tailOnly"));
+        else if (body.clipped) this.toast("info", t("imp.clipped", { n: body.droppedMsgs }));
+      });
+    } finally {
+      this.setState({ impBusy: null });
+    }
   }
 
   async refreshWorkspace() {
@@ -3359,6 +3500,8 @@ ${(r.output || "").slice(0, 2000)}`;
     if (!mod && e.key === "Escape") {
       const s = this.state;
       if (s.tourOpen) { this.endTour(); return; }
+      // 가져오기는 시트보다 위에 뜬다 — 열려 있으면 Esc 는 이걸 먼저 닫아야 한다.
+      if (s.impOpen) { this.closeImport(); return; }
       if (s.sheetOpen) { this.closeSheet(); return; }
       if (s.cmdOpen) this.closeOverlay("cmd", { cmdOpen: false });
       else if (s.quickOpen) this.closeOverlay("quick", { quickOpen: false });
@@ -3965,7 +4108,8 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.state.openingPhase !== "off" && (
           <Opening
             phase={this.state.openingPhase}
-            onDone={({ wantsTour }) => this.finishDemo(wantsTour)}
+            onWantsImport={w => { this._wantsImport = w; }}
+            onDone={({ wantsTour }) => this.finishDemo(wantsTour, this._wantsImport)}
             onStartDemo={() => { this.setState({ openingPhase: "off" }); void this.runDemo(); }}
           />
         )}
@@ -3990,6 +4134,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderSearch()}
         {this.renderAskClose()}
         {this.renderAskRun()}
+        {this.renderImport()}
         {this.renderToasts()}
         {this.renderMru()}
         {s.ctxMenu && (
@@ -5016,6 +5161,94 @@ ${(r.output || "").slice(0, 2000)}`;
   // 에디터 모드의 레일(42px 아이콘 줄)과는 다른 물건이다. 레일은 **패널을 고르는** 스위치고
   // 이건 **대화를 고르는** 목록이라, 같은 자리에 두 개가 다 있을 이유가 없다 — 모드에 따라
   // 하나만 뜬다.
+  /** 가져오기 — 어느 대화를 데려올지 고른다.
+   *
+   *  이 화면은 **읽기만** 한다. 고르기 전에는 아무것도 안 바뀌고, 고른 뒤에도 원본 파일은
+   *  그대로다. 그래서 되돌리기가 필요 없다. */
+  private renderImport() {
+    const s = this.state;
+    if (!s.impOpen) return null;
+    const root = (s.workspace?.root ?? "").toLowerCase();
+    const rows = s.impRows ?? [];
+    // Windows 는 경로 대소문자를 안 가린다. Codex 는 실제로 `c:\Users\…` 를, Claude Code 는
+    // `C:\Users\…` 를 적는다 — 그대로 비교하면 같은 폴더가 남남이 된다.
+    const mine = root ? rows.filter(r => r.cwd.toLowerCase() === root) : rows;
+    const shown = s.impThisOnly && root ? mine : rows;
+
+    const close = () => this.closeImport();
+    const day = (ms: number) => {
+      const d = new Date(ms), n = new Date();
+      const sameDay = d.toDateString() === n.toDateString();
+      return sameDay
+        ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    };
+
+    return (
+      <div className="sz-backdrop" onClick={close}
+        style={{ position: "fixed", inset: 0, zIndex: 240, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(t("imp.title"))} className="sz-pop" onClick={e => e.stopPropagation()}
+          style={{ width: 620, maxWidth: "94%", height: 520, maxHeight: "86vh", display: "flex", flexDirection: "column",
+            background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "15px 16px 11px", borderBottom: "1px solid var(--w06)" }}>
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{t("imp.title")}</span>
+            <div style={{ flex: 1 }} />
+            {root && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--fg-sub2)", cursor: "pointer" }}>
+                <input type="checkbox" checked={s.impThisOnly} onChange={e => this.setState({ impThisOnly: e.target.checked })} />
+                {t("imp.thisProject")}
+                <span style={{ color: "var(--fg-dim2)" }}>({mine.length}/{rows.length})</span>
+              </label>
+            )}
+            <button className="hv07" onClick={close} title={t("imp.close")}
+              style={{ border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 3 }}>✕</button>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 8px" }}>
+            {s.impRows === null ? (
+              <div style={{ padding: "26px 12px", fontSize: 12, color: "var(--fg-dim2)" }}>{t("imp.scanning")}</div>
+            ) : shown.length === 0 ? (
+              <div style={{ padding: "26px 12px", fontSize: 12, lineHeight: 1.7, color: "var(--fg-dim2)" }}>
+                {rows.length === 0 ? t("imp.none") : t("imp.noneHere")}
+              </div>
+            ) : shown.map(r => {
+              const busy = s.impBusy === r.file;
+              return (
+                <button key={r.file} className="hv05" disabled={!!s.impBusy}
+                  onClick={() => void this.importCliChat(r)} title={r.file}
+                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px",
+                    borderRadius: 9, border: "none", background: "transparent", cursor: s.impBusy ? "default" : "pointer",
+                    textAlign: "left", fontFamily: SUIT, opacity: s.impBusy && !busy ? 0.45 : 1 }}>
+                  <span aria-hidden style={{ flex: "none", width: 6, height: 6, borderRadius: "50%",
+                    background: r.agent === "claude" ? "#C67A4A" : "#6E8FA8" }} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 12.5, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.title}
+                    </span>
+                    {/* 경로는 오른쪽 끝이 중요하다 — 앞은 어차피 다 같은 C:\Users\… 다 */}
+                    <span style={{ display: "block", fontFamily: MONO, fontSize: 10, color: "var(--fg-dim2)", marginTop: 2,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>
+                      {r.cwd || "—"}
+                    </span>
+                  </span>
+                  <span style={{ flex: "none", fontSize: 10, color: "var(--fg-dim2)", textAlign: "right" }}>
+                    {busy ? t("imp.reading") : <>{day(r.updatedAt)}<br />{(r.bytes / 1e6).toFixed(1)} MB</>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 미리 말한다. 가져오고 나서만 말하면 이미 늦다. */}
+          <div style={{ padding: "10px 16px 13px", borderTop: "1px solid var(--w06)", fontSize: 10.5, lineHeight: 1.6, color: "var(--fg-dim2)" }}>
+            {t("imp.capNote", { n: CLI_MSG_CAP })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   private renderAgentAside() {
     const s = this.state;
     const idx = this.convIndex();
@@ -5036,12 +5269,18 @@ ${(r.output || "").slice(0, 2000)}`;
     const convRow = (c: ConvMeta) => {
       const on = c.id === s.convId;
       return (
-        <button key={c.id} className="hv05" onClick={() => this.openConversation(c.id)} title={c.title}
-          style={{ display: "block", width: "100%", height: 28, padding: "0 10px", fontFamily: SUIT, fontSize: 12,
-            cursor: "pointer", borderRadius: 7, border: "none", textAlign: "left",
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        <button key={c.id} className="hv05" onClick={() => this.openConversation(c.id)}
+          title={c.source ? c.title + " — " + t(c.source === "claude" ? "imp.fromClaude" : "imp.fromCodex") : c.title}
+          style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", height: 28, padding: "0 10px",
+            fontFamily: SUIT, fontSize: 12, cursor: "pointer", borderRadius: 7, border: "none", textAlign: "left",
             color: on ? "var(--fg)" : "var(--fg-sub2)", background: on ? "var(--w06)" : "transparent" }}>
-          {c.title}
+          {/* 가져온 대화라는 표식. 글자를 쓰면 제목 자리를 먹으니 점 하나로 둔다 —
+              무슨 뜻인지는 title 속성이 말한다. */}
+          {c.source && (
+            <span aria-hidden style={{ flex: "none", width: 4, height: 4, borderRadius: "50%",
+              background: c.source === "claude" ? "#C67A4A" : "#6E8FA8" }} />
+          )}
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</span>
         </button>
       );
     };
@@ -5065,6 +5304,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
         <div style={{ height: 8 }} />
         {navBtn(t("aside.artifacts"), "◫", () => this.setState(st => ({ asideTab: st.asideTab === "artifacts" ? "recents" : "artifacts" })), arts.length || undefined)}
+        {navBtn(t("imp.aside"), "⤓", () => this.openImport())}
         {navBtn(t("aside.customize"), "⚙", () => this.openO({ settingsOpen: true }))}
 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 4 }}>
@@ -6620,7 +6860,7 @@ ${(r.output || "").slice(0, 2000)}`;
   private _demoProposalId: string | null = null;
 
   /** 데모 종료 — 원래 프로젝트로 돌려놓는다. */
-  private finishDemo(wantsTour: boolean) {
+  private finishDemo(wantsTour: boolean, wantsImport = false) {
     this._demoAbort = true;
     const prev = this._demoPrevRoot;
     this._demoPrevRoot = null;
@@ -6632,6 +6872,17 @@ ${(r.output || "").slice(0, 2000)}`;
     } catch { /* ignore */ }
 
     const after = () => {
+      // 오프닝에서 "골라서 가져오기" 를 골랐으면 그게 먼저다 — 방금 한 선택이고,
+      // 투어나 설정보다 사용자가 기다리고 있는 것이다. 목록은 여기서 처음 읽는다.
+      //
+      // 둘 다 골랐을 수 있다(가져오기는 세팅에서, 투어는 마무리 화면에서 따로 묻는다).
+      // 그때 투어를 그냥 버리면 사용자가 누른 버튼이 아무 일도 안 한 것이 된다. 가져오기
+      // 화면이 닫히는 순간으로 미룬다 — 스포트라이트와 모달이 겹치지도 않는다.
+      if (wantsImport) {
+        this._tourAfterImport = wantsTour;
+        this.qt(() => this.openImport(), 700);
+        return;
+      }
       if (wantsTour) this.qt(() => this.startTour(), 900);
       else if (this.configuredAgents().length === 0 && !this.state.cliAgents.claude?.ok && !this.state.cliAgents.codex?.ok) {
         // 오프닝은 테마만 받았다. 여기서 안 이어주면 첫 실행 사용자가 AI 를 연결할

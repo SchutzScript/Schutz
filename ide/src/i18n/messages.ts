@@ -23,6 +23,7 @@ import { dict as d_misc } from "./dict/misc";
 import { dict as d_engine } from "./dict/engine";
 import { dict as d_tour } from "./dict/tour";
 import { dict as d_mode } from "./dict/mode";
+import { dict as d_cliimp } from "./dict/cliimp";
 import { dict as d_open } from "./dict/open";
 import { dict as d_chat2 } from "./dict/chat2";
 import { dict as d_sc1 } from "./dict/sc1";
@@ -35,7 +36,7 @@ export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_ob, ...d_reg,
-  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode,
+  ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
   ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },

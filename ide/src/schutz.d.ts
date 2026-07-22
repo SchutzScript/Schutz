@@ -102,6 +102,9 @@ interface SchutzApi {
   replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number; error?: string; partial?: boolean }>;
   cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
   agentCommands(root: string | null): Promise<{ commands: { name: string; origin: "claude" | "codex"; scope: "user" | "project"; description: string; argHint: string; body: string }[] }>;
+  cliChatCounts(): Promise<{ counts: Record<string, number> }>;
+  cliChatList(agent: string, headBytes: number): Promise<{ rows: { agent: string; file: string; head: string; bytes: number; updatedAt: number }[] }>;
+  cliChatRead(agent: string, file: string, tailBytes: number): Promise<{ text?: string; bytes?: number; partial?: boolean; error?: string }>;
   mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number }[]>;
   mcpStart(name: string): Promise<{ ok: boolean; tools?: McpTool[]; reason?: string }>;
   mcpStop(name: string): Promise<{ ok: boolean }>;

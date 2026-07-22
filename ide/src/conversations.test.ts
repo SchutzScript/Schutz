@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONV_CAP, groupByDay, parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
+import { CONV_CAP, carryOver, groupByDay, parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
 
 const meta = (id: string, updatedAt: number, title = id): ConvMeta => ({ id, title, updatedAt, msgCount: 1 });
 const ids = (l: readonly ConvMeta[]) => l.map(c => c.id);
@@ -150,5 +150,50 @@ describe("parseIndex", () => {
 
   it("msgCount 가 없으면 0 으로 채운다", () => {
     expect(parseIndex(JSON.stringify([{ id: "a", title: "t", updatedAt: 1 }]))[0].msgCount).toBe(0);
+  });
+});
+
+describe("carryOver — 출처는 계산으로 나오지 않는다", () => {
+  const idx: ConvMeta[] = [
+    { id: "a", title: "가져온 것", updatedAt: 2, msgCount: 5, source: "claude" },
+    { id: "b", title: "여기서 시작", updatedAt: 1, msgCount: 3 },
+  ];
+
+  it("가져온 대화의 출처와 이름을 돌려준다", () => {
+    expect(carryOver(idx, "a")).toEqual({ source: "claude", title: "가져온 것" });
+  });
+
+  it("여기서 시작한 대화는 빈 것을 돌려준다 — 없는 필드를 만들지 않는다", () => {
+    expect(carryOver(idx, "b")).toEqual({});
+    expect(carryOver(idx, "없는id")).toEqual({});
+  });
+
+  // 이게 이 함수가 있는 이유다. 저장할 때마다 색인 줄을 새로 만드는데, 그 자리에
+  // 흘려 넣지 않으면 가져온 대화에 한 마디만 더 해도 배지가 사라진다.
+  it("갱신에 섞으면 출처와 이름이 살아남는다", () => {
+    const after = upsert(idx, { id: "a", title: "잘린 창의 첫 줄", updatedAt: 9, msgCount: 6, ...carryOver(idx, "a") });
+    expect(after.find(c => c.id === "a")).toEqual({ id: "a", title: "가져온 것", updatedAt: 9, msgCount: 6, source: "claude" });
+  });
+
+  // 여기서 시작한 대화는 반대다 — 첫 사용자 메시지가 진짜 시작이라 제목을 다시 계산하는 게 맞다.
+  it("여기서 시작한 대화의 제목은 갱신을 막지 않는다", () => {
+    const after = upsert(idx, { id: "b", title: "새로 뽑은 제목", updatedAt: 9, msgCount: 4, ...carryOver(idx, "b") });
+    expect(after.find(c => c.id === "b")!.title).toBe("새로 뽑은 제목");
+  });
+
+  it("섞지 않으면 지워진다 — 이 함수를 빠뜨린 결과", () => {
+    const after = upsert(idx, { id: "a", title: "제목이 바뀜", updatedAt: 9, msgCount: 6 });
+    expect(after.find(c => c.id === "a")!.source).toBeUndefined();
+  });
+});
+
+describe("parseIndex — 출처", () => {
+  it("저장된 출처를 살려 읽는다", () => {
+    expect(parseIndex(JSON.stringify([{ id: "a", title: "t", updatedAt: 1, msgCount: 2, source: "codex" }]))[0].source).toBe("codex");
+  });
+
+  it("모르는 출처 값은 버린다 — 배지를 그릴 수 없는 값이다", () => {
+    expect(parseIndex(JSON.stringify([{ id: "a", title: "t", updatedAt: 1, source: "cursor" }]))[0].source).toBeUndefined();
+    expect(parseIndex(JSON.stringify([{ id: "a", title: "t", updatedAt: 1, source: 7 }]))[0].source).toBeUndefined();
   });
 });

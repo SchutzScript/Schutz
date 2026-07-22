@@ -14,6 +14,11 @@ export interface ConvMeta {
   /** epoch ms. 정렬 기준이자 "오늘/어제" 묶음의 기준. */
   updatedAt: number;
   msgCount: number;
+  /** 다른 도구에서 데려온 대화면 어디서 왔는지. 없으면 여기서 시작한 대화다.
+   *
+   *  가져온 뒤로는 완전히 내 대화다 — 편집도 이어하기도 된다. 이 값은 목록에 작은
+   *  표식을 붙이는 데만 쓴다. 그래야 몇 주 뒤에 "이건 어디서 온 거지" 가 답이 된다. */
+  source?: "claude" | "codex";
 }
 
 /** 이 이상은 들고 있지 않는다. 브라우저 저장소는 5MB 안팎이고 대화 하나가 수십 KB 다. */
@@ -43,6 +48,25 @@ export function upsert(index: readonly ConvMeta[], meta: ConvMeta): ConvMeta[] {
     .map((c, i) => ({ c, i }))
     .sort((a, b) => (b.c.updatedAt - a.c.updatedAt) || (a.i - b.i))
     .map(x => x.c);
+}
+
+/** 색인을 갱신할 때 **원래 있던 것을 지켜야 하는** 필드를 꺼내온다.
+ *
+ *  대화를 저장할 때마다 색인 한 줄을 새로 만든다. 시각과 개수는 매번 다시 계산하는 게
+ *  맞다. 하지만 두 가지는 다시 계산하면 안 된다.
+ *
+ *  `source` 는 계산으로 나오지 않는다 — 가져오던 그 순간에만 알 수 있다. 새로 만들면
+ *  **저장 한 번에 출처가 지워진다.** 가져온 대화에 한 마디만 더 하면 배지가 사라진다.
+ *
+ *  `title` 은 가져온 대화에 한해 지킨다. titleFrom 은 첫 사용자 메시지에서 제목을 뽑는데,
+ *  가져온 대화는 원본의 **끝부분만** 들고 온 것이라 그 "첫 메시지" 가 대화의 시작이 아니다.
+ *  실제로 218MB 대화를 가져왔더니 목록에 붙은 이름이 "재게 ㄱ"(원본이 스스로 가진 제목)
+ *  에서 "This session is being continued from a…"(잘린 창의 첫 줄, Claude Code 가 넣은
+ *  압축 서문)로 바뀌었다. 원본이 가진 이름이 어떤 추정보다 낫다. */
+export function carryOver(index: readonly ConvMeta[], id: string): Partial<Pick<ConvMeta, "source" | "title">> {
+  const prev = index.find(c => c.id === id);
+  if (!prev || !prev.source) return {};
+  return { source: prev.source, ...(prev.title ? { title: prev.title } : {}) };
 }
 
 /** 상한을 넘으면 오래된 것부터 떨어뜨린다. 떨어진 것들의 본문도 지워야 하므로 함께 돌려준다. */
@@ -77,7 +101,11 @@ export function parseIndex(raw: string | null): ConvMeta[] {
         && typeof (c as ConvMeta).id === "string" && !!(c as ConvMeta).id
         && typeof (c as ConvMeta).title === "string"
         && Number.isFinite((c as ConvMeta).updatedAt))
-      .map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, msgCount: Number.isFinite(c.msgCount) ? c.msgCount : 0 }));
+      .map(c => ({
+        id: c.id, title: c.title, updatedAt: c.updatedAt,
+        msgCount: Number.isFinite(c.msgCount) ? c.msgCount : 0,
+        ...(c.source === "claude" || c.source === "codex" ? { source: c.source } : {}),
+      }));
   } catch {
     return [];
   }

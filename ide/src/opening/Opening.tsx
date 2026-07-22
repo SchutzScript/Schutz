@@ -29,13 +29,24 @@ interface Props {
   phase: "intro" | "outro";
   /** 세팅을 마쳤다 — 오버레이를 걷고 진짜 UI 로 데모를 시작한다. */
   onStartDemo: () => void;
+  /** 지난 대화를 가져오겠다고 골랐다(또는 물렀다).
+   *
+   *  이 화면은 데모 동안 **언마운트된다**(intro → off → outro). 그래서 선택을 여기 state 에만
+   *  두면 마무리 화면이 뜰 때 초기화되고, onDone 은 늘 false 를 들고 나간다. 테마·모드가
+   *  고르는 즉시 setThemeId·setUiMode 를 부르는 것과 같은 이유다 — 고른 순간 밖에 알린다. */
+  onWantsImport: (want: boolean) => void;
   /** 오프닝이 끝났다(또는 건너뛰었다). */
   onDone: (opts: { wantsTour: boolean }) => void;
 }
-interface State { t: number; passedGate: boolean; theme: string; mode: UiMode; }
+interface State {
+  t: number; passedGate: boolean; theme: string; mode: UiMode;
+  /** 이 컴퓨터에 남아 있는 Claude Code · Codex 대화 수. null = 아직 안 세봤다. */
+  pastChats: number | null;
+  wantsImport: boolean;
+}
 
 export class Opening extends React.Component<Props, State> {
-  state: State = { t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode() };
+  state: State = { t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false };
   private raf = 0;
   private last = 0;
   private reduced = false;
@@ -50,6 +61,21 @@ export class Opening extends React.Component<Props, State> {
     this.raf = requestAnimationFrame(this.tick);
     window.addEventListener("keydown", this.onKey);
     this.langOff = onLangChange(() => this.forceUpdate());
+    // 마무리 화면은 세팅을 다시 그리지 않는다 — 셀 이유가 없다.
+    if (this.props.phase !== "intro") return;
+    // 지난 대화가 **있을 때만** 물어본다. 처음 쓰는 사람에게 "가져올까요?" 는 아무 뜻이
+    // 없고, 세팅 화면만 한 칸 길어진다. 파일 수만 세므로 1GB 를 읽지 않는다.
+    void this.countPastChats();
+  }
+
+  /** 셋째 선택지를 띄울지 정한다. 실패하면 그냥 안 띄운다 — 첫 실행 화면에서 오류를
+   *  보여줄 이유가 없고, 나중에 사이드바에서 언제든 할 수 있다. */
+  private async countPastChats() {
+    try {
+      const r = await window.schutz?.cliChatCounts?.();
+      const n = Object.values(r?.counts ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
+      if (n > 0) this.setState({ pastChats: n });
+    } catch { /* 안 띄운다 */ }
   }
   componentWillUnmount() {
     cancelAnimationFrame(this.raf);
@@ -279,6 +305,42 @@ export class Opening extends React.Component<Props, State> {
                   );
                 })}
               </div>
+              {/* 지난 대화 — **찾았을 때만** 나타난다.
+                  처음 쓰는 사람에게는 이 블록이 아예 없어서 화면 길이가 그대로다.
+                  여기서 고르는 건 "가져오겠다" 뿐이고, 무엇을 가져올지는 오프닝이 걷힌 뒤
+                  고른다. 첫 실행 화면에 파일 목록을 띄우면 세팅이 아니라 작업이 된다. */}
+              {this.state.pastChats !== null && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 13, marginTop: -8,
+                  padding: "11px 14px", borderRadius: 11, textAlign: "left",
+                  background: tk.bgPanel, border: `1px solid ${this.state.wantsImport ? tk.accent : tk.w08}`,
+                  transition: "border-color .2s",
+                }}>
+                  <span aria-hidden style={{ flex: "none", fontSize: 17, color: tk.accent, lineHeight: 1 }}>⤓</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: tk.fg }}>{t("imp.found", { n: this.state.pastChats })}</div>
+                    <div style={{ fontSize: 10.5, lineHeight: 1.5, color: tk.fgDim2, marginTop: 2, whiteSpace: "normal" }}>
+                      {t("imp.foundHint")}
+                    </div>
+                  </div>
+                  <div style={{ flex: "none", display: "flex", gap: 6 }}>
+                    {([[false, "imp.later"], [true, "imp.now"]] as const).map(([want, key]) => {
+                      const on = this.state.wantsImport === want;
+                      return (
+                        <button key={key} onClick={() => { this.setState({ wantsImport: want }); this.props.onWantsImport(want); }} aria-pressed={on}
+                          style={{
+                            fontFamily: "inherit", fontSize: 11.5, padding: "7px 13px", borderRadius: 8, cursor: "pointer",
+                            whiteSpace: "nowrap",
+                            border: `1px solid ${on ? tk.accent : tk.w12}`,
+                            background: on && want ? tk.accent : "transparent",
+                            color: on && want ? tk.onAccent : on ? tk.fg : tk.fgDim,
+                            fontWeight: on ? 650 : 400,
+                          }}>{t(key)}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
               <button onClick={this.pass} style={{
                 fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",

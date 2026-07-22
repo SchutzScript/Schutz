@@ -871,6 +871,108 @@ ipcMain.handle("schutz:agentCommands", async (_e, root) => {
   return { commands: out };
 });
 
+// ── 지난 대화 가져오기 — Claude Code · Codex 가 남긴 기록 ─────────────────────
+//
+// 여기서는 **파일만 만진다.** JSONL 을 해석하는 규칙은 전부 src/cliChats.ts 에 있다.
+// 메인은 .cjs 라 그 모듈을 못 가져오는데, 그래서 나눈 게 아니라 나누는 게 맞아서 나눴다 —
+// 형식 해석은 브라우저 없이 테스트할 수 있는 곳에 있어야 하고, 파일 읽기는 여기여야 한다.
+// 덕분에 "파일을 잘못 읽었나 형식을 잘못 읽었나" 가 갈린다.
+//
+// 크기가 설계를 정한다: 이 기계에서 Claude Code 는 839개 파일 · 총 1GB · 최대 218MB 다.
+// 그래서 목록은 **앞부분만**, 열기는 **꼬리만** 읽는다. 통째로 읽는 경로는 아예 없다.
+//
+// depth 는 눈대중이 아니라 실측이다. 이 기계의 ~/.claude/projects 에는 .jsonl 이 839개
+// 있는데, 그중 **802개가 `subagents/` 아래**다 — 서브에이전트·워크플로가 남긴 전사이고
+// 사람이 나눈 대화가 아니다. 목록에 섞이면 "agent-a0d95c19…" 같은 줄이 사용자 대화를
+// 덮어버린다. 진짜 대화는 `projects/<프로젝트>/<uuid>.jsonl` 딱 한 겹(37개)이다.
+//   claude: projects/<프로젝트>/*.jsonl        → 1
+//   codex:  sessions/YYYY/MM/DD/rollout-*.jsonl → 3
+const CHAT_DIRS = {
+  claude: { dir: path.join(HOME, ".claude", "projects"), depth: 1 },
+  codex: { dir: path.join(HOME, ".codex", "sessions"), depth: 3 },
+};
+
+/** 렌더러가 준 경로를 믿지 않는다. 위 두 디렉터리 **안**이고 .jsonl 일 때만 연다.
+ *  경로가 UI 를 거쳐 돌아오는 이상, 그 사이에 무엇이든 될 수 있다고 본다. */
+function chatFileOk(agent, file) {
+  const base = CHAT_DIRS[agent] && CHAT_DIRS[agent].dir;
+  if (!base || typeof file !== "string" || !file.endsWith(".jsonl")) return null;
+  const full = path.resolve(file);
+  const rel = path.relative(base, full);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return full;
+}
+
+/** .jsonl 을 모은다. depth 는 위 CHAT_DIRS 주석의 이유로 에이전트마다 다르다.
+ *  `subagents` 는 depth 로도 이미 걸리지만 이름으로도 막는다 — 나중에 depth 를 늘릴 일이
+ *  생겼을 때 서브에이전트 전사가 조용히 딸려 들어오지 않게. */
+async function collectChatFiles(dir, depth, out) {
+  if (depth < 0) return;
+  let entries;
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      if (e.name === "subagents") continue;
+      await collectChatFiles(path.join(dir, e.name), depth - 1, out);
+    } else if (e.name.endsWith(".jsonl")) out.push(path.join(dir, e.name));
+  }
+}
+
+/** 파일 몇 개인지만 센다 — 내용은 안 읽는다.
+ *  오프닝이 "가져오기" 블록을 띄울지 말지 정하는 데 쓴다. 첫 실행 화면에서 1GB 를 읽을 수는 없다. */
+ipcMain.handle("schutz:cliChatCounts", async () => {
+  const counts = {};
+  for (const [agent, def] of Object.entries(CHAT_DIRS)) {
+    const files = [];
+    await collectChatFiles(def.dir, def.depth, files);
+    counts[agent] = files.length;
+  }
+  return { counts };
+});
+
+/** 목록 — 각 파일의 **앞부분**과 stat 만. headBytes 는 렌더러(측정한 쪽)가 정한다. */
+ipcMain.handle("schutz:cliChatList", async (_e, agent, headBytes) => {
+  const def = CHAT_DIRS[agent];
+  if (!def) return { rows: [] };
+  const n = Math.min(Math.max(Number(headBytes) || 32768, 4096), 512 * 1024);
+  const files = [];
+  await collectChatFiles(def.dir, def.depth, files);
+  const rows = [];
+  for (const f of files) {
+    let st;
+    try { st = await fs.stat(f); } catch { continue; }
+    if (!st.size) continue;                    // 빈 파일은 목록에 뜰 이유가 없다
+    let head = "";
+    let fh = null;
+    try {
+      fh = await fs.open(f, "r");
+      const buf = Buffer.alloc(Math.min(n, st.size));
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      head = buf.subarray(0, bytesRead).toString("utf8");
+    } catch { continue; } finally { if (fh) try { await fh.close(); } catch {} }
+    rows.push({ agent, file: f, head, bytes: st.size, updatedAt: st.mtimeMs });
+  }
+  return { rows };
+});
+
+/** 열기 — 파일 **끝** tailBytes 만. 첫 줄은 반토막이 되는데, 파서가 버리도록 만들어 뒀다. */
+ipcMain.handle("schutz:cliChatRead", async (_e, agent, file, tailBytes) => {
+  const full = chatFileOk(agent, file);
+  if (!full) return { error: "denied" };
+  const n = Math.min(Math.max(Number(tailBytes) || 1 << 20, 1 << 16), 64 * 1024 * 1024);
+  let fh = null;
+  try {
+    const st = await fs.stat(full);
+    const take = Math.min(n, st.size);
+    fh = await fs.open(full, "r");
+    const buf = Buffer.alloc(take);
+    const { bytesRead } = await fh.read(buf, 0, take, st.size - take);
+    return { text: buf.subarray(0, bytesRead).toString("utf8"), bytes: st.size, partial: take < st.size };
+  } catch (err) {
+    return { error: String((err && err.message) || err) };
+  } finally { if (fh) try { await fh.close(); } catch {} }
+});
+
 // 앱 내 [로그인] — 실제 콘솔 창을 띄워 해당 CLI의 공식 OAuth 로그인 플로우를 그대로 실행
 ipcMain.on("schutz:cliLogin", (_e, id) => {
   const def = CLI_DEFS[id];
