@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  AGDEF, MENUS, TM, TY, MD,
+  AGDEF, MENUS, TM, TY, MD, ENGINE_CREDIT,
   freshDocs, hunkDefs,
   DocLine, AgentState, PlanItem, ToolItem, ReviewFile, ChatMsg,
 } from "./ide/data";
@@ -6708,7 +6708,7 @@ ${(r.output || "").slice(0, 2000)}`;
           {t("modal.aboutDesc")}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", marginTop: 4 }}>
-          {[["GitHub", "github.com/SchutzScript/Schutz"], [t("modal.aboutLicense"), "FSL-1.1-Apache-2.0"], [t("modal.aboutEnv"), env.join(" · ")], [t("modal.aboutEngine"), "Electron · Monaco · React"]].map(([k, v]) => (
+          {[["GitHub", "github.com/SchutzScript/Schutz"], [t("modal.aboutLicense"), "FSL-1.1-Apache-2.0"], [t("modal.aboutEnv"), env.join(" · ")], [t("modal.aboutEngine"), ENGINE_CREDIT]].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, padding: "4px 0", borderTop: "1px solid var(--w05)" }}>
               <span style={{ color: "var(--fg-dim)" }}>{k}</span><span style={{ color: "var(--fg-sub)", fontFamily: MONO }}>{v}</span>
             </div>

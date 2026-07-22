@@ -201,6 +201,10 @@ export function hunkDefs(): Record<string, HunkDef> {
   };
 }
 
+/** 무엇 위에 서 있는지. 정보 창과 오프닝이 **같은 문자열**을 쓴다 —
+ *  두 군데에 적어두면 하나만 고치고 다른 하나가 옛말이 된다. */
+export const ENGINE_CREDIT = "Electron · Monaco · React";
+
 // [메뉴키, 항목[[액션키, 단축키] | null]] — 라벨은 i18n t("menu."+키)로 렌더, 디스패치는 안정 액션키로.
 export const MENUS: [string, ([string, string] | null)[]][] = [
   ["file", [["file.new", "⌘N"], ["file.newWindow", "⇧⌘N"], ["file.openProject", "⌘O"], null, ["file.save", "⌘S"], ["file.saveAll", "⇧⌘S"], null, ["file.settings", "⌘,"]]],
