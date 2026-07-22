@@ -47,7 +47,10 @@ import {
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { flushSync } from "react-dom";
 import { buildTimeline } from "./agentTimeline";
-import { parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
+import { groupByDay, parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
+
+/** 렌더 메서드 밖에서 모드를 묻는 자리 — render() 의 지역 변수 ag 를 쓸 수 없다. */
+const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
@@ -177,6 +180,8 @@ interface S {
   sheetOpen: boolean;
   /** 지금 보고 있는 대화 id. 워크스페이스를 열 때 정해진다. */
   convId: string | null;
+  /** 사이드바 아래쪽에 무엇을 보이는지 — 최근 항목이 기본. */
+  asideTab: "recents" | "artifacts";
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -405,7 +410,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents", quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -4161,6 +4166,7 @@ ${(r.output || "").slice(0, 2000)}`;
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
 
           {/* tool rail */}
+          {this.renderAgentAside()}
           <div data-tour="rail" className="vtRail" style={{ flex: "none", width: 42, background: "var(--bg-panel)", borderRight: "1px solid var(--w06)", display: "flex", flexDirection: "column", alignItems: "center", padding: "8px 0", gap: 4, ...gone }}>
             <button data-tour="rail-tree" className="hv07" title={t("sc4.railProject")} onClick={() => this.setState({ leftTab: "tree" })} style={{ ...railBtn, background: s.leftTab === "tree" ? "rgba(143,168,147,.16)" : "transparent" }}>
               <FolderIcon color={s.leftTab === "tree" ? "var(--accent-hi)" : "#6E776F"} />
@@ -4969,6 +4975,96 @@ ${(r.output || "").slice(0, 2000)}`;
    *  카드만 있으면 위로 스크롤해 시야에서 사라질 수 있는데, askRunApproval 의 promise 에는
    *  타임아웃도 취소 경로도 없다. 화면 밖으로 나간 카드 하나가 에이전트 루프를 영원히
    *  세운다. 스크롤되는 표면만으로는 이 보장을 만들 수 없어서 바를 따로 둔다. */
+  // ── 에이전트 모드 사이드바 ────────────────────────────────────────────────
+  // 대화 앱의 왼쪽 열. 새 대화 · 아티팩트 · 사용자 지정 · 최근 항목.
+  //
+  // 에디터 모드의 레일(42px 아이콘 줄)과는 다른 물건이다. 레일은 **패널을 고르는** 스위치고
+  // 이건 **대화를 고르는** 목록이라, 같은 자리에 두 개가 다 있을 이유가 없다 — 모드에 따라
+  // 하나만 뜬다.
+  private renderAgentAside() {
+    const s = this.state;
+    const idx = this.convIndex();
+    const groups = groupByDay(idx, Date.now());
+    const arts = s.proposals.filter(p => p.status !== "rejected");
+
+    const navBtn = (label: string, icon: string, onClick: () => void, badge?: number) => (
+      <button key={label} className="hv05" onClick={onClick}
+        style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", height: 30, padding: "0 10px",
+          fontFamily: SUIT, fontSize: 12.5, cursor: "pointer", borderRadius: 8, border: "none",
+          color: "var(--fg-sub)", background: "transparent", textAlign: "left" }}>
+        <span style={{ flex: "none", width: 14, textAlign: "center", fontSize: 12, color: "var(--fg-dim)" }}>{icon}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        {badge ? <span style={{ flex: "none", fontSize: 10, color: "var(--fg-dim2)" }}>{badge}</span> : null}
+      </button>
+    );
+
+    const convRow = (c: ConvMeta) => {
+      const on = c.id === s.convId;
+      return (
+        <button key={c.id} className="hv05" onClick={() => this.openConversation(c.id)} title={c.title}
+          style={{ display: "block", width: "100%", height: 28, padding: "0 10px", fontFamily: SUIT, fontSize: 12,
+            cursor: "pointer", borderRadius: 7, border: "none", textAlign: "left",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            color: on ? "var(--fg)" : "var(--fg-sub2)", background: on ? "var(--w06)" : "transparent" }}>
+          {c.title}
+        </button>
+      );
+    };
+
+    const groupHdr = (label: string) => (
+      <div style={{ padding: "12px 10px 4px", fontSize: 10, fontWeight: 700, letterSpacing: 1.1, color: "var(--fg-dim2)" }}>{label}</div>
+    );
+
+    return (
+      <div className="vtAside" style={{
+        flex: "none", width: 216, display: ag2(s) ? "flex" : "none", flexDirection: "column",
+        borderRight: "1px solid var(--w06)", background: "var(--bg-panel)", padding: "10px 8px 8px",
+      }}>
+        <button className="hv06" onClick={() => this.startNewConversation()}
+          style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 34, padding: "0 11px",
+            fontFamily: SUIT, fontSize: 12.5, fontWeight: 600, cursor: "pointer", borderRadius: 9,
+            color: "var(--fg)", background: "var(--w05)", border: "1px solid var(--w08)", textAlign: "left" }}>
+          <span style={{ flex: "none", fontSize: 14, lineHeight: 1, color: "var(--accent)" }}>＋</span>
+          {t("aside.newChat")}
+        </button>
+
+        <div style={{ height: 8 }} />
+        {navBtn(t("aside.artifacts"), "◫", () => this.setState(st => ({ asideTab: st.asideTab === "artifacts" ? "recents" : "artifacts" })), arts.length || undefined)}
+        {navBtn(t("aside.customize"), "⚙", () => this.openO({ settingsOpen: true }))}
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 4 }}>
+          {s.asideTab === "artifacts" ? (
+            arts.length === 0
+              ? <div style={{ padding: "12px 10px", fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-dim2)" }}>{t("aside.noArtifacts")}</div>
+              : arts.map(p => (
+                  <button key={p.id} className="hv05" onClick={() => this.openSheet(p.rel)} title={p.rel}
+                    style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", height: 28, padding: "0 10px",
+                      fontFamily: MONO, fontSize: 11, cursor: "pointer", borderRadius: 7, border: "none", textAlign: "left",
+                      color: "var(--fg-sub2)", background: "transparent" }}>
+                    <span style={{ flex: "none", width: 5, height: 5, borderRadius: "50%", background: p.status === "pending" ? "var(--accent)" : "var(--fg-dim3)" }} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>{p.rel}</span>
+                  </button>
+                ))
+          ) : (
+            <>
+              {idx.length === 0 && <div style={{ padding: "12px 10px", fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-dim2)" }}>{t("aside.noRecents")}</div>}
+              {groups.today.length > 0 && <>{groupHdr(t("aside.today"))}{groups.today.map(convRow)}</>}
+              {groups.yesterday.length > 0 && <>{groupHdr(t("aside.yesterday"))}{groups.yesterday.map(convRow)}</>}
+              {groups.older.length > 0 && <>{groupHdr(t("aside.older"))}{groups.older.map(convRow)}</>}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /** 사이드바의 "새 대화" — 슬래시 경로와 달리 전송 가드를 거치지 않는다.
+   *  실행 중이면 먼저 세운다. 안 그러면 버튼이 눌리지 않는 것처럼 보인다. */
+  private startNewConversation() {
+    if (this.state.running) this.stopRun();
+    this.newConversation();
+  }
+
   private renderApprovalBar() {
     const a = this.state.askRun;
     if (!a) return null;
