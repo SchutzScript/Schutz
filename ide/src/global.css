@@ -37,6 +37,10 @@ a:hover { color: var(--accent-hi); }
 @keyframes szPopOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(6px) scale(.975); } }
 @keyframes szDropOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-8px) scale(.99); } }
 @keyframes szTabIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+/* 첫 실행 세팅의 쪽 넘김 — 온 방향으로 들어온다. 방향이 없으면 다섯 쪽이 같은 자리에서
+   깜빡이기만 해서 "넘어갔다" 가 아니라 "내용이 바뀌었다" 로 읽힌다. */
+@keyframes szStepFwd  { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes szStepBack { from { opacity: 0; transform: translateX(-26px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes szRowIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes szTabOut { from { opacity: 1; max-width: 200px; } to { opacity: 0; max-width: 0; padding-left: 0; padding-right: 0; border-right-width: 0; } }
 @keyframes szCollapse { from { opacity: 1; max-height: 200px; } to { opacity: 0; max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; } }
@@ -65,6 +69,8 @@ a:hover { color: var(--accent-hi); }
 .sz-tab-in { animation: szTabIn var(--dur) var(--ease) both; }        /* 에디터 탭 열림 */
 .sz-row-in { animation: szRowIn var(--dur) var(--ease) both; }        /* 트리 행 등장(폴더 펼침) */
 .sz-tab-out { animation: szTabOut 220ms var(--ease) both; overflow: hidden; pointer-events: none; }
+.sz-step-fwd  { animation: szStepFwd 340ms var(--ease) both; }
+.sz-step-back { animation: szStepBack 340ms var(--ease) both; }
 /* 로딩 스켈레톤 */
 .sz-skel { background: linear-gradient(90deg, var(--w04) 25%, var(--w08) 50%, var(--w04) 75%); background-size: 320px 100%; animation: szShimmer 1.3s linear infinite; border-radius: 6px; }
 input::placeholder { color: var(--fg-dim2); }

@@ -66,6 +66,9 @@ interface State {
    *  키맵 알약 옆에 나란히 놓이면 같은 무게로 보인다. 하나씩 물으면 각자 설명할 자리가
    *  생긴다. */
   page: number;
+  /** 마지막으로 움직인 방향. 앞으로 갈 땐 오른쪽에서, 뒤로 갈 땐 왼쪽에서 들어온다 —
+   *  방향이 없으면 다섯 쪽이 같은 자리에서 깜빡이기만 해서 "넘어갔다" 로 안 읽힌다. */
+  pageDir: 1 | -1;
   keymap: string;
   uiFont: string; codeFont: string; fontSize: number;
   policy: string;
@@ -84,7 +87,7 @@ export class Opening extends React.Component<Props, State> {
     const ed = getEditorPrefs();
     return {
       t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
-      page: 1 as const, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
+      page: 1 as const, pageDir: 1 as const, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
       policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0,
     };
   })();
@@ -225,16 +228,28 @@ export class Opening extends React.Component<Props, State> {
         maxWidth: "min(600px, 82vw)", whiteSpace: "normal" }}>{t(key)}</p>
     );
 
+    // key 를 쪽 번호로 두면 넘길 때마다 노드가 갈리므로 애니메이션이 다시 재생된다.
+    // 내비게이션은 이 밖에 둔다 — 버튼이 같이 미끄러지면 누른 것이 도망가는 것처럼 보인다.
     return (
       <>
-        {s.page === 2 && this.stepAi(tk, pill, lede)}
-        {s.page === 3 && this.stepAutonomy(tk, lede)}
-        {s.page === 4 && this.stepKeymap(tk, pill, lede)}
-        {s.page === 5 && this.stepFonts(tk, pill, lede)}
+        <div key={s.page} className={s.pageDir > 0 ? "sz-step-fwd" : "sz-step-back"}
+          style={{ display: "grid", justifyItems: "center", gap: "clamp(14px,1.8vw,26px)", width: "100%" }}>
+          {s.page === 2 && this.stepAi(tk, pill, lede)}
+          {s.page === 3 && this.stepAutonomy(tk, lede)}
+          {s.page === 4 && this.stepKeymap(tk, pill, lede)}
+          {s.page === 5 && this.stepFonts(tk, pill, lede)}
+        </div>
         {this.stepNav(tk)}
       </>
     );
   }
+
+  /** 쪽 이동. 방향을 함께 기록해야 들어오는 쪽이 어디서 올지 정해진다. */
+  private goStep = (next: number) => {
+    const cur = this.state.page;
+    if (next === cur) return;
+    this.setState({ page: next, pageDir: next > cur ? 1 : -1 });
+  };
 
   /** 쪽 이동 + 진행 표시. 어느 쪽에서든 같은 자리에 있어야 손이 안 헤맨다. */
   private stepNav(tk: typeof THEME_TOKENS[string]) {
@@ -252,12 +267,12 @@ export class Opening extends React.Component<Props, State> {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {cur > 1 && (
-            <button onClick={() => this.setState({ page: cur - 1 })} style={{
+            <button onClick={() => this.goStep(cur - 1)} style={{
               fontFamily: "inherit", fontSize: 13, padding: "10px 18px", borderRadius: 10,
               border: `1px solid ${tk.w12}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
             }}>{t("common.prev")}</button>
           )}
-          <button onClick={() => (cur >= last ? this.pass() : this.setState({ page: cur + 1 }))} style={{
+          <button onClick={() => (cur >= last ? this.pass() : this.goStep(cur + 1))} style={{
             fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
             background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
           }}>{t(cur >= last ? "open.setup.go" : "open.setup.next")}</button>

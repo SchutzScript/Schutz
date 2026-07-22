@@ -4118,7 +4118,9 @@ ${(r.output || "").slice(0, 2000)}`;
             onStartDemo={() => { this.setState({ openingPhase: "off" }); void this.runDemo(); }}
           />
         )}
-        {/* 데모 진행 중 자막 — 화면이 알아서 움직이는데 설명이 없으면 구경만 하게 된다 */}
+        {/* 데모 진행 중 자막 — 화면이 알아서 움직이는데 설명이 없으면 구경만 하게 된다.
+            자막은 pointerEvents: none 이라야 그 아래 UI 를 가로막지 않는데, 건너뛰기는
+            눌려야 하므로 그 버튼에서만 다시 켠다. */}
         {this.state.demoCaption && (
           <div key={this.state.demoCaption} className="sz-in" style={{
             position: "fixed", left: 0, right: 0, bottom: 34, zIndex: 480,
@@ -4131,6 +4133,17 @@ ${(r.output || "").slice(0, 2000)}`;
             <div style={{ fontSize: 12.5, color: "var(--fg-sub)", maxWidth: "62ch", lineHeight: 1.6, textShadow: "0 2px 18px var(--bg-root)" }}>
               {t(`open.cap.${this.state.demoCaption}.b`)}
             </div>
+            {/* 시연 도중의 탈출구. 예전엔 오프닝 오버레이가 걷히는 순간 건너뛰기도 같이
+                사라져서, 36초짜리 시연을 끝까지 보는 것 말고는 길이 없었다.
+                자막보다 늦게 떠서 "설명 → 나갈 수 있음" 순서로 읽힌다. */}
+            <button onClick={() => this.skipDemo()} className="hv08"
+              style={{
+                pointerEvents: "auto", marginTop: 7, fontFamily: SUIT, fontSize: 12,
+                padding: "7px 16px", borderRadius: 8, cursor: "pointer",
+                border: "1px solid var(--w12)", background: "var(--w04)", color: "var(--fg-sub)",
+                backdropFilter: "blur(6px)",
+                animation: "szFadeUp var(--dur) var(--ease) both", animationDelay: "620ms",
+              }}>{t("open.demoSkip")}</button>
           </div>
         )}
         {this.renderUsage()}
@@ -6986,6 +6999,22 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   private _demoProposalId: string | null = null;
+
+  /** 시연 건너뛰기 — 끄는 게 아니라 **마무리로 보낸다.**
+   *
+   *  그냥 종료하면 "준비됐습니다" 와 투어 선택을 못 보고 끝난다. 그건 건너뛰기가 아니라
+   *  중단이다. 확대해 둔 글자 크기도 여기서 되돌린다 — demoZoom 은 _demoAbort 를 보면
+   *  즉시 반환하므로, 그대로 두면 커진 채로 남는다. */
+  private skipDemo() {
+    if (this._demoAbort) return;
+    this._demoAbort = true;
+    this._demoTyping = false;
+    try {
+      const ed = paneRegistry.panes.get(DEMO_FILE)?.editor;
+      ed?.updateOptions({ fontSize: getEditorPrefs().fontSize });
+    } catch { /* 페인이 없으면 되돌릴 것도 없다 */ }
+    this.setState({ demoCaption: null, askRun: null, openingPhase: "outro" });
+  }
   /** 데모가 코드를 타이핑하는 중인가 — animateEditIntoModel 이 배수를 여기서 읽는다. */
   private _demoTyping = false;
 
