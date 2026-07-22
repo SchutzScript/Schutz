@@ -182,6 +182,8 @@ interface S {
   convId: string | null;
   /** 사이드바 아래쪽에 무엇을 보이는지 — 최근 항목이 기본. */
   asideTab: "recents" | "artifacts";
+  /** 에이전트 모드 오른쪽 산출물 패널 폭(px). 드래그로 바뀌고 저장된다. */
+  agentSideW: number;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -410,7 +412,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents", quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
+    agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -607,6 +610,29 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   /** 좌·우 패널 드래그 리사이즈 */
+  /** 대화 ↔ 산출물 패널 폭. 오른쪽으로 끌면 패널이 좁아진다(대화가 넓어진다). */
+  private startAgentSideResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = this.state.agentSideW;
+    const onMove = (ev: MouseEvent) => {
+      // 대화 쪽에도 최소 폭을 남긴다 — 패널을 끝까지 끌어 대화를 0 으로 만들 수 있으면 안 된다.
+      const maxW = Math.max(360, window.innerWidth - 216 - 420);
+      this.setState({ agentSideW: Math.max(360, Math.min(maxW, startW - (ev.clientX - startX))) });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      try { localStorage.setItem("schutz.agentSideW", String(this.state.agentSideW)); } catch { /* ignore */ }
+      // 패널 폭이 바뀌면 Monaco 를 다시 재어준다 — automaticLayout 은 한 프레임 늦다.
+      requestAnimationFrame(() => { for (const p of paneRegistry.panes.values()) { try { p.editor.layout(); } catch { /* */ } } });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+  }
+
   private startResize(side: "left" | "right", e: React.MouseEvent) {
     e.preventDefault();
     const startX = e.clientX;
@@ -4210,10 +4236,27 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* 좌 리사이즈 핸들 */}
           <div onMouseDown={e => this.startResize("left", e)} title={t("sc4.resizeHandle")}
             style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30, ...gone }} className="szResize" />
+          {/* 대화 ↔ 산출물 패널 — 에이전트 모드에서 패널이 열려 있을 때만 */}
+          {sheet && (
+            <div onMouseDown={e => this.startAgentSideResize(e)} title={t("sc4.resizeHandle")}
+              style={{ flex: "none", width: 5, cursor: "col-resize", background: "transparent", zIndex: 30 }} className="szResize" />
+          )}
 
           {/* ── Editor grid ── */}
-          <div data-tour="editor" className="vtEditor" style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)",
-            ...(sheet ? { position: "absolute" as const, inset: 0, zIndex: 24, paddingTop: 30, background: "var(--bg-editor)" } : null), ...editorGone }}>
+          <div data-tour="editor" className="vtEditor" style={{ position: "relative", flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: s.layout === 1 ? "1fr" : "1fr 1fr", gridTemplateRows: s.layout === 4 ? "1fr 1fr" : "1fr", gap: 1, background: "var(--w07)",
+            // 시트가 아니라 **분할**이다. 전체 화면을 덮으면 코드를 보는 동안 대화가 사라져
+            // 무슨 이야기 중이었는지 잃는다. 옆에 두면 보면서 이어갈 수 있다.
+            ...(sheet ? { flex: "none" as const, width: s.agentSideW, minWidth: 0, paddingTop: 30, background: "var(--bg-editor)", borderLeft: "1px solid var(--w06)" } : null), ...editorGone }}>
+            {/* 패널 머리줄. 그리드 안에 있어야 position:absolute 가 이 패널을 기준으로 잡힌다 —
+                밖에 두면 메인 행 전체에 걸려 대화 위를 가로지른다. */}
+            {sheet && (
+              <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: 30, zIndex: 25, display: "flex", alignItems: "center", gap: 9, padding: "0 8px 0 12px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)" }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>{t("mode.sheetTitle")}</span>
+                <div style={{ flex: 1 }} />
+                <button className="hvDim" title={t("mode.sheetClose")} onClick={() => this.closeSheet()}
+                  style={{ width: 22, height: 22, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
+              </div>
+            )}
             {this.renderPanes()}
           </div>
 
@@ -4223,14 +4266,6 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* ── Right column ── */}
           {/* 예전엔 이 컬럼 전체가 data-tour="agents" 라 에이전트와 변경 검토가
               한 덩어리로 강조됐다. 둘은 다른 이야기라 앵커를 나눈다. */}
-          {sheet && (
-            <div className="sz-drop" style={{ position: "absolute", left: 0, right: 0, top: 0, height: 30, zIndex: 25, display: "flex", alignItems: "center", gap: 9, padding: "0 12px", background: "var(--bg-panel)", borderBottom: "1px solid var(--w06)" }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)" }}>{t("mode.sheetTitle")}</span>
-              <div style={{ flex: 1 }} />
-              <button className="hv05" onClick={() => this.closeSheet()}
-                style={{ height: 21, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("mode.sheetClose")}</button>
-            </div>
-          )}
           <div className="vtSide" style={{ flex: "none", width: s.rightW, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--w06)", background: "var(--bg-panel)", ...gone }}>
             <div data-tour="agents" style={{ flex: "none", display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderAgents()}</div>
             <div data-tour="review" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{this.renderReview()}</div>
