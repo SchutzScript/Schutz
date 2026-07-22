@@ -4269,10 +4269,12 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "edit.replace": this.setState({ openMenu: null }); this.editorAction("replace"); return;
                                 case "edit.findInFiles": this.setState({ openMenu: null }); this.cancelClose("search"); this.setState({ searchOpen: true, searchSel: 0 }); return;
                                 case "help.replayOpening":
-                                  this.setState({ openMenu: null });
-                                  // 해시로 넘긴다 — Root 가 Opening 을 다시 마운트한다.
-                                  // 여기서 직접 띄우면 App 안에 App 이 겹친다.
-                                  window.location.hash = "#/opening";
+                                  // 여기서 바로 켠다. 예전엔 해시(#/opening)로 넘겨 Root 가 다시
+                                  // 마운트하게 했는데, **두 번째부터 아무 일도 안 일어났다** —
+                                  // 해시가 이미 #/opening 이면 hashchange 가 안 나기 때문이다.
+                                  // 오프닝은 App 을 대신하지 않고 그 위에 덮는 오버레이라,
+                                  // 상태 하나면 충분하다(해시 왕복이 사던 게 없었다).
+                                  this.setState({ openMenu: null, openingPhase: "intro" });
                                   return;
                                 case "help.replayTutorial": this.setState({ openMenu: null }); this.startTour(); return;
                                 case "help.keys": this.openO({ openMenu: null, keysOpen: true }); return;
@@ -6966,6 +6968,8 @@ ${(r.output || "").slice(0, 2000)}`;
     this._demoPrevRoot = null;
     this._demoProposalId = null;
     this.setState({ openingPhase: "off", demoCaption: null });
+    // 남은 #/opening 을 지운다. 그대로 두면 새로고침할 때마다 오프닝이 다시 뜬다.
+    try { if (window.location.hash.startsWith("#/opening")) window.location.hash = "#/"; } catch { /* ignore */ }
     try {
       localStorage.setItem("schutz.openingSeen", "1");
       localStorage.setItem("schutz.onboarded", "1");
