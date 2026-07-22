@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld("schutz", {
 
   /** 타이틀바 오버레이 테마 연동 */
   setOverlay: (color, symbolColor) => ipcRenderer.send("schutz:setOverlay", color, symbolColor),
+  /** 창·작업표시줄 아이콘을 테마 색으로 갈아끼운다 (렌더러가 만든 PNG 데이터 URL) */
+  setAppIcon: (dataUrl) => ipcRenderer.send("schutz:setAppIcon", dataUrl),
   /** 파일/폴더 이름 변경 · 삭제 */
   renameEntry: (root, relFrom, relTo) => ipcRenderer.invoke("schutz:renameEntry", root, relFrom, relTo),
   deleteEntry: (root, rel) => ipcRenderer.invoke("schutz:deleteEntry", root, rel),

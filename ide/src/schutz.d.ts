@@ -71,6 +71,7 @@ interface SchutzApi {
   onTermData(cb: (id: string, data: string) => void): () => void;
   newWindow(): void;
   setOverlay(color: string, symbolColor: string): void;
+  setAppIcon(dataUrl: string): void;
   renameEntry(root: string, relFrom: string, relTo: string): Promise<boolean>;
   /** trashed=false 면 휴지통을 못 써서 영구 삭제된 것 — 호출측이 사용자에게 구분해 알린다 */
   deleteEntry(root: string, rel: string): Promise<{ ok: boolean; trashed: boolean; reason?: string }>;
