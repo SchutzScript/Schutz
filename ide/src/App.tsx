@@ -246,6 +246,9 @@ interface S {
   openingPhase: "off" | "intro" | "outro";
   /** 데모 진행 중 하단 자막 키. null 이면 자막 없음 */
   demoCaption: string | null;
+  /** 시연이 도는 중. 자막과 **수명이 다르다** — 자막은 박자마다 갈리지만 건너뛰기 버튼은
+   *  시연 내내 같은 노드로 살아 있어야 한다(아래 렌더 주석 참고). */
+  demoRunning: boolean;
   tourStep: number;
   /** 닫히는 중인 오버레이 키(나가는 애니메이션 후 언마운트) */
   closing: string[];
@@ -443,7 +446,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, closing: [], closingTabs: [], testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
@@ -4134,18 +4137,24 @@ ${(r.output || "").slice(0, 2000)}`;
             <div style={{ fontSize: 12.5, color: "var(--fg-sub)", maxWidth: "62ch", lineHeight: 1.6, textShadow: "0 2px 18px var(--bg-root)" }}>
               {t(`open.cap.${this.state.demoCaption}.b`)}
             </div>
-            {/* 시연 도중의 탈출구. 예전엔 오프닝 오버레이가 걷히는 순간 건너뛰기도 같이
-                사라져서, 36초짜리 시연을 끝까지 보는 것 말고는 길이 없었다.
-                자막보다 늦게 떠서 "설명 → 나갈 수 있음" 순서로 읽힌다. */}
-            <button onClick={() => this.skipDemo()} className="hv08"
-              style={{
-                pointerEvents: "auto", marginTop: 7, fontFamily: SUIT, fontSize: 12,
-                padding: "7px 16px", borderRadius: 8, cursor: "pointer",
-                border: "1px solid var(--w12)", background: "var(--w04)", color: "var(--fg-sub)",
-                backdropFilter: "blur(6px)",
-                animation: "szFadeUp var(--dur) var(--ease) both", animationDelay: "620ms",
-              }}>{t("open.demoSkip")}</button>
           </div>
+        )}
+        {/* 시연 도중의 탈출구.
+            자막 블록 **밖**에 산다. 안에 두면 자막이 바뀔 때마다(시연 중 7번) key 가 갈려
+            React 가 이 노드를 버리고 새로 만든다 — 사용자의 mousedown 과 mouseup 사이에
+            그 일이 벌어지면 두 이벤트가 서로 다른 노드에 떨어져 **click 이 아예 발생하지
+            않는다.** 그래서 "한 번 눌렀는데 아무 일도 안 일어나고, 두 번째에야 된다" 가 됐다.
+            (프로그램으로 .click() 을 부르면 늘 성공해서 오래 안 보였다.)
+            이제 시연이 도는 동안 같은 노드로 살아 있고, 처음 한 번만 떠오른다. */}
+        {this.state.demoRunning && (
+          <button onClick={() => this.skipDemo()} className="hv08"
+            style={{
+              position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 12, zIndex: 481,
+              fontFamily: SUIT, fontSize: 12, padding: "7px 16px", borderRadius: 8, cursor: "pointer",
+              border: "1px solid var(--w12)", background: "var(--w04)", color: "var(--fg-sub)",
+              backdropFilter: "blur(6px)",
+              animation: "szFadeUp var(--dur) var(--ease) both", animationDelay: "900ms",
+            }}>{t("open.demoSkip")}</button>
         )}
         {this.renderUsage()}
         {this.renderKeybindings()}
@@ -6831,7 +6840,7 @@ ${(r.output || "").slice(0, 2000)}`;
     // 자막을 워크스페이스보다 **먼저** 세운다. 샘플을 만들고 여는 데 시간이 걸리는데,
     // 그 사이 화면에는 아무 설명 없이 낯선 프로젝트가 나타난다 — 첫 실행 사용자에게는
     // 그게 데모의 시작이 아니라 오작동으로 보인다.
-    this.setState({ demoCaption: DEMO_STEPS[0].caption ?? null });
+    this.setState({ demoCaption: DEMO_STEPS[0].caption ?? null, demoRunning: true });
 
     let root: string;
     try {
@@ -6858,7 +6867,7 @@ ${(r.output || "").slice(0, 2000)}`;
       if (this._demoAbort) return;
       try { await this.demoStep(step.id, root); } catch { /* 한 단계 실패로 데모를 죽이지 않는다 */ }
     }
-    if (!this._demoAbort) this.setState({ openingPhase: "outro", demoCaption: null });
+    if (!this._demoAbort) this.setState({ openingPhase: "outro", demoCaption: null, demoRunning: false });
   }
 
   private async demoStep(id: string, root: string) {
@@ -7014,7 +7023,7 @@ ${(r.output || "").slice(0, 2000)}`;
       const ed = paneRegistry.panes.get(DEMO_FILE)?.editor;
       ed?.updateOptions({ fontSize: getEditorPrefs().fontSize });
     } catch { /* 페인이 없으면 되돌릴 것도 없다 */ }
-    this.setState({ demoCaption: null, askRun: null, openingPhase: "outro" });
+    this.setState({ demoCaption: null, demoRunning: false, askRun: null, openingPhase: "outro" });
   }
   /** 데모가 코드를 타이핑하는 중인가 — animateEditIntoModel 이 배수를 여기서 읽는다. */
   private _demoTyping = false;
@@ -7047,7 +7056,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const prev = this._demoPrevRoot;
     this._demoPrevRoot = null;
     this._demoProposalId = null;
-    this.setState({ openingPhase: "off", demoCaption: null });
+    this.setState({ openingPhase: "off", demoCaption: null, demoRunning: false });
     // 남은 #/opening 을 지운다. 그대로 두면 새로고침할 때마다 오프닝이 다시 뜬다.
     try { if (window.location.hash.startsWith("#/opening")) window.location.hash = "#/"; } catch { /* ignore */ }
     try {
