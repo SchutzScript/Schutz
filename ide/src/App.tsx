@@ -54,6 +54,7 @@ import { CLI_HEAD_BYTES, CLI_MSG_CAP, CLI_TAIL_BYTES, parseBody, parseHead, type
 const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tour";
+import { TourFigure, type FigureRegion } from "./tourFigure";
 import { Opening } from "./opening/Opening";
 import {
   DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS,
@@ -7203,6 +7204,13 @@ ${(r.output || "").slice(0, 2000)}`;
             if (Math.abs(h - this._tourCardH) > 2) { this._tourCardH = h; this.forceUpdate(); }
           }}
           style={{ position: "fixed", left: pos.left, top: pos.top, width: cardW, background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16, fontFamily: SUIT }}>
+          {/* 뼈대 그림 — 첫 실행에서 모드를 고를 때 쓰는 도안과 같은 어법이다.
+              같은 말(여기가 화면의 어디인가)을 두 번 다르게 그리지 않는다. */}
+          {step.figure && (
+            <div style={{ marginBottom: 11, border: "1px solid var(--w08)", borderRadius: 8, overflow: "hidden" }}>
+              <TourFigure region={step.figure as FigureRegion} />
+            </div>
+          )}
           <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--fg)", marginBottom: 7 }}>{t(step.titleKey)}</div>
           <div style={{ fontSize: 12, color: "var(--fg-sub)", lineHeight: 1.6 }}>{t(step.bodyKey)}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 15 }}>
