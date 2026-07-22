@@ -2,6 +2,7 @@ import React from "react";
 import { t, LANGS, getLang, setLang, onLangChange } from "../i18n";
 import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
+import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiMode";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
 /**
@@ -31,10 +32,10 @@ interface Props {
   /** 오프닝이 끝났다(또는 건너뛰었다). */
   onDone: (opts: { wantsTour: boolean }) => void;
 }
-interface State { t: number; passedGate: boolean; theme: string; }
+interface State { t: number; passedGate: boolean; theme: string; mode: UiMode; }
 
 export class Opening extends React.Component<Props, State> {
-  state: State = { t: 0, passedGate: false, theme: getThemeId() };
+  state: State = { t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode() };
   private raf = 0;
   private last = 0;
   private reduced = false;
@@ -89,6 +90,16 @@ export class Opening extends React.Component<Props, State> {
   /** 언어를 바꾸면 이 화면의 글자도 바뀌어야 한다 — 클래스 컴포넌트라 구독해서 직접 리렌더.
    *  setLang 은 전환 연출 뒤에 커밋하므로 호출 직후에 그리면 아직 옛 언어가 나온다. */
   private pickLang = (l: Lang) => { setLang(l); };
+
+  /** 모드는 클릭 시점에 저장하고 곧바로 적용한다. 오버레이가 걷히면 **고른 모양이 이미 서 있다** —
+   *  세팅이 먼저고 조립은 그 결과라는 이 화면의 원칙이 테마와 똑같이 모드에도 적용된다.
+   *  state 에도 두는 이유: 이 컴포넌트는 언어 변경 때만 다시 그려서, localStorage 만 쓰면
+   *  방금 고른 카드에 하이라이트가 안 붙는다. */
+  private pickMode = (m: UiMode) => {
+    this.setState({ mode: m });
+    setUiMode(m);
+    applyUiMode(m);
+  };
 
   private pick = (id: string) => {
     this.setState({ theme: id });
@@ -240,6 +251,34 @@ export class Opening extends React.Component<Props, State> {
                   );
                 })}
               </div>
+              {/* 세 번째 선택 — 언어·테마와 나란히. 이건 되돌릴 수 있는 취향이 아니라
+                  **앱이 무엇인지**를 고르는 것이라 카드를 크게 두고 한 줄 설명을 붙인다. */}
+              <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase", marginTop: 4 }}>
+                {t("mode.settingsLabel")}
+              </div>
+              <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", marginTop: -16 }}>
+                {UI_MODES.map(m => {
+                  const on = this.state.mode === m;
+                  return (
+                    <button key={m} onClick={() => this.pickMode(m)} aria-pressed={on}
+                      style={{
+                        width: 196, padding: "13px 13px 12px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
+                        // 버튼 안의 설명은 반드시 감싸야 한다 — 기본값이면 한 줄로 뻗어 카드를
+                        // 뚫고 나가고, 두 카드의 설명이 서로 겹쳐 읽을 수 없게 된다.
+                        textAlign: "center", whiteSpace: "normal", overflow: "hidden",
+                        background: tk.bgPanel, color: tk.fg,
+                        border: `2px solid ${on ? tk.accent : "transparent"}`,
+                        boxShadow: on ? `0 0 26px ${tk.accentSoft}` : "none",
+                        transform: on ? "scale(1.04)" : "none",
+                        transition: "transform .25s cubic-bezier(.22,1.2,.36,1), border-color .2s, box-shadow .3s",
+                      }}>
+                      <ModeDiagram mode={m} tk={tk} />
+                      <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 9 }}>{t("mode." + m)}</div>
+                      <div style={{ fontSize: 10.5, lineHeight: 1.5, color: tk.fgDim2, marginTop: 4 }}>{t("mode." + m + ".desc")}</div>
+                    </button>
+                  );
+                })}
+              </div>
               <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
               <button onClick={this.pass} style={{
                 fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
@@ -322,3 +361,29 @@ function Mark({ color, size, dash = 0, width = 7 }: {
   );
 }
 
+/** 모드 카드의 그림 — 스크린샷도 로고도 아니고 **레이아웃의 뼈대**다.
+ *  editor: 좁은 레일 + 트리 + 넓은 편집기 + 우측 패널. agent: 한 기둥과 그 아래 프롬프트. */
+function ModeDiagram({ mode, tk }: { mode: string; tk: any }) {
+  const line = (w: string, o = 1) => ({ height: 3, width: w, borderRadius: 2, background: tk.fgDim, opacity: o });
+  return (
+    <div style={{ height: 52, borderRadius: 7, background: tk.bgEditor, border: `1px solid ${tk.w12}`, padding: 6, display: "flex", gap: 4 }}>
+      {mode === "editor" ? (
+        <>
+          <div style={{ width: 6, borderRadius: 3, background: tk.w12 }} />
+          <div style={{ width: 20, borderRadius: 3, background: tk.w12 }} />
+          <div style={{ flex: 1, borderRadius: 3, background: tk.accentSoft, display: "grid", alignContent: "center", gap: 4, padding: "0 5px" }}>
+            <div style={line("80%", .7)} /><div style={line("55%", .5)} /><div style={line("68%", .4)} />
+          </div>
+          <div style={{ width: 16, borderRadius: 3, background: tk.w12 }} />
+        </>
+      ) : (
+        <div style={{ flex: 1, display: "grid", alignContent: "space-between", padding: "1px 4px" }}>
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={line("70%", .7)} /><div style={line("46%", .5)} /><div style={line("58%", .4)} />
+          </div>
+          <div style={{ height: 11, borderRadius: 3, background: tk.accentSoft, border: `1px solid ${tk.w12}` }} />
+        </div>
+      )}
+    </div>
+  );
+}

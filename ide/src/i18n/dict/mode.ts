@@ -51,4 +51,10 @@ export const dict: Record<string, Record<string, string>> = {
   "mode.sheetTitle": { ko: "코드", en: "Code", de: "Code", ja: "コード" },
   "mode.sheetClose": { ko: "닫기 (Esc)", en: "Close (Esc)", de: "Schließen (Esc)", ja: "閉じる (Esc)" },
   "mode.openInSheet": { ko: "열기", en: "Open", de: "Öffnen", ja: "開く" },
+  "mode.sessionTrimmed": {
+    ko: "저장 공간이 부족해 도구 기록은 저장하지 못했습니다. 대화는 남아 있습니다.",
+    en: "Not enough storage to save the tool history. The conversation was kept.",
+    de: "Zu wenig Speicher für die Werkzeug-Historie. Die Unterhaltung wurde behalten.",
+    ja: "保存容量が足りずツール履歴を保存できませんでした。会話は残っています。",
+  },
 };

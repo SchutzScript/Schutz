@@ -11,6 +11,10 @@ export interface TourHost {
   /** 터미널 독 열기/닫기. */
   showTerminal(open: boolean): void;
   hasWorkspace(): boolean;
+  /** 지금 어떤 모양으로 서 있는지. 에이전트 모드엔 레일도 트리도 탭도 없어서
+   *  그것들을 가리키는 단계는 앵커가 아예 없다 — when 으로 미리 걸러낸다.
+   *  (앵커 검사만 믿으면 단계가 조용히 건너뛰어져 진행 번호만 이상해진다.) */
+  mode(): "editor" | "agent";
 }
 
 export type Placement = "right" | "left" | "below" | "above" | "center";
@@ -38,19 +42,19 @@ export const TOUR_STEPS: TourStep[] = [
   { id: "welcome", anchor: null, titleKey: "tour.welcome.title", bodyKey: "tour.welcome.body" },
 
   // ── 둘러보기: 어디에 무엇이 있는가 ──────────────────────────────────
-  { id: "rail", anchor: "rail", titleKey: "tour.rail.title", bodyKey: "tour.rail.body", placement: "right" },
+  { id: "rail", when: h => h.mode() === "editor", anchor: "rail", titleKey: "tour.rail.title", bodyKey: "tour.rail.body", placement: "right" },
   {
     id: "tree", anchor: "left-panel", titleKey: "tour.tree.title", bodyKey: "tour.tree.body",
-    before: h => h.showLeftTab("tree"), placement: "right",
+    before: h => h.showLeftTab("tree"), when: h => h.mode() === "editor", placement: "right",
   },
-  { id: "editor", anchor: "editor", titleKey: "tour.editor.title", bodyKey: "tour.editor.body" },
+  { id: "editor", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.editor.title", bodyKey: "tour.editor.body" },
 
   // ── 핵심: AI 가 코드를 고치고, 사용자가 받아들인다 ──────────────────
   // Ctrl+K 와 변경 검토가 이 앱의 간판인데 예전 투어엔 언급조차 없었다.
-  { id: "inlineEdit", anchor: "editor", titleKey: "tour.inlineEdit.title", bodyKey: "tour.inlineEdit.body", placement: "left" },
+  { id: "inlineEdit", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.inlineEdit.title", bodyKey: "tour.inlineEdit.body", placement: "left" },
   { id: "chat", anchor: "chat", titleKey: "tour.chat.title", bodyKey: "tour.chat.body", placement: "right" },
-  { id: "agents", anchor: "agents", titleKey: "tour.agents.title", bodyKey: "tour.agents.body", placement: "left" },
-  { id: "review", anchor: "review", titleKey: "tour.review.title", bodyKey: "tour.review.body", placement: "left" },
+  { id: "agents", when: h => h.mode() === "editor", anchor: "agents", titleKey: "tour.agents.title", bodyKey: "tour.agents.body", placement: "left" },
+  { id: "review", when: h => h.mode() === "editor", anchor: "review", titleKey: "tour.review.title", bodyKey: "tour.review.body", placement: "left" },
   { id: "runCommand", anchor: "chat", titleKey: "tour.runCommand.title", bodyKey: "tour.runCommand.body", placement: "right" },
 
   // ── 개발 환경 ───────────────────────────────────────────────────────
@@ -61,15 +65,15 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: "git", anchor: "left-panel", titleKey: "tour.git.title", bodyKey: "tour.git.body",
     before: h => { h.showTerminal(false); h.showLeftTab("git"); },
-    when: h => h.hasWorkspace(), placement: "right",
+    when: h => h.mode() === "editor" && h.hasWorkspace(), placement: "right",
   },
   {
     id: "ext", anchor: "left-panel", titleKey: "tour.ext.title", bodyKey: "tour.ext.body",
-    before: h => h.showLeftTab("ext"), placement: "right",
+    before: h => h.showLeftTab("ext"), when: h => h.mode() === "editor", placement: "right",
   },
   {
     id: "navigate", anchor: "menubar", titleKey: "tour.navigate.title", bodyKey: "tour.navigate.body",
-    before: h => h.showLeftTab("tree"), placement: "below",
+    before: h => { if (h.mode() === "editor") h.showLeftTab("tree"); }, placement: "below",
   },
   { id: "mcp", anchor: "mcp", titleKey: "tour.mcp.title", bodyKey: "tour.mcp.body", placement: "below" },
   { id: "done", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },

@@ -2722,10 +2722,32 @@ ${(r.output || "").slice(0, 2000)}`;
   private saveSession() {
     const k = this.sessionKey();
     if (!k) return;
+    const s = this.state;
+    // 도구와 제안도 함께 저장한다. 안 하면 에이전트 모드로 오후 내내 일하고 다시 열었을 때
+    // 도구 줄·diff·명령 출력이 전부 사라지고 **없어진 파일을 가리키는 산문만** 남는다.
+    // 그 순간 에이전트 모드는 좌측 패널 위에 씌운 의상으로 드러난다 — 트랜스크립트가
+    // "한 곳에서 다 본다" 를 약속하는 이상 이건 폴리시가 아니라 기능이다.
+    //
+    // 다만 무엇을 버리는지는 분명히 한다:
+    //  - 도구 출력(out)은 저장하지 않는다. 항목당 8KB 라 몇십 개면 localStorage 5MB 를 먹는다.
+    //    화면용 캐시이고, 세션이 끝나면 사라지는 게 맞다.
+    //  - 끝난 제안의 diff 본문도 버린다. find/replace 는 파일 하나가 통째로 들어올 수 있다.
+    //    대기 중인 것만 온전히 남긴다 — 그건 아직 사용자가 결정해야 하는 것이라서.
+    const msgs = s.messages.filter(m => !m.streaming).slice(-200);
+    const tools = s.tools.slice(-200).map(({ out, ...rest }) => rest);
+    const proposals = s.proposals.slice(-100).map(p =>
+      p.status === "pending" ? p : { ...p, find: "", replace: "" });
+    const payload = JSON.stringify({ messages: msgs, history: this.history.slice(-120), tools, proposals });
     try {
-      const msgs = this.state.messages.filter(m => !m.streaming).slice(-200);
-      localStorage.setItem(k, JSON.stringify({ messages: msgs, history: this.history.slice(-120) }));
-    } catch { /* ignore */ }
+      localStorage.setItem(k, payload);
+    } catch {
+      // 용량 초과 — 조용히 삼키면 다음에 열었을 때 오후치가 통째로 사라진 것으로 보인다.
+      // 대화만이라도 남긴다(예전 저장 형태와 같다).
+      try {
+        localStorage.setItem(k, JSON.stringify({ messages: msgs, history: this.history.slice(-120) }));
+        this.toast("error", t("mode.sessionTrimmed"));
+      } catch { /* 그것마저 안 되면 포기 */ }
+    }
   }
   private restoreSession() {
     const k = this.sessionKey();
@@ -2744,6 +2766,13 @@ ${(r.output || "").slice(0, 2000)}`;
         this._uid = d.messages.reduce((mx: number, m: any) => Math.max(mx, +((String(m.id).match(/\d+$/) || [])[0] ?? 0) + 1), this._uid);
       }
       if (Array.isArray(d.history)) this.history = d.history;
+      // 도구·제안 복원. _uid 시드는 위에서 메시지 기준으로만 잡혔으므로 여기서 함께 민다 —
+      // 안 그러면 새 도구 id 가 복원된 제안 id 와 겹쳐 트랜스크립트 순서가 뒤엉킨다.
+      const seedFrom = (arr: any[]) => {
+        this._uid = arr.reduce((mx: number, x: any) => Math.max(mx, +((String(x?.id).match(/\d+$/) || [])[0] ?? 0) + 1), this._uid);
+      };
+      if (Array.isArray(d.tools)) { this.setState({ tools: d.tools }); seedFrom(d.tools); }
+      if (Array.isArray(d.proposals)) { this.setState({ proposals: d.proposals }); seedFrom(d.proposals); }
     } catch { /* ignore */ }
   }
   private clearSession() {
@@ -6175,7 +6204,9 @@ ${(r.output || "").slice(0, 2000)}`;
           input: "",
         }));
         this.setAgent("claude", { status: "edit", file: DEMO_FILE });
-        this.openFile(DEMO_FILE);
+        // 에이전트 모드에선 편집기가 숨어 있어 openFile 만으로는 아무것도 안 보인다.
+        // 시트를 띄운다 — 코드가 필요할 때만 떠오른다는 그 동작을 데모가 그대로 가르친다.
+        this.revealFile(DEMO_FILE);
         return;
       }
 
@@ -6278,6 +6309,7 @@ ${(r.output || "").slice(0, 2000)}`;
       showLeftTab: tab => this.setState({ leftTab: tab } as any),
       showTerminal: open => { if (this.state.termOpen !== open) this.toggleTerm(); },
       hasWorkspace: () => !!this.state.workspace,
+      mode: () => this.state.uiMode,
     };
   }
 
@@ -6864,6 +6896,20 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
           <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", marginTop: 10, lineHeight: 1.6 }}>
             {t("settings.keysNote")}
+          </div>
+
+          {/* ── 화면 모드 ── */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("mode.settingsLabel")}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {/* 목록을 오프닝과 같은 모듈에서 순회한다 — 테마 목록이 하드코딩돼 어긋났던 전례가 있다 */}
+            {UI_MODES.map(m => (
+              <button key={m} onClick={() => this.toggleUiMode(m)} style={segBtn(s.uiMode === m)}>{t("mode." + m)}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", marginTop: 7, lineHeight: 1.6 }}>
+            {t("mode." + s.uiMode + ".desc")}
+            {s.workspace && <> · {t("mode.settingsHint")}</>}
           </div>
 
           {/* ── 언어 / Language ── */}
