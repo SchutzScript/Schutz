@@ -41,6 +41,16 @@ export interface TourStep {
   when?: (host: TourHost) => boolean;
   /** 카드 위치 선호. 미지정이면 우측 우선 자동 배치. */
   placement?: Placement;
+  /**
+   * 카드에 붙는 뼈대 그림에서 강조할 자리(tourFigure.tsx).
+   *
+   *  스포트라이트는 실물을 비추지만 실물은 그 순간 화면에 있는 것에 따라 달라 보인다 —
+   *  트리가 비었거나 검토 패널이 비면 무엇이 강조된 건지 알 수 없다. 뼈대는 늘 같은
+   *  모양이라 "여기가 그 자리다" 가 흔들리지 않는다.
+   *
+   *  없으면 그림 없이 글만 나온다(환영·마무리처럼 자리를 가리키지 않는 단계).
+   */
+  figure?: string;
 }
 
 export const TOUR_STEPS: TourStep[] = [
@@ -49,19 +59,19 @@ export const TOUR_STEPS: TourStep[] = [
   // ── 에디터 모드 트랙 ────────────────────────────────────────────────
   // 레일은 트리·소스컨트롤·디버그·확장 넷의 입구다. 넷을 각각 한 단계씩 주면
   // 투어가 메뉴 낭독이 되므로, 입구를 한 번 짚고 본문에서 넷을 다 부른다.
-  { id: "rail", when: h => h.mode() === "editor", anchor: "rail", titleKey: "tour.rail.title", bodyKey: "tour.rail.body", placement: "right" },
+  { id: "rail", figure: "rail", when: h => h.mode() === "editor", anchor: "rail", titleKey: "tour.rail.title", bodyKey: "tour.rail.body", placement: "right" },
   {
-    id: "tree", anchor: "left-panel", titleKey: "tour.tree.title", bodyKey: "tour.tree.body",
+    id: "tree", figure: "left", anchor: "left-panel", titleKey: "tour.tree.title", bodyKey: "tour.tree.body",
     before: h => h.showLeftTab("tree"), when: h => h.mode() === "editor", placement: "right",
   },
   // 편집기와 Ctrl+K 를 한 단계로 묶는다. 같은 곳을 두 번 가리키면 진도가 안 나가는
   // 느낌이 들고, 둘은 어차피 "여기서 고친다" 는 한 이야기다.
-  { id: "editor", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.editor.title", bodyKey: "tour.editor.body" },
-  { id: "chat", when: h => h.mode() === "editor", anchor: "chat", titleKey: "tour.chat.title", bodyKey: "tour.chat.body", placement: "right" },
-  { id: "agents", when: h => h.mode() === "editor", anchor: "agents", titleKey: "tour.agents.title", bodyKey: "tour.agents.body", placement: "left" },
-  { id: "review", when: h => h.mode() === "editor", anchor: "review", titleKey: "tour.review.title", bodyKey: "tour.review.body", placement: "left" },
+  { id: "editor", figure: "editor", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.editor.title", bodyKey: "tour.editor.body" },
+  { id: "chat", figure: "chat", when: h => h.mode() === "editor", anchor: "chat", titleKey: "tour.chat.title", bodyKey: "tour.chat.body", placement: "right" },
+  { id: "agents", figure: "right", when: h => h.mode() === "editor", anchor: "agents", titleKey: "tour.agents.title", bodyKey: "tour.agents.body", placement: "left" },
+  { id: "review", figure: "right", when: h => h.mode() === "editor", anchor: "review", titleKey: "tour.review.title", bodyKey: "tour.review.body", placement: "left" },
   {
-    id: "git", anchor: "left-panel", titleKey: "tour.git.title", bodyKey: "tour.git.body",
+    id: "git", figure: "left", anchor: "left-panel", titleKey: "tour.git.title", bodyKey: "tour.git.body",
     before: h => h.showLeftTab("git"),
     when: h => h.mode() === "editor" && h.hasWorkspace(), placement: "right",
   },
@@ -69,42 +79,42 @@ export const TOUR_STEPS: TourStep[] = [
   // ── 에이전트 모드 트랙 ──────────────────────────────────────────────
   // 예전엔 이 모드에 단계가 7개뿐이었고 그나마 절반이 공용 크롬이었다. 첫 실행에서
   // 고를 수 있게 해놓고 고른 쪽을 안 가르치면, 고른 사람일수록 덜 배우게 된다.
-  { id: "agChat", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agChat.title", bodyKey: "tour.agChat.body", placement: "center" },
-  { id: "agComposer", when: h => h.mode() === "agent", anchor: "composer", titleKey: "tour.agComposer.title", bodyKey: "tour.agComposer.body", placement: "above" },
-  { id: "agAside", when: h => h.mode() === "agent", anchor: "aside", titleKey: "tour.agAside.title", bodyKey: "tour.agAside.body", placement: "right" },
+  { id: "agChat", figure: "conv", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agChat.title", bodyKey: "tour.agChat.body", placement: "center" },
+  { id: "agComposer", figure: "composer", when: h => h.mode() === "agent", anchor: "composer", titleKey: "tour.agComposer.title", bodyKey: "tour.agComposer.body", placement: "above" },
+  { id: "agAside", figure: "aside", when: h => h.mode() === "agent", anchor: "aside", titleKey: "tour.agAside.title", bodyKey: "tour.agAside.body", placement: "right" },
   {
-    id: "agRecents", anchor: "recents", titleKey: "tour.agRecents.title", bodyKey: "tour.agRecents.body",
+    id: "agRecents", figure: "aside", anchor: "recents", titleKey: "tour.agRecents.title", bodyKey: "tour.agRecents.body",
     before: h => h.showAsideTab("recents"), when: h => h.mode() === "agent", placement: "right",
   },
   {
-    id: "agArtifacts", anchor: "recents", titleKey: "tour.agArtifacts.title", bodyKey: "tour.agArtifacts.body",
+    id: "agArtifacts", figure: "aside", anchor: "recents", titleKey: "tour.agArtifacts.title", bodyKey: "tour.agArtifacts.body",
     before: h => h.showAsideTab("artifacts"), when: h => h.mode() === "agent", placement: "right",
   },
   {
     // 에이전트 모드에서 .vtEditor 는 **오른쪽 산출물 패널**이다. 같은 앵커가 모드마다
     // 다른 것을 가리킨다 — 그래서 이 단계와 위 "editor" 단계는 서로 배타적이다.
-    id: "agSide", anchor: "editor", titleKey: "tour.agSide.title", bodyKey: "tour.agSide.body",
+    id: "agSide", figure: "side", anchor: "editor", titleKey: "tour.agSide.title", bodyKey: "tour.agSide.body",
     before: h => { h.showAsideTab("recents"); h.showSide(true); },
     when: h => h.mode() === "agent", placement: "left",
   },
   {
-    id: "agImport", anchor: "aside", titleKey: "tour.agImport.title", bodyKey: "tour.agImport.body",
+    id: "agImport", figure: "aside", anchor: "aside", titleKey: "tour.agImport.title", bodyKey: "tour.agImport.body",
     before: h => h.showSide(false), when: h => h.mode() === "agent", placement: "right",
   },
-  { id: "agReview", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agReview.title", bodyKey: "tour.agReview.body", placement: "center" },
+  { id: "agReview", figure: "conv", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agReview.title", bodyKey: "tour.agReview.body", placement: "center" },
 
   // ── 공용 꼬리 ───────────────────────────────────────────────────────
   {
-    id: "terminal", anchor: "terminal", titleKey: "tour.terminal.title", bodyKey: "tour.terminal.body",
+    id: "terminal", figure: "terminal", anchor: "terminal", titleKey: "tour.terminal.title", bodyKey: "tour.terminal.body",
     before: h => h.showTerminal(true), placement: "above",
   },
   {
-    id: "navigate", anchor: "menubar", titleKey: "tour.navigate.title", bodyKey: "tour.navigate.body",
+    id: "navigate", figure: "menubar", anchor: "menubar", titleKey: "tour.navigate.title", bodyKey: "tour.navigate.body",
     before: h => { h.showTerminal(false); if (h.mode() === "editor") h.showLeftTab("tree"); }, placement: "below",
   },
-  { id: "mcp", anchor: "mcp", titleKey: "tour.mcp.title", bodyKey: "tour.mcp.body", placement: "below" },
+  { id: "mcp", figure: "menubar", anchor: "mcp", titleKey: "tour.mcp.title", bodyKey: "tour.mcp.body", placement: "below" },
   // 모드 전환은 두 트랙을 잇는 다리다 — 방금 배운 것 말고 **다른 모양도 있다**.
-  { id: "mode", anchor: "mode", titleKey: "tour.mode.title", bodyKey: "tour.mode.body", placement: "below" },
+  { id: "mode", figure: "mode", anchor: "mode", titleKey: "tour.mode.title", bodyKey: "tour.mode.body", placement: "below" },
   { id: "done", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },
 ];
 

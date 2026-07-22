@@ -35,6 +35,8 @@ const STEP_TITLES = [
 const EXIT_FROM = 12300, EXIT_TO = 13100;
 /** 무대를 진짜 UI 에 넘기기까지. 퇴장보다 조금 넉넉해야 마지막 프레임이 잘리지 않는다. */
 const EXIT_MS = 950;
+/** 마무리 화면이 물러나는 시간. 짧게 — 여기서 기다리게 하면 시작이 늦어진 것으로 느낀다. */
+const LEAVE_MS = 340;
 
 /** 고를 수 있는 테마 — 실제 THEME_TOKENS 에서 가져온다. 가짜 색이 아니라 진짜 테마다. */
 const CHOICES = ["feldgrau", "graphite", "paper"] as const;
@@ -66,6 +68,8 @@ interface State {
    *  키맵 알약 옆에 나란히 놓이면 같은 무게로 보인다. 하나씩 물으면 각자 설명할 자리가
    *  생긴다. */
   page: number;
+  /** 마무리 화면이 물러나는 중. 이때 onDone 을 아직 부르지 않아 오버레이가 살아 있다. */
+  leaving: boolean;
   /** 마지막으로 움직인 방향. 앞으로 갈 땐 오른쪽에서, 뒤로 갈 땐 왼쪽에서 들어온다 —
    *  방향이 없으면 다섯 쪽이 같은 자리에서 깜빡이기만 해서 "넘어갔다" 로 안 읽힌다. */
   pageDir: 1 | -1;
@@ -87,7 +91,7 @@ export class Opening extends React.Component<Props, State> {
     const ed = getEditorPrefs();
     return {
       t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
-      page: 1 as const, pageDir: 1 as const, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
+      page: 1 as const, pageDir: 1 as const, leaving: false, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
       policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0,
     };
   })();
@@ -123,6 +127,7 @@ export class Opening extends React.Component<Props, State> {
   }
   componentWillUnmount() {
     clearTimeout(this.handOff);
+    clearTimeout(this.leaveT);
     cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey);
     this.langOff?.();
@@ -195,8 +200,13 @@ export class Opening extends React.Component<Props, State> {
   private finish(wantsTour: boolean) {
     if (this.done) return;   // rAF 와 키 입력이 겹쳐 두 번 불릴 수 있다
     this.done = true;
-    this.props.onDone({ wantsTour });
+    // 눌렀는데 화면이 **툭** 사라지면 투어가 시작된 게 아니라 창이 닫힌 것처럼 보인다.
+    // 물러나는 걸 보여준 뒤에 넘긴다. 모션 최소화면 기다릴 이유가 없다.
+    if (this.reduced) { this.props.onDone({ wantsTour }); return; }
+    this.setState({ leaving: true });
+    this.leaveT = window.setTimeout(() => this.props.onDone({ wantsTour }), LEAVE_MS);
   }
+  private leaveT = 0;
 
 
   /** 세팅 2쪽부터 — 한 쪽에 하나씩.
@@ -239,7 +249,6 @@ export class Opening extends React.Component<Props, State> {
           {s.page === 4 && this.stepKeymap(tk, pill, lede)}
           {s.page === 5 && this.stepFonts(tk, pill, lede)}
         </div>
-        {this.stepNav(tk)}
       </>
     );
   }
@@ -255,7 +264,8 @@ export class Opening extends React.Component<Props, State> {
   private stepNav(tk: typeof THEME_TOKENS[string]) {
     const cur = this.state.page, last = STEP_TITLES.length;
     return (
-      <div style={{ display: "grid", justifyItems: "center", gap: 13, marginTop: 2 }}>
+      <div style={{ flex: "none", display: "grid", justifyItems: "center", gap: 13,
+        paddingBottom: "clamp(52px,9vh,96px)" }}>
         <div style={{ display: "flex", gap: 6 }} aria-hidden>
           {STEP_TITLES.map((_, i) => (
             <span key={i} style={{
@@ -434,10 +444,16 @@ export class Opening extends React.Component<Props, State> {
   private renderOutro() {
     const tk = THEME_TOKENS[this.state.theme] ?? THEME_TOKENS.feldgrau;
     return (
-      <div role="dialog" aria-modal="true" aria-label={t("open.aria")} className="sz-backdrop" style={{
+      <div role="dialog" aria-modal="true" aria-label={t("open.aria")}
+        className={this.state.leaving ? "sz-backdrop-out" : "sz-backdrop"} style={{
         position: "fixed", inset: 0, zIndex: 500, display: "grid", placeItems: "center",
         alignContent: "center", gap: 22, padding: "0 10vw", textAlign: "center",
         background: "color-mix(in srgb, " + tk.bgRoot + " 88%, transparent)",
+        // 물러날 때는 살짝 커지며 사라진다 — 뒤에 있던 앱으로 시선이 넘어간다.
+        opacity: this.state.leaving ? 0 : 1,
+        transform: this.state.leaving ? "scale(1.03)" : "none",
+        transition: `opacity ${LEAVE_MS}ms var(--ease), transform ${LEAVE_MS}ms var(--ease)`,
+        pointerEvents: this.state.leaving ? "none" : "auto",
       }}>
         <Mark color={tk.accent} size={44} width={9} />
         <p style={{ fontSize: "clamp(24px,4vw,52px)", fontWeight: 300, letterSpacing: "-.03em", margin: 0, color: tk.fg }}>
@@ -520,11 +536,20 @@ export class Opening extends React.Component<Props, State> {
           if (op < 0.01) return null;
           return (
             <div style={{
-              position: "absolute", inset: 0, display: "grid", placeItems: "center", alignContent: "center",
-              gap: 26, padding: "0 8vw", textAlign: "center",
+              position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+              padding: "0 8vw", textAlign: "center",
               opacity: op, transform: `translateY(${(1 - inP) * 16 - outP * 10}px)`,
               pointerEvents: op > 0.5 ? "auto" : "none",
             }}>
+              {/* 내용은 위쪽에서 가운데 정렬, 내비는 아래에 고정. 예전엔 하나의 grid 를
+                  alignContent:center 로 두어, 쪽마다 내용 높이가 다르면 전체가 다시
+                  가운데로 맞춰졌다 — "다음" 이 쪽을 넘길 때마다 위아래로 튀었다.
+                  둘을 가르면 내비의 y 는 창 높이에만 달리므로 어느 쪽에서든 같다. */}
+              <div style={{
+                flex: 1, minHeight: 0, overflowY: "auto",
+                display: "grid", placeItems: "center", alignContent: "center",
+                gap: 26, paddingTop: "clamp(16px,4vh,52px)", paddingBottom: 18,
+              }}>
               {/* 제목만 덩그러니 있으면 허전하다. 방금 획이 그려진 그 마크를 작게 얹어
                   앞 장면과 이 화면을 잇는다 — 새 그림을 들이는 것보다 낫다. */}
               <div style={{ display: "grid", justifyItems: "center", gap: 14 }}>
@@ -650,8 +675,9 @@ export class Opening extends React.Component<Props, State> {
                 </div>
               )}
               <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
-              {this.stepNav(tk)}
               </>}
+              </div>
+              {this.stepNav(tk)}
             </div>
           );
         })()}
