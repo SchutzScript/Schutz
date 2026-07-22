@@ -4,6 +4,9 @@ import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiMode";
 import { ENGINE_CREDIT } from "../ide/data";
+import { KEYMAPS, UI_FONTS, CODE_FONTS, getEditorPrefs, setEditorPrefs, applyUiFont, getAutonomy, setAutonomy } from "../settings";
+import { PROVIDERS_MAP } from "../ai/registry";
+import { getStoredKey, setStoredKey } from "../ai/provider";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
 /**
@@ -46,13 +49,32 @@ interface Props {
 }
 interface State {
   t: number; passedGate: boolean; theme: string; mode: UiMode;
+  /** 세팅은 두 쪽이다. 1쪽은 **무엇을 보는가**(언어·테마·모양), 2쪽은 **무엇으로 일하는가**
+   *  (AI·자율성·키맵·글꼴). 한 쪽에 다 넣으면 스크롤이 생기고, 스크롤이 생기면 아래쪽은
+   *  아무도 안 본다. */
+  page: 1 | 2;
+  keymap: string;
+  uiFont: string; codeFont: string; fontSize: number;
+  policy: string;
+  /** 어느 제공자의 키 입력이 펼쳐져 있나. null 이면 접혀 있다. */
+  keyOpen: string | null;
+  keyDraft: string;
+  /** 연결 상태를 다시 그리기 위한 값 — isConfigured() 는 localStorage 를 보므로 신호가 없다. */
+  connTick: number;
   /** 이 컴퓨터에 남아 있는 Claude Code · Codex 대화 수. null = 아직 안 세봤다. */
   pastChats: number | null;
   wantsImport: boolean;
 }
 
 export class Opening extends React.Component<Props, State> {
-  state: State = { t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false };
+  state: State = (() => {
+    const ed = getEditorPrefs();
+    return {
+      t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
+      page: 1 as const, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
+      policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0,
+    };
+  })();
   private raf = 0;
   private last = 0;
   private reduced = false;
@@ -160,6 +182,144 @@ export class Opening extends React.Component<Props, State> {
     this.props.onDone({ wantsTour });
   }
 
+
+  /** 세팅 2쪽 — **무엇으로 일하는가.**
+   *
+   *  예전 설정 마법사(Onboarding.tsx)가 물어보던 것들이다. 오프닝이 마법사를 대체하면서
+   *  AI 연결·자율성·키맵·글꼴이 첫 실행 흐름에서 통째로 빠졌다 — 설정 모달에는 남아
+   *  있었지만 아무도 안내하지 않으니 없는 것과 같았다.
+   *
+   *  마법사의 화면을 그대로 옮기지 않은 이유: 그쪽은 색이 다크에 박혀 있어(#151917)
+   *  Paper 테마에서 읽을 수 없다. 여기서는 tk 로 칠한다. 저장 함수는 그대로 쓴다. */
+  private renderSetup2(tk: typeof THEME_TOKENS[string]) {
+    const s = this.state;
+    const label = (txt: string) => (
+      <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>{txt}</div>
+    );
+    const pill = (on: boolean): React.CSSProperties => ({
+      fontFamily: "inherit", fontSize: 12, padding: "7px 14px", borderRadius: 8, cursor: "pointer",
+      border: `1px solid ${on ? tk.accent : tk.w12}`,
+      background: on ? tk.accent : "transparent",
+      color: on ? tk.onAccent : tk.fgSub,
+      fontWeight: on ? 650 : 400, whiteSpace: "nowrap",
+    });
+
+    // 연결 상태는 저장소를 보고 판단한다 — 여기서 실제 호출을 하지는 않는다(첫 실행에
+    // API 를 때리면 느려지고, 틀리면 시작조차 막힌다). 키를 넣었거나 구독 로그인이
+    // 끝났으면 연결된 것으로 본다.
+    void s.connTick;
+    const PROV = [
+      { id: "claude", name: "Claude", cli: "claude" },
+      { id: "gpt", name: "GPT", cli: "codex" },
+    ];
+
+    return (
+      <>
+        {label(t("open.setup.ai"))}
+        <div style={{ display: "grid", gap: 8, width: "min(560px, 80vw)", marginTop: -14 }}>
+          {PROV.map(p => {
+            const on = PROVIDERS_MAP[p.id]?.isConfigured?.() ?? false;
+            const open = s.keyOpen === p.id;
+            return (
+              <div key={p.id} style={{
+                background: tk.bgPanel, border: `1px solid ${on ? tk.accent : tk.w08}`,
+                borderRadius: 11, padding: "11px 13px", textAlign: "left", transition: "border-color .2s",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flex: "none",
+                    background: on ? tk.accent : tk.w14 }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: tk.fg }}>{p.name}</span>
+                  <span style={{ fontSize: 11, color: on ? tk.accent : tk.fgDim2 }}>
+                    {on ? t("open.conn.on") : t("open.conn.off")}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => { try { (window as any).schutz?.cliLogin?.(p.cli); } catch { /* */ } }}
+                    style={{ ...pill(false), fontSize: 11, padding: "6px 11px" }}>{t("open.conn.sub")}</button>
+                  <button onClick={() => this.setState({ keyOpen: open ? null : p.id, keyDraft: getStoredKey(p.id as any) })}
+                    style={{ ...pill(open), fontSize: 11, padding: "6px 11px" }}>{t("open.conn.key")}</button>
+                </div>
+                {open && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                    <input type="password" value={s.keyDraft} autoFocus
+                      onChange={e => this.setState({ keyDraft: e.target.value })}
+                      onKeyDown={e => { if (e.key === "Enter") this.saveKey(p.id); }}
+                      placeholder={t("open.conn.keyPlaceholder")}
+                      style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 12, padding: "7px 10px",
+                        borderRadius: 8, border: `1px solid ${tk.w12}`, background: tk.bgRoot, color: tk.fg, outline: "none" }} />
+                    <button onClick={() => this.saveKey(p.id)} style={{ ...pill(true), fontSize: 11.5 }}>{t("open.conn.save")}</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <p style={{ fontSize: 11, color: tk.fgDim2, margin: "-14px 0 0", maxWidth: "min(560px,80vw)", whiteSpace: "normal" }}>
+          {t("open.conn.hint")}
+        </p>
+
+        {label(t("open.setup.autonomy"))}
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap", marginTop: -14 }}>
+          {(["manual", "balanced", "auto"] as const).map(k => (
+            <button key={k} aria-pressed={s.policy === k}
+              onClick={() => { this.setState({ policy: k }); setAutonomy({ policy: k }); }}
+              style={{ ...pill(s.policy === k), display: "grid", gap: 3, textAlign: "left", padding: "9px 14px", width: 168, whiteSpace: "normal" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 650 }}>{t("open.pol." + k)}</span>
+              <span style={{ fontSize: 10.5, lineHeight: 1.45, opacity: .75 }}>{t("open.pol." + k + ".desc")}</span>
+            </button>
+          ))}
+        </div>
+
+        {label(t("settings.keymap"))}
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", marginTop: -14 }}>
+          {KEYMAPS.map(([k, name]) => (
+            <button key={k} aria-pressed={s.keymap === k}
+              onClick={() => { this.setState({ keymap: k }); setEditorPrefs({ keymap: k }); }}
+              style={pill(s.keymap === k)}>{name}</button>
+          ))}
+        </div>
+
+        {label(t("open.setup.fonts"))}
+        <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", marginTop: -14, alignItems: "center" }}>
+          {([["uiFont", UI_FONTS], ["codeFont", CODE_FONTS]] as const).map(([field, table]) => (
+            <div key={field} style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: tk.fgDim2 }}>{t("settings." + field)}</span>
+              {Object.entries(table).map(([k, v]) => (
+                <button key={k} aria-pressed={s[field] === k}
+                  onClick={() => { this.setState({ [field]: k } as any); setEditorPrefs({ [field]: k }); applyUiFont(); }}
+                  style={{ ...pill(s[field] === k), fontFamily: v.stack, fontSize: 11.5, padding: "6px 11px" }}>{v.name}</button>
+              ))}
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: tk.fgDim2 }}>{t("settings.codeSize")}</span>
+            {[12, 13, 14, 15].map(n => (
+              <button key={n} aria-pressed={s.fontSize === n}
+                onClick={() => { this.setState({ fontSize: n }); setEditorPrefs({ fontSize: n }); }}
+                style={{ ...pill(s.fontSize === n), padding: "6px 10px" }}>{n}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 4 }}>
+          <button onClick={() => this.setState({ page: 1 })} style={{
+            fontFamily: "inherit", fontSize: 13, padding: "10px 18px", borderRadius: 10,
+            border: `1px solid ${tk.w12}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
+          }}>{t("common.prev")}</button>
+          <button onClick={this.pass} style={{
+            fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
+            background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
+          }}>{t("open.setup.go")}</button>
+        </div>
+      </>
+    );
+  }
+
+  /** API 키 저장 — 넣자마자 연결 표시가 바뀌어야 하므로 다시 그린다. */
+  private saveKey(id: string) {
+    setStoredKey(id as any, this.state.keyDraft.trim());
+    this.setState(st => ({ keyOpen: null, keyDraft: "", connTick: st.connTick + 1 }));
+  }
+
   /** 데모가 끝난 뒤 마무리. 진짜 UI 를 뒤에 두고 그 위에 뜬다. */
   private renderOutro() {
     const tk = THEME_TOKENS[this.state.theme] ?? THEME_TOKENS.feldgrau;
@@ -260,11 +420,13 @@ export class Opening extends React.Component<Props, State> {
               <div style={{ display: "grid", justifyItems: "center", gap: 14 }}>
                 <Mark color={tk.accent} size={44} width={9} />
                 <div style={{ width: 26, height: 1, background: tk.w14 }} />
+                {/* 두 쪽의 제목이 같으면 넘겼는데 같은 화면이 다시 뜬 것처럼 보인다. */}
                 <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
-                  {t("open.setup.title")}
+                  {t(this.state.page === 2 ? "open.setup.title2" : "open.setup.title")}
                 </h2>
               </div>
 
+              {this.state.page === 2 ? this.renderSetup2(tk) : <>
               {/* 언어가 먼저다 — 읽지 못하는 화면에서 테마를 고르게 할 수는 없다. */}
               <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
                 <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>
@@ -378,10 +540,11 @@ export class Opening extends React.Component<Props, State> {
                 </div>
               )}
               <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
-              <button onClick={this.pass} style={{
+              <button onClick={() => this.setState({ page: 2 })} style={{
                 fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
                 background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
-              }}>{t("open.setup.go")}</button>
+              }}>{t("open.setup.next")}</button>
+              </>}
             </div>
           );
         })()}

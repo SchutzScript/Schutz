@@ -182,4 +182,54 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Es zeigt Ihnen den genauen Befehl und wartet. Nichts läuft, bevor Sie zustimmen.",
     ja: "何を実行するかを先に見せて待ちます。承認するまで何も実行されません。",
   },
+
+  // ── 세팅 2쪽 ────────────────────────────────────────────────────────
+  // 1쪽은 무엇을 보는가(언어·테마·모양), 2쪽은 무엇으로 일하는가(AI·자율성·키맵·글꼴).
+  "open.setup.title2": {
+    ko: "무엇으로 일할까요",
+    en: "What you'll work with",
+    de: "Womit Sie arbeiten",
+    ja: "何で働きますか",
+  },
+  "open.setup.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
+  "open.setup.ai": { ko: "AI 연결", en: "Connect AI", de: "KI verbinden", ja: "AI 接続" },
+  "open.setup.autonomy": { ko: "어디까지 맡길까요", en: "How much to hand over", de: "Wie viel übergeben", ja: "どこまで任せますか" },
+  "open.setup.fonts": { ko: "글꼴", en: "Type", de: "Schrift", ja: "書体" },
+
+  "open.conn.on": { ko: "연결됨", en: "Connected", de: "Verbunden", ja: "接続済み" },
+  "open.conn.off": { ko: "아직", en: "Not yet", de: "Noch nicht", ja: "まだ" },
+  "open.conn.sub": { ko: "구독으로", en: "Subscription", de: "Abo", ja: "サブスクで" },
+  "open.conn.key": { ko: "API 키", en: "API key", de: "API-Schlüssel", ja: "APIキー" },
+  "open.conn.save": { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },
+  "open.conn.keyPlaceholder": { ko: "키를 붙여넣으세요", en: "Paste your key", de: "Schlüssel einfügen", ja: "キーを貼り付け" },
+  // 지금 안 해도 된다고 분명히 말한다 — 첫 화면에서 로그인을 강요당하면 그대로 닫는다.
+  "open.conn.hint": {
+    ko: "지금 넘어가도 됩니다. 나중에 설정에서 언제든 연결할 수 있어요. 구독으로 로그인하면 창이 하나 열립니다.",
+    en: "You can skip this. Connect anytime from settings later. Signing in with a subscription opens a separate window.",
+    de: "Sie können das überspringen. Später jederzeit in den Einstellungen verbinden. Die Abo-Anmeldung öffnet ein eigenes Fenster.",
+    ja: "今は飛ばしても大丈夫です。あとで設定からいつでも接続できます。サブスクでのログインは別ウィンドウが開きます。",
+  },
+
+  // 자율성 — 무엇을 물어보고 무엇을 알아서 할지. 안전 설정이라 기본값을 모르면 곤란하다.
+  "open.pol.manual": { ko: "다 물어보기", en: "Ask me everything", de: "Alles fragen", ja: "すべて確認" },
+  "open.pol.manual.desc": {
+    ko: "파일도 명령도 확인 후에",
+    en: "Files and commands, after you approve",
+    de: "Dateien und Befehle erst nach Zustimmung",
+    ja: "ファイルもコマンドも確認後に",
+  },
+  "open.pol.balanced": { ko: "중요한 것만", en: "Only what matters", de: "Nur Wichtiges", ja: "重要なものだけ" },
+  "open.pol.balanced.desc": {
+    ko: "작은 편집은 알아서, 명령은 확인",
+    en: "Small edits on its own, commands still asked",
+    de: "Kleine Änderungen selbst, Befehle weiterhin gefragt",
+    ja: "小さな編集は自動、コマンドは確認",
+  },
+  "open.pol.auto": { ko: "알아서 하기", en: "Just do it", de: "Einfach machen", ja: "任せる" },
+  "open.pol.auto.desc": {
+    ko: "멈추지 않고 진행합니다",
+    en: "Keeps going without stopping",
+    de: "Läuft ohne Unterbrechung durch",
+    ja: "止まらずに進めます",
+  },
 };
