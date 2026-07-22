@@ -196,28 +196,27 @@ export class Opening extends React.Component<Props, State> {
           transition: "opacity .6s ease, background .6s ease",
         }} />
 
-        {/* 1 마크 · 이름 · 크레딧 — 획이 그려지고, 이름이 붙고, 무엇 위에 섰는지가 따라온다.
-            예전엔 마크만 지나가서 **제품 이름이 오프닝 어디에도 없었다.** */}
-        <div style={{
-          position: "absolute", inset: 0, display: "grid", placeItems: "center", alignContent: "center",
-          gap: "clamp(14px,1.6vw,26px)", textAlign: "center",
+        {/* 1 마크 — 가운데에 획만. 글자를 밑에 붙이면 마크가 로고 조각이 되고, 이 장면이
+            "이름표" 로 읽힌다. 무엇 위에 섰는지는 화면 맨 아래에 따로 둔다(바로 아래 블록). */}
+        <div aria-hidden style={{
+          position: "absolute", inset: 0, display: "grid", placeItems: "center",
           opacity: Math.max(0, S(0, 400) - S(4800, 5400)),
           transform: `scale(${1 + E(4800, 5400) * 0.12})`,
         }}>
-          <div aria-hidden><Mark color={tk.accent} size="13vw" dash={620 * (1 - E(400, 2400))} /></div>
-          {/* 이름은 획이 닫힌 뒤에 붙는다 — 같이 뜨면 무엇이 그려지는 중인지 흐려진다 */}
-          <h1 style={{
-            margin: 0, fontSize: "clamp(30px,5vw,62px)", fontWeight: 300, letterSpacing: "-.04em",
-            lineHeight: 1, color: tk.fg,
-            opacity: E(2200, 3000), transform: `translateY(${(1 - E(2200, 3000)) * 10}px)`,
-          }}>Schutz</h1>
-          <div style={{
-            fontSize: "clamp(10px,1.05vw,13px)", letterSpacing: ".14em", textTransform: "uppercase",
-            color: tk.fgDim, fontWeight: 600,
-            opacity: E(3000, 3800) * 0.9, transform: `translateY(${(1 - E(3000, 3800)) * 6}px)`,
-          }}>
-            {t("open.poweredBy", { engine: ENGINE_CREDIT })}
-          </div>
+          <Mark color={tk.accent} size="13vw" dash={620 * (1 - E(400, 2400))} />
+        </div>
+
+        {/* 크레딧 — 화면 맨 아래. 가운데 마크와 겹치지 않는 자리라 서로를 방해하지 않고,
+            "이 화면의 주인공은 마크" 라는 위계가 유지된다. 획이 닫힌 뒤에 든다. */}
+        <div style={{
+          position: "absolute", left: 0, right: 0, bottom: "clamp(24px,4vh,54px)",
+          textAlign: "center", padding: "0 6vw",
+          fontSize: "clamp(9.5px,1vw,12px)", letterSpacing: ".14em", textTransform: "uppercase",
+          color: tk.fgDim, fontWeight: 600,
+          opacity: Math.max(0, E(2400, 3400) * 0.85 - S(4800, 5400)),
+          transform: `translateY(${(1 - E(2400, 3400)) * 8}px)`,
+        }}>
+          {t("open.poweredBy", { engine: ENGINE_CREDIT })}
         </div>
 
         {/* 2 선언 */}
