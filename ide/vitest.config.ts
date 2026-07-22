@@ -20,6 +20,7 @@ export default defineConfig({
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",
+      "src/conversations.test.ts",
     ],
   },
 });
