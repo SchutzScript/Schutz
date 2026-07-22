@@ -27,18 +27,38 @@ export interface DemoStep {
 }
 
 export const DEMO_STEPS: readonly DemoStep[] = [
-  { id: "reveal",  waitMs: 400,  caption: "assemble" },
-  { id: "ask",     waitMs: 2600, caption: "ask" },
-  { id: "work",    waitMs: 1400 },
+  // reveal 이 길다. 오버레이가 걷힌 **직후**가 이 데모에서 제일 중요한 순간이라서다 —
+  // 방금 고른 테마로 조립된 화면을 보는 시간이다. 예전엔 400ms 였는데, 그러면 자막
+  // ("화면은 네 부분입니다")이 읽히기 전에 다음 자막이 덮고 곧바로 타이핑이 시작된다.
+  // 사용자에게는 설정을 끝내자마자 무언가가 제멋대로 움직이는 것으로 보인다.
+  { id: "reveal",  waitMs: 3000, caption: "assemble" },
+  { id: "ask",     waitMs: 2400, caption: "ask" },
+  { id: "work",    waitMs: 2400 },
   // 제안이 먼저 올라오고, 그 다음에 수락해야 코드가 바뀐다 — 실제 제품 순서 그대로다.
   // 순서를 뒤집으면 "파일에 바로 안 들어간다" 는 말이 화면과 어긋난다.
-  { id: "propose", waitMs: 1200, caption: "approve" },
-  { id: "accept",  waitMs: 2400, caption: "rewrite" },
-  { id: "done",    waitMs: 2600 },
+  { id: "propose", waitMs: 2400, caption: "approve" },
+  { id: "accept",  waitMs: 3000, caption: "rewrite" },
+  { id: "done",    waitMs: 3200 },
 ];
 
 /** 요청 한 글자당 타이핑 간격(ms). 사람이 읽으면서 따라올 수 있는 속도. */
-export const TYPE_INTERVAL_MS = 55;
+export const TYPE_INTERVAL_MS = 72;
+
+/** 데모에서 코드가 타이핑되는 속도를 이만큼 늦춘다.
+ *
+ *  기본 편집 애니메이션은 3자/16ms(≈187자/초)라, 데모가 바꾸는 42자가 **224ms** 만에
+ *  끝난다. 실제 작업 중에는 그게 맞다 — 편집이 수십 개씩 이어지니 빨라야 한다. 하지만
+ *  첫 실행 데모에서 이건 "코드가 바뀌었다" 가 아니라 "화면이 한 번 깜빡였다" 로 보인다.
+ *  editAnimator 의 상수를 낮추면 실제 편집까지 느려지므로, 데모만 배율을 준다. */
+export const DEMO_TYPE_SLOWDOWN = 7;
+
+/** 코드가 바뀔 때 에디터 글자 크기를 이만큼 키운다(px). 원래 크기는 데모가 끝나면 되돌린다.
+ *
+ *  CSS transform 으로 확대하면 글자가 흐려진다. 폰트 크기를 올리면 Monaco 가 다시 그려서
+ *  선명한 채로 커진다 — "좀 더 자세하게" 가 말 그대로 성립한다. */
+export const DEMO_ZOOM_FONT = 18;
+/** 확대·복귀에 쓰는 시간(ms). 한 번에 튀면 확대가 아니라 화면 전환으로 읽힌다. */
+export const DEMO_ZOOM_MS = 900;
 
 /** 데모가 쓰는 샘플 파일과 편집 내용. main 의 demoFiles.cjs 와 짝이 맞아야 한다. */
 export const DEMO_FILE = "src/components/Footer.jsx";

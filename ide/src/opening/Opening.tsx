@@ -316,7 +316,7 @@ export class Opening extends React.Component<Props, State> {
                   background: tk.bgPanel, border: `1px solid ${this.state.wantsImport ? tk.accent : tk.w08}`,
                   transition: "border-color .2s",
                 }}>
-                  <span aria-hidden style={{ flex: "none", fontSize: 17, color: tk.accent, lineHeight: 1 }}>⤓</span>
+                  <ImportGlyph color={tk.accent} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12.5, color: tk.fg }}>{t("imp.found", { n: this.state.pastChats })}</div>
                     <div style={{ fontSize: 10.5, lineHeight: 1.5, color: tk.fgDim2, marginTop: 2, whiteSpace: "normal" }}>
@@ -365,6 +365,30 @@ export class Opening extends React.Component<Props, State> {
       </div>
     );
   }
+}
+
+/** 지난 대화를 데려온다 — 대화 두 줄이 상자 안으로 들어간다.
+ *
+ *  예전엔 텍스트 글리프(⤓)를 썼다. 폰트가 그리는 것이라 획 굵기가 옆 글자에 끌려다니고,
+ *  이 화면의 다른 그림(마크·모드 도안)과 굵기가 안 맞았다. 직접 그리면 그 둘이 맞는다.
+ *
+ *  "내려받기" 가 아니라 **대화가 들어온다** 는 그림이다 — 상자는 Schutz 고, 위에서
+ *  내려오는 두 줄이 지난 대화다. 화살표 하나만 두면 파일 다운로드로 읽힌다. */
+function ImportGlyph({ color }: { color: string }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden
+      style={{ flex: "none", display: "block" }}>
+      {/* 들어오는 대화 두 줄 — 짧은 쪽이 앞이라 원근이 생긴다 */}
+      <path d="M6.5 2.5h7" stroke={color} strokeWidth="1.5" strokeLinecap="round" opacity=".45" />
+      <path d="M5 5.5h10" stroke={color} strokeWidth="1.5" strokeLinecap="round" opacity=".75" />
+      {/* 화살촉 — 두 줄이 향하는 곳 */}
+      <path d="M10 8v3.5M7.6 9.6 10 12l2.4-2.4" stroke={color} strokeWidth="1.5"
+        strokeLinecap="round" strokeLinejoin="round" />
+      {/* 받는 상자 — 위가 열려 있다 */}
+      <path d="M3.5 13v3a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-3"
+        stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 /** 선언 — 단어가 흐림에서 하나씩 풀린다 */

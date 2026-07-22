@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS,
+  DEMO_TYPE_SLOWDOWN, DEMO_ZOOM_FONT, DEMO_ZOOM_MS,
   stepAt, totalWaitMs,
 } from "./demoScript";
 
@@ -61,5 +62,39 @@ describe("stepAt / totalWaitMs", () => {
   it("타이핑 간격이 읽을 수 있는 속도다", () => {
     expect(TYPE_INTERVAL_MS).toBeGreaterThanOrEqual(30);
     expect(TYPE_INTERVAL_MS).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("보여주는 속도", () => {
+  // 오버레이가 걷힌 직후가 이 데모에서 제일 중요한 순간이다 — 방금 고른 테마로 조립된
+  // 화면을 보는 시간. 예전엔 400ms 라 자막이 읽히기 전에 타이핑이 시작됐고, 설정을
+  // 끝내자마자 화면이 제멋대로 움직이는 것처럼 보였다.
+  it("첫 박자가 자막을 읽을 만큼 길다", () => {
+    const reveal = DEMO_STEPS.find(s => s.id === "reveal")!;
+    expect(reveal.caption).toBe("assemble");
+    expect(reveal.waitMs).toBeGreaterThanOrEqual(2500);
+  });
+
+  it("어느 박자도 성급하지 않다", () => {
+    for (const s of DEMO_STEPS) expect(s.waitMs).toBeGreaterThanOrEqual(2000);
+  });
+
+  // 평소 편집 속도는 3자/16ms 라 데모가 바꾸는 42자가 224ms 만에 끝난다 — 그건
+  // "코드가 바뀌었다" 가 아니라 "깜빡였다" 로 보인다.
+  it("코드 타이핑을 눈에 띄게 늦춘다", () => {
+    expect(DEMO_TYPE_SLOWDOWN).toBeGreaterThanOrEqual(4);
+    const perTick = 16 * DEMO_TYPE_SLOWDOWN;
+    const ticks = Math.ceil(DEMO_REPLACE.length / 3);
+    expect(ticks * perTick).toBeGreaterThan(1500);   // 최소 1.5초는 보인다
+  });
+
+  it("확대가 원래 크기보다 크고 순간이동이 아니다", () => {
+    expect(DEMO_ZOOM_FONT).toBeGreaterThan(13);      // 기본 폰트 크기
+    expect(DEMO_ZOOM_FONT).toBeLessThanOrEqual(28);  // EditorPrefs 상한
+    expect(DEMO_ZOOM_MS).toBeGreaterThanOrEqual(500);
+  });
+
+  it("전체 길이가 여전히 사람이 앉아서 볼 만하다", () => {
+    expect(totalWaitMs()).toBeLessThan(30_000);
   });
 });

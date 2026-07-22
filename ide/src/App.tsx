@@ -55,7 +55,10 @@ const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
-import { DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS } from "./opening/demoScript";
+import {
+  DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS,
+  DEMO_TYPE_SLOWDOWN, DEMO_ZOOM_FONT, DEMO_ZOOM_MS,
+} from "./opening/demoScript";
 import type { TourHost } from "./tour";
 
 /** 에이전트가 제안한 실파일 편집 (수락 전까지 디스크 미반영) */
@@ -1291,7 +1294,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       const canAnimate = start >= 0 && end >= start && m.getValueLength() >= end
         && m.getValue().slice(start, end) === find;
       if (!canAnimate) { if (m.getValue() !== finalText) m.setValue(finalText); return; }
-      await typeEdit(m, start, end, replacement, { reveal: true });
+      await typeEdit(m, start, end, replacement, { reveal: true, slow: this._demoTyping ? DEMO_TYPE_SLOWDOWN : 1 });
       // 애니메이션 중 다른 편집이 끼어들었을 수 있다 — 최종본과 다르면 맞춘다
       if (m.getValue() !== finalText) m.setValue(finalText);
     } catch {
@@ -6809,14 +6812,28 @@ ${(r.output || "").slice(0, 2000)}`;
     this._demoAbort = false;
     this._demoPrevRoot = this.state.workspace?.root ?? null;
 
+    // 자막을 워크스페이스보다 **먼저** 세운다. 샘플을 만들고 여는 데 시간이 걸리는데,
+    // 그 사이 화면에는 아무 설명 없이 낯선 프로젝트가 나타난다 — 첫 실행 사용자에게는
+    // 그게 데모의 시작이 아니라 오작동으로 보인다.
+    this.setState({ demoCaption: DEMO_STEPS[0].caption ?? null });
+
     let root: string;
     try {
       root = await window.schutz.demoProject();
+      // 빈 무대에서 시작한다. openWorkspacePath 는 그 프로젝트의 지난 대화를 복원하는데,
+      // 데모 프로젝트의 지난 대화란 **지난번 데모**다. 그대로 두면 "오프닝 다시 보기" 를
+      // 할 때마다 같은 제안이 검토 패널에 하나씩 쌓이고 답이 두 번씩 나온다.
+      //
+      // 여는 **앞에서** 지운다. 열고 나서 state 를 비우는 걸 먼저 시도했는데, 복원은
+      // 중첩 setState 콜백 안에서 일어나 내 리셋보다 늦게 착지한다 — 경쟁에서 진다.
+      // 지울 게 없으면 복원할 것도 없다.
+      this.clearProjectConversations(root);
       await this.openWorkspacePath(root);
     } catch {
       this.finishDemo(false);   // 샘플을 못 만들면 데모를 접는다 — 빈 화면을 보여줄 수는 없다
       return;
     }
+    this._proposalsById.clear();
 
     for (const step of DEMO_STEPS) {
       if (this._demoAbort) return;
@@ -6878,8 +6895,21 @@ ${(r.output || "").slice(0, 2000)}`;
       }
 
       case "accept": {
-        // 실제 수락 경로 — animateEditIntoModel 이 진짜 Monaco 모델에 타이핑한다
-        if (this._demoProposalId) await this.acceptProposal(this._demoProposalId);
+        // 코드가 바뀌는 순간이 이 데모의 핵심이다. 평소 속도로는 42자가 224ms 만에 끝나
+        // "깜빡였다" 로 보이므로, 여기서만 늦추고 글자를 키워 과정이 보이게 한다.
+        const base = getEditorPrefs().fontSize;
+        this._demoTyping = true;
+        await this.demoZoom(DEMO_FILE, base, DEMO_ZOOM_FONT, DEMO_ZOOM_MS);
+        try {
+          // 실제 수락 경로 — animateEditIntoModel 이 진짜 Monaco 모델에 타이핑한다
+          if (this._demoProposalId) await this.acceptProposal(this._demoProposalId);
+        } finally {
+          this._demoTyping = false;
+        }
+        // 바뀐 코드를 잠깐 크게 둔 채로 보여주고 되돌린다 — 확대한 채로 끝내면
+        // 데모가 남긴 상태가 사용자 설정처럼 보인다.
+        await this.demoSleep(1100);
+        await this.demoZoom(DEMO_FILE, DEMO_ZOOM_FONT, base, DEMO_ZOOM_MS);
         this.setAgent("claude", { status: "idle", file: null });
         return;
       }
@@ -6889,7 +6919,45 @@ ${(r.output || "").slice(0, 2000)}`;
     }
   }
 
+  /** 한 프로젝트의 저장된 대화를 전부 지운다. **데모 프로젝트에만** 쓴다 —
+   *  userData 아래 우리가 만든 샘플이고, 매번 같은 장면을 처음부터 보여줘야 한다.
+   *  사용자 프로젝트에는 절대 부르지 않는다(호출부가 하나뿐인 이유다). */
+  private clearProjectConversations(root: string) {
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith("schutz.conv:" + root) || k.startsWith("schutz.convs:" + root)
+          || k.startsWith("schutz.curConv:" + root) || k.startsWith("schutz.session:" + root)) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch { /* 저장소를 못 써도 데모는 돈다 — 지난 장면이 남을 뿐이다 */ }
+  }
+
   private _demoProposalId: string | null = null;
+  /** 데모가 코드를 타이핑하는 중인가 — animateEditIntoModel 이 배수를 여기서 읽는다. */
+  private _demoTyping = false;
+
+  /** 데모용 확대. **설정을 건드리지 않고** 살아 있는 에디터에만 건다.
+   *
+   *  applyEditorPref 로 하면 paneVer 가 올라가 Monaco 페인이 리마운트되고, 그 순간
+   *  타이핑 애니메이션이 통째로 날아간다. 게다가 사용자 설정을 데모가 덮어쓰게 되어
+   *  중간에 빠져나가면 글자 크기가 커진 채로 남는다. updateOptions 는 둘 다 피한다 —
+   *  살아 있는 인스턴스에만 적용되고, 페인이 다시 뜨면 저장된 설정으로 돌아온다. */
+  private async demoZoom(rel: string, from: number, to: number, ms: number) {
+    const ed = paneRegistry.panes.get(rel)?.editor;
+    if (!ed || from === to) return;
+    if (reducedMotion()) { try { ed.updateOptions({ fontSize: to }); } catch { /* 언마운트됨 */ } return; }
+    const t0 = performance.now();
+    for (;;) {
+      if (this._demoAbort) return;
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      // 부드럽게 붙는 곡선 — 선형이면 확대가 기계적으로 보인다
+      const e = 1 - Math.pow(1 - k, 3);
+      try { ed.updateOptions({ fontSize: from + (to - from) * e }); } catch { return; }
+      if (k >= 1) return;
+      await this.demoSleep(16);
+    }
+  }
 
   /** 데모 종료 — 원래 프로젝트로 돌려놓는다. */
   private finishDemo(wantsTour: boolean, wantsImport = false) {
