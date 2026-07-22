@@ -21,6 +21,16 @@ import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
  */
 
 
+/** 세팅 각 쪽의 제목. 쪽마다 다른 것을 물으므로 제목도 달라야 한다 — 같으면 넘겼는데
+ *  같은 화면이 다시 뜬 것처럼 보인다. 길이가 곧 쪽 수다. */
+const STEP_TITLES = [
+  "open.setup.title",     // 1 언어 · 테마 · 화면 모드 · 지난 대화
+  "open.step.ai",         // 2 AI 연결
+  "open.step.autonomy",   // 3 어디까지 맡길까요
+  "open.step.keymap",     // 4 키맵
+  "open.step.fonts",      // 5 글꼴
+];
+
 /** 세팅 퇴장 — 게이트(12300)를 지나자마자 시작해 800ms 만에 물러난다. */
 const EXIT_FROM = 12300, EXIT_TO = 13100;
 /** 무대를 진짜 UI 에 넘기기까지. 퇴장보다 조금 넉넉해야 마지막 프레임이 잘리지 않는다. */
@@ -49,10 +59,13 @@ interface Props {
 }
 interface State {
   t: number; passedGate: boolean; theme: string; mode: UiMode;
-  /** 세팅은 두 쪽이다. 1쪽은 **무엇을 보는가**(언어·테마·모양), 2쪽은 **무엇으로 일하는가**
-   *  (AI·자율성·키맵·글꼴). 한 쪽에 다 넣으면 스크롤이 생기고, 스크롤이 생기면 아래쪽은
-   *  아무도 안 본다. */
-  page: 1 | 2;
+  /** 세팅은 여러 쪽이다. 한 쪽에 하나씩만 묻는다.
+   *
+   *  처음엔 두 쪽이었다 — 1쪽은 보는 것, 2쪽에 AI·자율성·키맵·글꼴을 몰아넣었다. 그러면
+   *  2쪽이 목록이 되고, 목록은 훑고 지나가게 된다. 자율성처럼 **읽고 정해야 하는** 것이
+   *  키맵 알약 옆에 나란히 놓이면 같은 무게로 보인다. 하나씩 물으면 각자 설명할 자리가
+   *  생긴다. */
+  page: number;
   keymap: string;
   uiFont: string; codeFont: string; fontSize: number;
   policy: string;
@@ -183,132 +196,214 @@ export class Opening extends React.Component<Props, State> {
   }
 
 
-  /** 세팅 2쪽 — **무엇으로 일하는가.**
+  /** 세팅 2쪽부터 — 한 쪽에 하나씩.
    *
    *  예전 설정 마법사(Onboarding.tsx)가 물어보던 것들이다. 오프닝이 마법사를 대체하면서
    *  AI 연결·자율성·키맵·글꼴이 첫 실행 흐름에서 통째로 빠졌다 — 설정 모달에는 남아
    *  있었지만 아무도 안내하지 않으니 없는 것과 같았다.
    *
-   *  마법사의 화면을 그대로 옮기지 않은 이유: 그쪽은 색이 다크에 박혀 있어(#151917)
-   *  Paper 테마에서 읽을 수 없다. 여기서는 tk 로 칠한다. 저장 함수는 그대로 쓴다. */
-  private renderSetup2(tk: typeof THEME_TOKENS[string]) {
+   *  처음엔 이 넷을 한 쪽에 몰아넣었다. 그러면 그 쪽이 **목록**이 되고, 목록은 훑고
+   *  지나가게 된다. 자율성처럼 읽고 정해야 하는 것이 키맵 알약 옆에 나란히 놓이면 같은
+   *  무게로 보인다. 하나씩 물으면 각자 설명할 자리가 생긴다.
+   *
+   *  마법사의 화면을 그대로 옮기지는 않았다. 그쪽은 색이 다크에 박혀 있어(#151917)
+   *  Paper 테마에서 읽을 수 없다. 여기서는 tk 로 칠한다. 저장 함수는 그대로 쓴다 —
+   *  설정 모달과 같은 곳에 쓰므로 두 화면이 어긋날 일이 없다. */
+  private renderStep(tk: typeof THEME_TOKENS[string]) {
     const s = this.state;
-    const label = (txt: string) => (
-      <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>{txt}</div>
-    );
     const pill = (on: boolean): React.CSSProperties => ({
-      fontFamily: "inherit", fontSize: 12, padding: "7px 14px", borderRadius: 8, cursor: "pointer",
+      fontFamily: "inherit", fontSize: 12.5, padding: "8px 15px", borderRadius: 9, cursor: "pointer",
       border: `1px solid ${on ? tk.accent : tk.w12}`,
       background: on ? tk.accent : "transparent",
       color: on ? tk.onAccent : tk.fgSub,
       fontWeight: on ? 650 : 400, whiteSpace: "nowrap",
+      transition: "border-color .18s, background .18s",
     });
-
-    // 연결 상태는 저장소를 보고 판단한다 — 여기서 실제 호출을 하지는 않는다(첫 실행에
-    // API 를 때리면 느려지고, 틀리면 시작조차 막힌다). 키를 넣었거나 구독 로그인이
-    // 끝났으면 연결된 것으로 본다.
-    void s.connTick;
-    const PROV = [
-      { id: "claude", name: "Claude", cli: "claude" },
-      { id: "gpt", name: "GPT", cli: "codex" },
-    ];
+    // 쪽마다 한 줄 — 무엇을 왜 고르는지. 쪽이 하나씩이라 이걸 놓을 자리가 생겼다.
+    const lede = (key: string) => (
+      <p style={{ fontSize: 13, lineHeight: 1.7, color: tk.fgSub2, margin: "-12px 0 0",
+        maxWidth: "min(600px, 82vw)", whiteSpace: "normal" }}>{t(key)}</p>
+    );
 
     return (
       <>
-        {label(t("open.setup.ai"))}
-        <div style={{ display: "grid", gap: 8, width: "min(560px, 80vw)", marginTop: -14 }}>
+        {s.page === 2 && this.stepAi(tk, pill, lede)}
+        {s.page === 3 && this.stepAutonomy(tk, lede)}
+        {s.page === 4 && this.stepKeymap(tk, pill, lede)}
+        {s.page === 5 && this.stepFonts(tk, pill, lede)}
+        {this.stepNav(tk)}
+      </>
+    );
+  }
+
+  /** 쪽 이동 + 진행 표시. 어느 쪽에서든 같은 자리에 있어야 손이 안 헤맨다. */
+  private stepNav(tk: typeof THEME_TOKENS[string]) {
+    const cur = this.state.page, last = STEP_TITLES.length;
+    return (
+      <div style={{ display: "grid", justifyItems: "center", gap: 13, marginTop: 2 }}>
+        <div style={{ display: "flex", gap: 6 }} aria-hidden>
+          {STEP_TITLES.map((_, i) => (
+            <span key={i} style={{
+              width: i + 1 === cur ? 22 : 6, height: 6, borderRadius: 3,
+              background: i + 1 === cur ? tk.accent : (i + 1 < cur ? tk.accentSoft : tk.w10),
+              transition: "width .3s var(--ease), background .3s",
+            }} />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {cur > 1 && (
+            <button onClick={() => this.setState({ page: cur - 1 })} style={{
+              fontFamily: "inherit", fontSize: 13, padding: "10px 18px", borderRadius: 10,
+              border: `1px solid ${tk.w12}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
+            }}>{t("common.prev")}</button>
+          )}
+          <button onClick={() => (cur >= last ? this.pass() : this.setState({ page: cur + 1 }))} style={{
+            fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
+            background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
+          }}>{t(cur >= last ? "open.setup.go" : "open.setup.next")}</button>
+        </div>
+      </div>
+    );
+  }
+
+  /** 2쪽 — AI 연결. 이게 없으면 앱이 아무것도 못 하지만, 첫 화면에서 로그인을 강요당하면
+   *  사람은 그대로 닫는다. 그래서 "지금 넘어가도 된다" 를 분명히 적는다. */
+  private stepAi(tk: typeof THEME_TOKENS[string], pill: (on: boolean) => React.CSSProperties, lede: (k: string) => React.ReactNode) {
+    const s = this.state;
+    void s.connTick;   // 저장소를 보고 판단하므로 다시 그릴 신호가 필요하다
+    const PROV = [
+      { id: "claude", name: "Claude", cli: "claude", role: "open.conn.roleClaude" },
+      { id: "gpt", name: "GPT", cli: "codex", role: "open.conn.roleGpt" },
+    ];
+    return (
+      <>
+        {lede("open.step.ai.lede")}
+        <div style={{ display: "grid", gap: 10, width: "min(600px, 82vw)" }}>
           {PROV.map(p => {
             const on = PROVIDERS_MAP[p.id]?.isConfigured?.() ?? false;
             const open = s.keyOpen === p.id;
             return (
               <div key={p.id} style={{
-                background: tk.bgPanel, border: `1px solid ${on ? tk.accent : tk.w08}`,
-                borderRadius: 11, padding: "11px 13px", textAlign: "left", transition: "border-color .2s",
+                background: tk.bgPanel, border: `1.5px solid ${on ? tk.accent : tk.w08}`,
+                borderRadius: 13, padding: "14px 16px", textAlign: "left", transition: "border-color .2s",
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flex: "none",
+                <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+                  <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", flex: "none",
                     background: on ? tk.accent : tk.w14 }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: tk.fg }}>{p.name}</span>
-                  <span style={{ fontSize: 11, color: on ? tk.accent : tk.fgDim2 }}>
-                    {on ? t("open.conn.on") : t("open.conn.off")}
-                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 650, color: tk.fg }}>{p.name}</span>
+                      <span style={{ fontSize: 11.5, color: on ? tk.accent : tk.fgDim2 }}>
+                        {on ? t("open.conn.on") : t("open.conn.off")}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>{t(p.role)}</div>
+                  </div>
                   <div style={{ flex: 1 }} />
                   <button onClick={() => { try { (window as any).schutz?.cliLogin?.(p.cli); } catch { /* */ } }}
-                    style={{ ...pill(false), fontSize: 11, padding: "6px 11px" }}>{t("open.conn.sub")}</button>
+                    style={{ ...pill(false), fontSize: 11.5, padding: "7px 12px" }}>{t("open.conn.sub")}</button>
                   <button onClick={() => this.setState({ keyOpen: open ? null : p.id, keyDraft: getStoredKey(p.id as any) })}
-                    style={{ ...pill(open), fontSize: 11, padding: "6px 11px" }}>{t("open.conn.key")}</button>
+                    style={{ ...pill(open), fontSize: 11.5, padding: "7px 12px" }}>{t("open.conn.key")}</button>
                 </div>
                 {open && (
-                  <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                     <input type="password" value={s.keyDraft} autoFocus
                       onChange={e => this.setState({ keyDraft: e.target.value })}
                       onKeyDown={e => { if (e.key === "Enter") this.saveKey(p.id); }}
                       placeholder={t("open.conn.keyPlaceholder")}
-                      style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 12, padding: "7px 10px",
-                        borderRadius: 8, border: `1px solid ${tk.w12}`, background: tk.bgRoot, color: tk.fg, outline: "none" }} />
-                    <button onClick={() => this.saveKey(p.id)} style={{ ...pill(true), fontSize: 11.5 }}>{t("open.conn.save")}</button>
+                      style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 12.5, padding: "8px 11px",
+                        borderRadius: 9, border: `1px solid ${tk.w12}`, background: tk.bgRoot, color: tk.fg, outline: "none" }} />
+                    <button onClick={() => this.saveKey(p.id)} style={{ ...pill(true), fontSize: 12 }}>{t("open.conn.save")}</button>
                   </div>
                 )}
               </div>
             );
           })}
         </div>
-        <p style={{ fontSize: 11, color: tk.fgDim2, margin: "-14px 0 0", maxWidth: "min(560px,80vw)", whiteSpace: "normal" }}>
+        <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-8px 0 0", maxWidth: "min(600px,82vw)", whiteSpace: "normal" }}>
           {t("open.conn.hint")}
         </p>
+      </>
+    );
+  }
 
-        {label(t("open.setup.autonomy"))}
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap", marginTop: -14 }}>
-          {(["manual", "balanced", "auto"] as const).map(k => (
-            <button key={k} aria-pressed={s.policy === k}
-              onClick={() => { this.setState({ policy: k }); setAutonomy({ policy: k }); }}
-              style={{ ...pill(s.policy === k), display: "grid", gap: 3, textAlign: "left", padding: "9px 14px", width: 168, whiteSpace: "normal" }}>
-              <span style={{ fontSize: 12.5, fontWeight: 650 }}>{t("open.pol." + k)}</span>
-              <span style={{ fontSize: 10.5, lineHeight: 1.45, opacity: .75 }}>{t("open.pol." + k + ".desc")}</span>
-            </button>
-          ))}
+  /** 3쪽 — 자율성. 읽고 정해야 하는 것이라 카드를 크게 두고 설명을 붙인다. */
+  private stepAutonomy(tk: typeof THEME_TOKENS[string], lede: (k: string) => React.ReactNode) {
+    const s = this.state;
+    return (
+      <>
+        {lede("open.step.autonomy.lede")}
+        <div style={{ display: "flex", gap: 13, justifyContent: "center", flexWrap: "wrap" }}>
+          {(["manual", "balanced", "auto"] as const).map(k => {
+            const on = s.policy === k;
+            return (
+              <button key={k} aria-pressed={on}
+                onClick={() => { this.setState({ policy: k }); setAutonomy({ policy: k }); }}
+                style={{
+                  width: 205, padding: "16px 16px 15px", borderRadius: 13, cursor: "pointer",
+                  fontFamily: "inherit", textAlign: "left", whiteSpace: "normal", overflow: "hidden",
+                  background: tk.bgPanel, color: tk.fg,
+                  border: `2px solid ${on ? tk.accent : "transparent"}`,
+                  boxShadow: on ? `0 0 24px ${tk.accentSoft}` : "none",
+                  transform: on ? "scale(1.03)" : "none",
+                  transition: "transform .25s cubic-bezier(.22,1.2,.36,1), border-color .2s, box-shadow .3s",
+                  display: "grid", gap: 7,
+                }}>
+                <span style={{ fontSize: 13.5, fontWeight: 650 }}>{t("open.pol." + k)}</span>
+                <span style={{ fontSize: 11.5, lineHeight: 1.6, color: tk.fgDim2 }}>{t("open.pol." + k + ".desc")}</span>
+              </button>
+            );
+          })}
         </div>
+      </>
+    );
+  }
 
-        {label(t("settings.keymap"))}
-        <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", marginTop: -14 }}>
+  /** 4쪽 — 키맵. 손에 배인 단축키가 있으면 여기서 정하는 게 제일 편하다. */
+  private stepKeymap(tk: typeof THEME_TOKENS[string], pill: (on: boolean) => React.CSSProperties, lede: (k: string) => React.ReactNode) {
+    const s = this.state;
+    return (
+      <>
+        {lede("open.step.keymap.lede")}
+        <div style={{ display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
           {KEYMAPS.map(([k, name]) => (
             <button key={k} aria-pressed={s.keymap === k}
               onClick={() => { this.setState({ keymap: k }); setEditorPrefs({ keymap: k }); }}
-              style={pill(s.keymap === k)}>{name}</button>
+              style={{ ...pill(s.keymap === k), fontSize: 13.5, padding: "11px 22px" }}>{name}</button>
           ))}
         </div>
+      </>
+    );
+  }
 
-        {label(t("open.setup.fonts"))}
-        <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", marginTop: -14, alignItems: "center" }}>
-          {([["uiFont", UI_FONTS], ["codeFont", CODE_FONTS]] as const).map(([field, table]) => (
-            <div key={field} style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: tk.fgDim2 }}>{t("settings." + field)}</span>
-              {Object.entries(table).map(([k, v]) => (
-                <button key={k} aria-pressed={s[field] === k}
-                  onClick={() => { this.setState({ [field]: k } as any); setEditorPrefs({ [field]: k }); applyUiFont(); }}
-                  style={{ ...pill(s[field] === k), fontFamily: v.stack, fontSize: 11.5, padding: "6px 11px" }}>{v.name}</button>
-              ))}
-            </div>
-          ))}
-          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: tk.fgDim2 }}>{t("settings.codeSize")}</span>
-            {[12, 13, 14, 15].map(n => (
-              <button key={n} aria-pressed={s.fontSize === n}
-                onClick={() => { this.setState({ fontSize: n }); setEditorPrefs({ fontSize: n }); }}
-                style={{ ...pill(s.fontSize === n), padding: "6px 10px" }}>{n}</button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 4 }}>
-          <button onClick={() => this.setState({ page: 1 })} style={{
-            fontFamily: "inherit", fontSize: 13, padding: "10px 18px", borderRadius: 10,
-            border: `1px solid ${tk.w12}`, background: "transparent", color: tk.fgSub, cursor: "pointer",
-          }}>{t("common.prev")}</button>
-          <button onClick={this.pass} style={{
-            fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
-            background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
-          }}>{t("open.setup.go")}</button>
+  /** 5쪽 — 글꼴. 버튼을 그 글꼴로 그린다 — 이름만 보고 고르는 것보다 정확하다. */
+  private stepFonts(tk: typeof THEME_TOKENS[string], pill: (on: boolean) => React.CSSProperties, lede: (k: string) => React.ReactNode) {
+    const s = this.state;
+    const row = (label: string, node: React.ReactNode) => (
+      <div style={{ display: "grid", gap: 7, justifyItems: "center" }}>
+        <span style={{ fontSize: 10, letterSpacing: ".14em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>{label}</span>
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "center" }}>{node}</div>
+      </div>
+    );
+    return (
+      <>
+        {lede("open.step.fonts.lede")}
+        <div style={{ display: "grid", gap: 18 }}>
+          {row(t("settings.uiFont"), Object.entries(UI_FONTS).map(([k, v]) => (
+            <button key={k} aria-pressed={s.uiFont === k}
+              onClick={() => { this.setState({ uiFont: k }); setEditorPrefs({ uiFont: k }); applyUiFont(); }}
+              style={{ ...pill(s.uiFont === k), fontFamily: v.stack }}>{v.name}</button>
+          )))}
+          {row(t("settings.codeFont"), Object.entries(CODE_FONTS).map(([k, v]) => (
+            <button key={k} aria-pressed={s.codeFont === k}
+              onClick={() => { this.setState({ codeFont: k }); setEditorPrefs({ codeFont: k }); applyUiFont(); }}
+              style={{ ...pill(s.codeFont === k), fontFamily: v.stack }}>{v.name}</button>
+          )))}
+          {row(t("settings.codeSize"), [12, 13, 14, 15].map(n => (
+            <button key={n} aria-pressed={s.fontSize === n}
+              onClick={() => { this.setState({ fontSize: n }); setEditorPrefs({ fontSize: n }); }}
+              style={{ ...pill(s.fontSize === n), fontFamily: CODE_FONTS[s.codeFont]?.stack, fontSize: n + 1 }}>{n}</button>
+          )))}
         </div>
       </>
     );
@@ -422,11 +517,11 @@ export class Opening extends React.Component<Props, State> {
                 <div style={{ width: 26, height: 1, background: tk.w14 }} />
                 {/* 두 쪽의 제목이 같으면 넘겼는데 같은 화면이 다시 뜬 것처럼 보인다. */}
                 <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
-                  {t(this.state.page === 2 ? "open.setup.title2" : "open.setup.title")}
+                  {t(STEP_TITLES[this.state.page - 1] ?? "open.setup.title")}
                 </h2>
               </div>
 
-              {this.state.page === 2 ? this.renderSetup2(tk) : <>
+              {this.state.page > 1 ? this.renderStep(tk) : <>
               {/* 언어가 먼저다 — 읽지 못하는 화면에서 테마를 고르게 할 수는 없다. */}
               <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
                 <div style={{ fontSize: 10, letterSpacing: ".16em", color: tk.fgDim, fontWeight: 700, textTransform: "uppercase" }}>
@@ -540,10 +635,7 @@ export class Opening extends React.Component<Props, State> {
                 </div>
               )}
               <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-10px 0 0" }}>{t("open.setup.hint")}</p>
-              <button onClick={() => this.setState({ page: 2 })} style={{
-                fontFamily: "inherit", fontSize: 14.5, padding: "11px 30px", borderRadius: 10, border: "none",
-                background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
-              }}>{t("open.setup.next")}</button>
+              {this.stepNav(tk)}
               </>}
             </div>
           );

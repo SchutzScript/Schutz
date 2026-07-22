@@ -185,12 +185,6 @@ export const dict: Record<string, Record<string, string>> = {
 
   // ── 세팅 2쪽 ────────────────────────────────────────────────────────
   // 1쪽은 무엇을 보는가(언어·테마·모양), 2쪽은 무엇으로 일하는가(AI·자율성·키맵·글꼴).
-  "open.setup.title2": {
-    ko: "무엇으로 일할까요",
-    en: "What you'll work with",
-    de: "Womit Sie arbeiten",
-    ja: "何で働きますか",
-  },
   "open.setup.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
   "open.setup.ai": { ko: "AI 연결", en: "Connect AI", de: "KI verbinden", ja: "AI 接続" },
   "open.setup.autonomy": { ko: "어디까지 맡길까요", en: "How much to hand over", de: "Wie viel übergeben", ja: "どこまで任せますか" },
@@ -231,5 +225,40 @@ export const dict: Record<string, Record<string, string>> = {
     en: "Keeps going without stopping",
     de: "Läuft ohne Unterbrechung durch",
     ja: "止まらずに進めます",
+  },
+
+  // ── 세팅 쪽 제목 — 한 쪽에 하나씩 묻는다 ─────────────────────────────
+  "open.step.ai": { ko: "무엇과 함께 일할까요", en: "Who will you work with", de: "Mit wem arbeiten Sie", ja: "誰と一緒に働きますか" },
+  "open.step.ai.lede": {
+    ko: "Schutz 는 모델을 직접 만들지 않습니다. 당신의 구독이나 키를 그대로 씁니다 — 대화도 코드도 당신 계정에서 오갑니다.",
+    en: "Schutz doesn't ship a model. It uses your own subscription or key — everything runs through your account.",
+    de: "Schutz bringt kein eigenes Modell mit. Es nutzt Ihr Abo oder Ihren Schlüssel — alles läuft über Ihr Konto.",
+    ja: "Schutz はモデルを持ちません。あなたのサブスクやキーをそのまま使います — すべてあなたのアカウントを通ります。",
+  },
+  "open.conn.roleClaude": { ko: "구독 또는 API 키", en: "Subscription or API key", de: "Abo oder API-Schlüssel", ja: "サブスクまたはAPIキー" },
+  "open.conn.roleGpt": { ko: "구독 또는 API 키", en: "Subscription or API key", de: "Abo oder API-Schlüssel", ja: "サブスクまたはAPIキー" },
+
+  "open.step.autonomy": { ko: "어디까지 맡길까요", en: "How much do you hand over", de: "Wie viel übergeben Sie", ja: "どこまで任せますか" },
+  "open.step.autonomy.lede": {
+    ko: "언제든 설정에서 바꿀 수 있고, 어떤 설정이든 파일이 바뀌면 검토에 남습니다. 되돌릴 수 없는 건 셸 명령뿐입니다.",
+    en: "Changeable anytime in settings — and whatever you pick, every file change still lands in review. Only shell commands can't be undone.",
+    de: "Jederzeit in den Einstellungen änderbar — und jede Dateiänderung landet weiterhin in der Überprüfung. Nur Shell-Befehle sind unwiderruflich.",
+    ja: "設定でいつでも変えられます。どれを選んでもファイルの変更は検討に残ります。取り消せないのはシェルコマンドだけです。",
+  },
+
+  "open.step.keymap": { ko: "손에 익은 단축키가 있나요", en: "Any shortcuts already in your hands", de: "Gewohnte Tastenkürzel", ja: "手に馴染んだショートカットは" },
+  "open.step.keymap.lede": {
+    ko: "쓰던 편집기의 단축키를 그대로 씁니다. 지금 안 정해도 설정에서 바꿀 수 있어요.",
+    en: "Keep the shortcuts from the editor you already use. You can switch later in settings.",
+    de: "Behalten Sie die Kürzel Ihres bisherigen Editors. Später in den Einstellungen änderbar.",
+    ja: "使っていたエディタのショートカットをそのまま使えます。あとで設定から変えられます。",
+  },
+
+  "open.step.fonts": { ko: "어떤 글씨가 편한가요", en: "What reads best for you", de: "Was liest sich für Sie am besten", ja: "どの書体が読みやすいですか" },
+  "open.step.fonts.lede": {
+    ko: "버튼이 그 글꼴로 쓰여 있습니다 — 이름만 보고 고르는 것보다 정확합니다.",
+    en: "Each button is set in its own typeface — truer than picking by name.",
+    de: "Jede Schaltfläche ist in ihrer eigenen Schrift gesetzt — genauer als nach Namen zu wählen.",
+    ja: "ボタンはその書体で書かれています — 名前だけで選ぶより確かです。",
   },
 };
