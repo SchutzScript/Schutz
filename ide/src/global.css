@@ -185,6 +185,7 @@ button:disabled { opacity: .55; cursor: default !important; }
 .vtStatus { view-transition-name: sz-status; }
 .vtConversation { view-transition-name: sz-conv; }
 .vtRail { view-transition-name: sz-rail; }
+.vtAside { view-transition-name: sz-aside; }
 .vtEditor { view-transition-name: sz-editor; }
 .vtSide { view-transition-name: sz-side; }
 
@@ -193,11 +194,21 @@ button:disabled { opacity: .55; cursor: default !important; }
 
 @keyframes szModeRailOut  { to   { opacity: 0; transform: translateX(-46px); } }
 @keyframes szModeRailIn   { from { opacity: 0; transform: translateX(-46px); } }
+/* 사이드바는 레일보다 넓어서(216 vs 42) 같은 거리로 밀면 아직 화면에 걸쳐 있다.
+   자기 폭만큼 밀어 완전히 왼쪽 밖으로 보낸다. */
+@keyframes szModeAsideOut { to   { opacity: 0; transform: translateX(-220px); } }
+@keyframes szModeAsideIn  { from { opacity: 0; transform: translateX(-220px); } }
 @keyframes szModeSinkOut  { to   { opacity: 0; transform: translateY(10px) scale(.985); } }
 @keyframes szModeSinkIn   { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 
 [data-mode-anim]::view-transition-old(sz-rail) { animation: szModeRailOut 280ms var(--ease) both; }
 [data-mode-anim]::view-transition-new(sz-rail) { animation: szModeRailIn 380ms var(--ease) both; }
+
+/* 레일과 사이드바는 같은 모서리에 살고 서로를 대신한다 — 하나가 나가고 하나가 들어오는
+   같은 방향의 움직임이라, 자리를 물려주는 것으로 읽힌다. 들어오는 쪽을 조금 늦춰
+   두 장이 겹쳐 뭉개지지 않게 한다. */
+[data-mode-anim]::view-transition-old(sz-aside) { animation: szModeAsideOut 260ms var(--ease) both; }
+[data-mode-anim]::view-transition-new(sz-aside) { animation: szModeAsideIn 380ms var(--ease) both; animation-delay: 60ms; }
 
 [data-mode-anim]::view-transition-old(sz-editor),
 [data-mode-anim]::view-transition-old(sz-side) { animation: szModeSinkOut 280ms var(--ease) both; }
