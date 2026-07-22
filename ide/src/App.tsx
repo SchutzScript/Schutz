@@ -53,7 +53,7 @@ import { CLI_HEAD_BYTES, CLI_MSG_CAP, CLI_TAIL_BYTES, parseBody, parseHead, type
 /** 렌더 메서드 밖에서 모드를 묻는 자리 — render() 의 지역 변수 ag 를 쓸 수 없다. */
 const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
-import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
+import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tour";
 import { Opening } from "./opening/Opening";
 import {
   DEMO_STEPS, DEMO_FILE, DEMO_FIND, DEMO_REPLACE, TYPE_INTERVAL_MS,
@@ -5327,7 +5327,7 @@ ${(r.output || "").slice(0, 2000)}`;
     );
 
     return (
-      <div className="vtAside" style={{
+      <div data-tour="aside" className="vtAside" style={{
         flex: "none", width: 216, display: ag2(s) ? "flex" : "none", flexDirection: "column",
         borderRight: "1px solid var(--w06)", background: "var(--bg-panel)", padding: "10px 8px 8px",
       }}>
@@ -5344,7 +5344,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {navBtn(t("imp.aside"), "⤓", () => this.openImport())}
         {navBtn(t("aside.customize"), "⚙", () => this.openO({ settingsOpen: true }))}
 
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 4 }}>
+        <div data-tour="recents" style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 4 }}>
           {s.asideTab === "artifacts" ? (
             arts.length === 0
               ? <div style={{ padding: "12px 10px", fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-dim2)" }}>{t("aside.noArtifacts")}</div>
@@ -5530,7 +5530,7 @@ ${(r.output || "").slice(0, 2000)}`;
             })()}
           </div>
         )}
-        <div style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
+        <div data-tour="composer" style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
           <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: ag ? 20 : 10, ...(ag ? { display: "flex" as const, flexDirection: "column" as const } : null), background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
             {(() => {
               const models = this.modelPalette();
@@ -7040,6 +7040,15 @@ ${(r.output || "").slice(0, 2000)}`;
       showTerminal: open => { if (this.state.termOpen !== open) this.toggleTerm(); },
       hasWorkspace: () => !!this.state.workspace,
       mode: () => this.state.uiMode,
+      showAsideTab: tab => this.setState({ asideTab: tab }),
+      // 시트가 닫혀 있으면 오른쪽 열이 아예 없어 앵커 크기가 0 이 된다. 데모 파일이
+      // 없을 수도 있으니 지금 열려 있는 것 중 하나를, 그것도 없으면 그냥 넘어간다.
+      showSide: open => {
+        if (!open) { if (this.state.sheetOpen) this.closeSheet(); return; }
+        if (this.state.sheetOpen) return;
+        const rel = this.allOpen()[0] ?? this.state.proposals[this.state.proposals.length - 1]?.rel;
+        if (rel) this.openSheet(rel);
+      },
     };
   }
 
@@ -7095,6 +7104,10 @@ ${(r.output || "").slice(0, 2000)}`;
     // 배치 계산이 실제 카드보다 작게 잡혀 화면 밖으로 밀려났다.
     const cardW = 330, cardH = this._tourCardH;
     const pos = cardPos(rect, cardW, cardH, step.placement);
+    // 진행 표시는 **지금 모양에서 보게 될** 단계만 센다. TOUR_STEPS.length 는 두 트랙을
+    // 합친 수라 어느 모드에서도 도달하지 않는다.
+    const visTotal = visibleSteps(this.tourHost()).length;
+    const visPos = visiblePos(this.tourHost(), step.id);
     const isLast = cur === TOUR_STEPS.length - 1;
     const tourBtn: React.CSSProperties = { padding: "5px 14px", fontSize: 11.5, borderRadius: 7, cursor: "pointer", fontFamily: SUIT };
     return (
@@ -7118,10 +7131,10 @@ ${(r.output || "").slice(0, 2000)}`;
                 tour.progress 키를 여기서 쓴다. */}
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <div style={{ width: 54, height: 3, borderRadius: 2, background: "var(--w12)", overflow: "hidden" }}>
-                <div style={{ width: `${((cur + 1) / TOUR_STEPS.length) * 100}%`, height: "100%", background: "var(--accent)", transition: "width var(--dur) var(--ease)" }} />
+                <div style={{ width: `${(visPos / Math.max(1, visTotal)) * 100}%`, height: "100%", background: "var(--accent)", transition: "width var(--dur) var(--ease)" }} />
               </div>
               <span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontVariantNumeric: "tabular-nums" }}>
-                {t("tour.progress", { cur: cur + 1, total: TOUR_STEPS.length })}
+                {t("tour.progress", { cur: visPos, total: visTotal })}
               </span>
             </div>
             <div style={{ flex: 1 }} />

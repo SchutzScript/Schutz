@@ -15,6 +15,11 @@ export interface TourHost {
    *  그것들을 가리키는 단계는 앵커가 아예 없다 — when 으로 미리 걸러낸다.
    *  (앵커 검사만 믿으면 단계가 조용히 건너뛰어져 진행 번호만 이상해진다.) */
   mode(): "editor" | "agent";
+  /** 에이전트 모드의 사이드바 탭(최근 항목 ↔ 아티팩트). */
+  showAsideTab(tab: "recents" | "artifacts"): void;
+  /** 에이전트 모드에서 코드를 오른쪽에 띄운다. 닫혀 있으면 그 열이 아예 없어
+   *  앵커가 크기 0 이 되고, 단계가 조용히 중앙 카드로 퇴화한다. */
+  showSide(open: boolean): void;
 }
 
 export type Placement = "right" | "left" | "below" | "above" | "center";
@@ -41,43 +46,84 @@ export interface TourStep {
 export const TOUR_STEPS: TourStep[] = [
   { id: "welcome", anchor: null, titleKey: "tour.welcome.title", bodyKey: "tour.welcome.body" },
 
-  // ── 둘러보기: 어디에 무엇이 있는가 ──────────────────────────────────
+  // ── 에디터 모드 트랙 ────────────────────────────────────────────────
+  // 레일은 트리·소스컨트롤·디버그·확장 넷의 입구다. 넷을 각각 한 단계씩 주면
+  // 투어가 메뉴 낭독이 되므로, 입구를 한 번 짚고 본문에서 넷을 다 부른다.
   { id: "rail", when: h => h.mode() === "editor", anchor: "rail", titleKey: "tour.rail.title", bodyKey: "tour.rail.body", placement: "right" },
   {
     id: "tree", anchor: "left-panel", titleKey: "tour.tree.title", bodyKey: "tour.tree.body",
     before: h => h.showLeftTab("tree"), when: h => h.mode() === "editor", placement: "right",
   },
+  // 편집기와 Ctrl+K 를 한 단계로 묶는다. 같은 곳을 두 번 가리키면 진도가 안 나가는
+  // 느낌이 들고, 둘은 어차피 "여기서 고친다" 는 한 이야기다.
   { id: "editor", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.editor.title", bodyKey: "tour.editor.body" },
-
-  // ── 핵심: AI 가 코드를 고치고, 사용자가 받아들인다 ──────────────────
-  // Ctrl+K 와 변경 검토가 이 앱의 간판인데 예전 투어엔 언급조차 없었다.
-  { id: "inlineEdit", when: h => h.mode() === "editor", anchor: "editor", titleKey: "tour.inlineEdit.title", bodyKey: "tour.inlineEdit.body", placement: "left" },
-  { id: "chat", anchor: "chat", titleKey: "tour.chat.title", bodyKey: "tour.chat.body", placement: "right" },
+  { id: "chat", when: h => h.mode() === "editor", anchor: "chat", titleKey: "tour.chat.title", bodyKey: "tour.chat.body", placement: "right" },
   { id: "agents", when: h => h.mode() === "editor", anchor: "agents", titleKey: "tour.agents.title", bodyKey: "tour.agents.body", placement: "left" },
   { id: "review", when: h => h.mode() === "editor", anchor: "review", titleKey: "tour.review.title", bodyKey: "tour.review.body", placement: "left" },
-  { id: "runCommand", anchor: "chat", titleKey: "tour.runCommand.title", bodyKey: "tour.runCommand.body", placement: "right" },
+  {
+    id: "git", anchor: "left-panel", titleKey: "tour.git.title", bodyKey: "tour.git.body",
+    before: h => h.showLeftTab("git"),
+    when: h => h.mode() === "editor" && h.hasWorkspace(), placement: "right",
+  },
 
-  // ── 개발 환경 ───────────────────────────────────────────────────────
+  // ── 에이전트 모드 트랙 ──────────────────────────────────────────────
+  // 예전엔 이 모드에 단계가 7개뿐이었고 그나마 절반이 공용 크롬이었다. 첫 실행에서
+  // 고를 수 있게 해놓고 고른 쪽을 안 가르치면, 고른 사람일수록 덜 배우게 된다.
+  { id: "agChat", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agChat.title", bodyKey: "tour.agChat.body", placement: "center" },
+  { id: "agComposer", when: h => h.mode() === "agent", anchor: "composer", titleKey: "tour.agComposer.title", bodyKey: "tour.agComposer.body", placement: "above" },
+  { id: "agAside", when: h => h.mode() === "agent", anchor: "aside", titleKey: "tour.agAside.title", bodyKey: "tour.agAside.body", placement: "right" },
+  {
+    id: "agRecents", anchor: "recents", titleKey: "tour.agRecents.title", bodyKey: "tour.agRecents.body",
+    before: h => h.showAsideTab("recents"), when: h => h.mode() === "agent", placement: "right",
+  },
+  {
+    id: "agArtifacts", anchor: "recents", titleKey: "tour.agArtifacts.title", bodyKey: "tour.agArtifacts.body",
+    before: h => h.showAsideTab("artifacts"), when: h => h.mode() === "agent", placement: "right",
+  },
+  {
+    // 에이전트 모드에서 .vtEditor 는 **오른쪽 산출물 패널**이다. 같은 앵커가 모드마다
+    // 다른 것을 가리킨다 — 그래서 이 단계와 위 "editor" 단계는 서로 배타적이다.
+    id: "agSide", anchor: "editor", titleKey: "tour.agSide.title", bodyKey: "tour.agSide.body",
+    before: h => { h.showAsideTab("recents"); h.showSide(true); },
+    when: h => h.mode() === "agent", placement: "left",
+  },
+  {
+    id: "agImport", anchor: "aside", titleKey: "tour.agImport.title", bodyKey: "tour.agImport.body",
+    before: h => h.showSide(false), when: h => h.mode() === "agent", placement: "right",
+  },
+  { id: "agReview", when: h => h.mode() === "agent", anchor: "chat", titleKey: "tour.agReview.title", bodyKey: "tour.agReview.body", placement: "center" },
+
+  // ── 공용 꼬리 ───────────────────────────────────────────────────────
   {
     id: "terminal", anchor: "terminal", titleKey: "tour.terminal.title", bodyKey: "tour.terminal.body",
     before: h => h.showTerminal(true), placement: "above",
   },
   {
-    id: "git", anchor: "left-panel", titleKey: "tour.git.title", bodyKey: "tour.git.body",
-    before: h => { h.showTerminal(false); h.showLeftTab("git"); },
-    when: h => h.mode() === "editor" && h.hasWorkspace(), placement: "right",
-  },
-  {
-    id: "ext", anchor: "left-panel", titleKey: "tour.ext.title", bodyKey: "tour.ext.body",
-    before: h => h.showLeftTab("ext"), when: h => h.mode() === "editor", placement: "right",
-  },
-  {
     id: "navigate", anchor: "menubar", titleKey: "tour.navigate.title", bodyKey: "tour.navigate.body",
-    before: h => { if (h.mode() === "editor") h.showLeftTab("tree"); }, placement: "below",
+    before: h => { h.showTerminal(false); if (h.mode() === "editor") h.showLeftTab("tree"); }, placement: "below",
   },
   { id: "mcp", anchor: "mcp", titleKey: "tour.mcp.title", bodyKey: "tour.mcp.body", placement: "below" },
+  // 모드 전환은 두 트랙을 잇는 다리다 — 방금 배운 것 말고 **다른 모양도 있다**.
+  { id: "mode", anchor: "mode", titleKey: "tour.mode.title", bodyKey: "tour.mode.body", placement: "below" },
   { id: "done", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },
 ];
+
+/** 지금 모양에서 **실제로 보게 될** 단계들.
+ *
+ *  진행 표시가 이걸 써야 한다. TOUR_STEPS.length 를 그대로 쓰면 에이전트 모드에서
+ *  "10 / 21" 이 뜬다 — 21 은 두 트랙을 합친 수라 어느 쪽에서도 도달하지 않고, 번호는
+ *  건너뛴 만큼 튄다. 사용자에게는 진행이 고장 난 것으로 보인다.
+ *
+ *  when 이 host 를 보므로(모드·워크스페이스 유무) 이 목록은 상황에 따라 달라진다.
+ *  그래서 상수가 아니라 함수다. */
+export function visibleSteps(host: TourHost): TourStep[] {
+  return TOUR_STEPS.filter(s => !s.when || s.when(host));
+}
+
+/** 보이는 단계들 안에서 이 단계가 몇 번째인가(1부터). 못 찾으면 0. */
+export function visiblePos(host: TourHost, id: string): number {
+  return visibleSteps(host).findIndex(s => s.id === id) + 1;
+}
 
 export interface SpotRect { x: number; y: number; w: number; h: number; }
 
