@@ -18,6 +18,11 @@ import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
  */
 
 
+/** 세팅 퇴장 — 게이트(12300)를 지나자마자 시작해 800ms 만에 물러난다. */
+const EXIT_FROM = 12300, EXIT_TO = 13100;
+/** 무대를 진짜 UI 에 넘기기까지. 퇴장보다 조금 넉넉해야 마지막 프레임이 잘리지 않는다. */
+const EXIT_MS = 950;
+
 /** 고를 수 있는 테마 — 실제 THEME_TOKENS 에서 가져온다. 가짜 색이 아니라 진짜 테마다. */
 const CHOICES = ["feldgrau", "graphite", "paper"] as const;
 
@@ -79,6 +84,7 @@ export class Opening extends React.Component<Props, State> {
     } catch { /* 안 띄운다 */ }
   }
   componentWillUnmount() {
+    clearTimeout(this.handOff);
     cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey);
     this.langOff?.();
@@ -107,11 +113,24 @@ export class Opening extends React.Component<Props, State> {
     this.raf = requestAnimationFrame(this.tick);
   };
 
+  /** 세팅에서 무대를 넘기기까지. 퇴장이 끝나는 시각(EXIT_END)에서 게이트를 뺀 값. */
+  private handOff = 0;
+
   private pass = () => {
     // 세팅이 끝나면 오버레이를 걷고 진짜 UI 로 넘긴다. 모션 최소화를 켠 사람은
     // 연출을 건너뛰므로 데모도 돌리지 않고 바로 투어로 보낸다.
     if (this.reduced) { this.finish(true); return; }
-    this.props.onStartDemo();
+    if (this.state.passedGate) return;   // 두 번 눌러도 한 번만 넘긴다
+
+    // 예전엔 여기서 곧바로 onStartDemo 를 불렀다. 그래서 고르자마자 화면이 **툭**
+    // 바뀌었고, 아래 퇴장 애니메이션(passedGate 를 보는 쪽)은 한 번도 실행된 적이
+    // 없는 죽은 코드였다 — passedGate 를 true 로 만드는 곳이 어디에도 없었다.
+    //
+    // 이제 게이트를 풀어 시계를 다시 흘려보낸다. 세팅이 물러나는 걸 보고 나서 넘긴다.
+    this.setState({ passedGate: true });
+    // 시간이 아니라 타이머로 넘기는 이유: 창이 뒤로 가면 rAF 가 스로틀돼 시계가
+    // 거의 멈춘다. 그러면 무대가 영영 안 넘어간다.
+    this.handOff = window.setTimeout(() => this.props.onStartDemo(), EXIT_MS);
   };
 
   /** 언어를 바꾸면 이 화면의 글자도 바뀌어야 한다 — 클래스 컴포넌트라 구독해서 직접 리렌더.
@@ -224,7 +243,9 @@ export class Opening extends React.Component<Props, State> {
 
         {/* 3 세팅 — 여기서 멈춘다 */}
         {(() => {
-          const inP = E(11300, 12200), outP = this.state.passedGate ? E(13800, 14500) : 0;
+          // 퇴장은 **누른 즉시** 시작한다. 예전 값(13800~14500)은 게이트에서 1.5초를
+          // 아무 일 없이 흘려보낸 뒤에야 움직였다 — 눌렀는데 굳어 있는 것으로 보인다.
+          const inP = E(11300, 12200), outP = this.state.passedGate ? E(EXIT_FROM, EXIT_TO) : 0;
           const op = inP * (1 - outP);
           if (op < 0.01) return null;
           return (
