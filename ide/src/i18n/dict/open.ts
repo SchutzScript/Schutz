@@ -31,11 +31,12 @@ export const dict: Record<string, Record<string, string>> = {
   "open.setup.title": {
     ko: "시작하기 전에", en: "Before we start", de: "Bevor es losgeht", ja: "はじめる前に",
   },
+  // 예전엔 "둘 다" 라고 썼다. 선택지가 셋이 됐으므로 개수를 세지 않는 문장으로 바꾼다.
   "open.setup.hint": {
-    ko: "설정에서 언제든 바꿀 수 있어요.",
-    en: "You can change both anytime in settings.",
-    de: "Beides lässt sich jederzeit in den Einstellungen ändern.",
-    ja: "どちらも設定からいつでも変更できます。",
+    ko: "전부 설정에서 언제든 바꿀 수 있어요.",
+    en: "All of these can be changed anytime in settings.",
+    de: "Alles davon lässt sich jederzeit in den Einstellungen ändern.",
+    ja: "いずれも設定からいつでも変更できます。",
   },
   "open.setup.lang":  { ko: "언어", en: "Language", de: "Sprache", ja: "言語" },
   "open.setup.theme": { ko: "테마", en: "Theme", de: "Theme", ja: "テーマ" },
