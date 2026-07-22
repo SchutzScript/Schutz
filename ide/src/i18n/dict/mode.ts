@@ -57,4 +57,5 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Zu wenig Speicher für die Werkzeug-Historie. Die Unterhaltung wurde behalten.",
     ja: "保存容量が足りずツール履歴を保存できませんでした。会話は残っています。",
   },
+  "conv.untitled": { ko: "새 대화", en: "New conversation", de: "Neue Unterhaltung", ja: "新しい会話" },
 };

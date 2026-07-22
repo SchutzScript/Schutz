@@ -47,6 +47,7 @@ import {
 import { t, t as t2, getLang, setLang, LANGS, onLangChange } from "./i18n";
 import { flushSync } from "react-dom";
 import { buildTimeline } from "./agentTimeline";
+import { parseIndex, prune, titleFrom, upsert, type ConvMeta } from "./conversations";
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos } from "./tour";
 import { Opening } from "./opening/Opening";
@@ -174,6 +175,8 @@ interface S {
   openTools: Record<string, boolean>;
   /** 에이전트 모드에서 코드를 잠깐 띄운 상태 — "필요할 때만 떠오름" */
   sheetOpen: boolean;
+  /** 지금 보고 있는 대화 id. 워크스페이스를 열 때 정해진다. */
+  convId: string | null;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -402,7 +405,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
-    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -797,6 +800,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         // 프로젝트마다 모드를 따로 기억한다 — 설정이 없으면 전역 기본값으로 떨어진다
         uiMode: getUiMode(tree.root),
+        // 어느 대화를 열지 여기서 정한다 — 이어보던 것 → 레거시 이관분 → 가장 최근 → 새것.
+        convId: this.pickConv(tree.root),
         agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
         git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
       } as any), () => {
@@ -805,6 +810,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         this._chatSeen = {};
         this._recallIdx = -1;
         this.setState({ input: "", chatTab: "all", chatAway: false }, () => {
+          // 이 창이 무엇을 보고 있는지 기록 — 다음에 이 프로젝트를 열면 그 대화로 돌아온다
+          try { const k = this.curConvKey(); if (k && this.state.convId) localStorage.setItem(k, this.state.convId); } catch { /* ignore */ }
           this.restoreSession();               // 안에서 seedChatSeen + 하단 스크롤
           this.restoreDraft();                 // 쓰다 만 글 되살리기 (프로젝트별)
         });
@@ -1920,14 +1927,18 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         this.schutzSay(raw, lines + t("sc2.connectionMgmtHint"));
         return true;
       }
-      case "/clear":
       case "/new":
+        // 지우는 게 아니라 닫고 새로 연다 — 최근 항목에 남는다.
+        this.newConversation();
+        return true;
+      case "/clear":
+        // 이건 말 그대로 "지우기" 다. 지금 대화를 비우고 저장분도 없앤다.
         this.history = [];
         this.engine.reset();
         this._cliSession = null;
         this._codexSession = null;
         this.clearSession();
-        this.setState({ messages: [], input: "" });
+        this.setState({ messages: [], tools: [], proposals: [], input: "" });
         return true;
       case "/settings":
       case "/config":
@@ -2106,7 +2117,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         messages: [...s.messages,
           { id: "u" + (this._uid++), role: "user" as const, text: t },
           { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: "아직 연결된 AI가 없습니다.\n\n설정(⚙)을 열고 [로그인]을 눌러 Claude 또는 ChatGPT 계정으로 연결하세요 (구독 사용, API 키 불필요). API 키 방식도 지원합니다." }],
-      }));
+      }), () => this.saveSession());
       return;
     }
     this.startRun(t);
@@ -2678,10 +2689,85 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 대화 세션 영속 (워크스페이스별 localStorage) ──
   // 창 인덱스(win) — 0번(주 창)은 재시작 복원용 안정 키, 그 외 보조 창은 격리 키(동시 창 clobber 방지)
   private _winId: number = (() => { try { return Number(new URLSearchParams(location.search).get("win")) || 0; } catch { return 0; } })();
-  private sessionKey(): string | null {
-    const r = this.state.workspace?.root;
+  // ── 대화 저장 ─────────────────────────────────────────────────────────────
+  // 예전엔 워크스페이스당 대화가 **하나**였다(schutz.session:<root>). 목록에 띄울 과거
+  // 대화가 애초에 없었던 이유다. 이제 색인 하나와 본문 여러 개로 나눈다.
+  //
+  //   schutz.convs:<root>          색인 [{id,title,updatedAt,msgCount}]  — 워크스페이스 공유
+  //   schutz.conv:<root>:<id>      본문 {messages,history,tools,proposals}
+  //   schutz.curConv:<root>[::wN]  이 창이 지금 보고 있는 대화 — **창마다** 다르다
+  //
+  // 색인과 본문을 공유하고 "지금 보는 것" 만 창별로 두는 게 핵심이다. 예전 ::wN 접미사는
+  // 두 창이 단일 세션을 서로 덮어쓰는 걸 막으려던 장치인데, id 가 생기면 그냥 서로 다른
+  // id 를 들면 된다.
+  private convIndexKey(root?: string): string | null {
+    const r = root ?? this.state.workspace?.root;
+    return r ? `schutz.convs:${r}` : null;
+  }
+  private convBodyKey(id: string, root?: string): string | null {
+    const r = root ?? this.state.workspace?.root;
+    return r ? `schutz.conv:${r}:${id}` : null;
+  }
+  private curConvKey(root?: string): string | null {
+    const r = root ?? this.state.workspace?.root;
     if (!r) return null;
-    return this._winId > 0 ? `schutz.session:${r}::w${this._winId}` : `schutz.session:${r}`;
+    return this._winId > 0 ? `schutz.curConv:${r}::w${this._winId}` : `schutz.curConv:${r}`;
+  }
+  /** 이 창이 지금 쓰고 있는 대화 본문 키. */
+  private sessionKey(): string | null {
+    const id = this.state.convId;
+    return id ? this.convBodyKey(id) : null;
+  }
+
+  private convIndex(root?: string): ConvMeta[] {
+    try { return parseIndex(localStorage.getItem(this.convIndexKey(root) ?? "")); } catch { return []; }
+  }
+  private writeConvIndex(index: ConvMeta[], root?: string) {
+    const k = this.convIndexKey(root);
+    if (!k) return;
+    const { kept, dropped } = prune(index);
+    // 떨어진 대화의 **본문도** 지운다 — 안 하면 목록에 없는 고아 키가 영영 쌓인다.
+    for (const d of dropped) {
+      const bk = this.convBodyKey(d.id, root);
+      if (bk) { try { localStorage.removeItem(bk); } catch { /* ignore */ } }
+    }
+    try { localStorage.setItem(k, JSON.stringify(kept)); } catch { /* ignore */ }
+  }
+
+  /** 레거시(단일 세션) → 대화 하나로 이관. 한 번만 돌고, 원본은 한 릴리스 남겨둔다. */
+  private migrateLegacySession(root: string): string | null {
+    if (this.convIndex(root).length) return null;   // 이미 색인이 있으면 이관 대상이 아니다
+    const legacyKeys = [`schutz.session:${root}`, ...(this._winId > 0 ? [`schutz.session:${root}::w${this._winId}`] : [])];
+    for (const lk of legacyKeys) {
+      let raw: string | null = null;
+      try { raw = localStorage.getItem(lk); } catch { /* ignore */ }
+      if (!raw) continue;
+      let d: any = null;
+      try { d = JSON.parse(raw); } catch { continue; }
+      if (!d || !Array.isArray(d.messages) || !d.messages.length) continue;
+      const id = "c" + Date.now().toString(36);
+      const bk = this.convBodyKey(id, root);
+      if (!bk) return null;
+      try { localStorage.setItem(bk, raw); } catch { return null; }
+      this.writeConvIndex([{
+        id, title: titleFrom(d.messages, t("conv.untitled")),
+        updatedAt: Date.now(), msgCount: d.messages.length,
+      }], root);
+      return id;
+    }
+    return null;
+  }
+
+  /** 이 창이 열 대화를 정한다 — 이어보던 것 → 이관분 → 가장 최근 → 새것. */
+  private pickConv(root: string): string {
+    const idx = this.convIndex(root);
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(this.curConvKey(root) ?? ""); } catch { /* ignore */ }
+    if (saved && idx.some(c => c.id === saved)) return saved;
+    const migrated = this.migrateLegacySession(root);
+    if (migrated) return migrated;
+    if (idx.length) return idx[0].id;
+    return "c" + Date.now().toString(36);
   }
   private layoutKey(root?: string): string | null {
     const r = root ?? this.state.workspace?.root;
@@ -2737,9 +2823,11 @@ ${(r.output || "").slice(0, 2000)}`;
     const tools = s.tools.slice(-200).map(({ out, ...rest }) => rest);
     const proposals = s.proposals.slice(-100).map(p =>
       p.status === "pending" ? p : { ...p, find: "", replace: "" });
+    if (!msgs.length && !this.history.length) return;   // 쓸 게 없으면 키를 만들지 않는다
     const payload = JSON.stringify({ messages: msgs, history: this.history.slice(-120), tools, proposals });
     try {
       localStorage.setItem(k, payload);
+      this.touchConvIndex(msgs);
     } catch {
       // 용량 초과 — 조용히 삼키면 다음에 열었을 때 오후치가 통째로 사라진 것으로 보인다.
       // 대화만이라도 남긴다(예전 저장 형태와 같다).
@@ -2778,6 +2866,47 @@ ${(r.output || "").slice(0, 2000)}`;
   private clearSession() {
     const k = this.sessionKey();
     if (k) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
+  }
+
+  /** 저장할 때마다 색인 한 줄을 최신으로 밀어 올린다. 제목은 첫 사용자 메시지에서 나온다. */
+  private touchConvIndex(msgs: ChatMsg[]) {
+    const id = this.state.convId;
+    if (!id) return;
+    // 빈 대화는 목록에 올리지 않는다. /new 를 누르고 아무 말도 안 하면 "새 대화" 한 줄이
+    // 최근 항목에 남아, 다음 /new 마다 빈 줄이 쌓인다.
+    if (!msgs.length) return;
+    this.writeConvIndex(upsert(this.convIndex(), {
+      id, title: titleFrom(msgs, t("conv.untitled")),
+      updatedAt: Date.now(), msgCount: msgs.length,
+    }));
+  }
+
+  /** 새 대화 — 지금 것을 **지우지 않고** 닫은 뒤 빈 대화를 연다.
+   *  예전 /new 는 clearSession() 으로 통째로 삭제했다. 그래서 최근 항목이 없었다. */
+  newConversation() {
+    this.saveSession();                       // 지금까지를 확정해 두고
+    const id = "c" + Date.now().toString(36);
+    this.history = [];
+    this.engine.reset();
+    this._cliSession = null;
+    this._codexSession = null;
+    this.setState({ convId: id, messages: [], tools: [], proposals: [], input: "" }, () => {
+      try { const k = this.curConvKey(); if (k) localStorage.setItem(k, id); } catch { /* ignore */ }
+    });
+  }
+
+  /** 최근 항목에서 하나를 연다. */
+  openConversation(id: string) {
+    if (id === this.state.convId) return;
+    this.saveSession();
+    this.history = [];
+    this.engine.reset();
+    this._cliSession = null;
+    this._codexSession = null;
+    this.setState({ convId: id, messages: [], tools: [], proposals: [], input: "" }, () => {
+      try { const k = this.curConvKey(); if (k) localStorage.setItem(k, id); } catch { /* ignore */ }
+      this.restoreSession();
+    });
   }
 
   async refreshWorkspace() {
@@ -2972,6 +3101,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   private _fsOff: (() => void) | null = null;
+  private _sessionT: ReturnType<typeof setTimeout> | undefined;
   private _langOff: (() => void) | null = null;
 
   // ── 진단(문제 패널) ──
@@ -3158,7 +3288,8 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this._extSearchT) { clearTimeout(this._extSearchT); this._extSearchT = null; }
     if (this._searchTimer) { clearTimeout(this._searchTimer); this._searchTimer = null; }
     if (this._layoutT) { clearTimeout(this._layoutT); this._layoutT = null; }
-    if (this._markerTimer) { clearTimeout(this._markerTimer); this._markerTimer = null; } // 언마운트 후 _scanMarkers setState 방지(_timers 풀 밖)
+    if (this._markerTimer) { clearTimeout(this._markerTimer); this._markerTimer = null; }
+    if (this._sessionT) { clearTimeout(this._sessionT); this._sessionT = undefined; } // 언마운트 후 _scanMarkers setState 방지(_timers 풀 밖)
     for (const k of Object.keys(this._closeTimers)) clearTimeout(this._closeTimers[k]);
     this._toastTimers.forEach(clearTimeout); this._toastTimers.clear(); // 토스트 전용 타이머(_timers 풀 밖)
     this._cliOff?.();
@@ -3654,6 +3785,14 @@ ${(r.output || "").slice(0, 2000)}`;
       requestAnimationFrame(() => {
         for (const p of paneRegistry.panes.values()) { try { p.editor.layout(); } catch { /* 이미 dispose */ } }
       });
+    }
+    // 대화가 바뀌면 저장한다. 예전엔 **턴이 끝나야** 저장했는데, 응답이 실패하거나 아직
+    // 도는 중이면 그 대화는 색인에 영영 안 올라왔다 — 최근 항목에는 말을 건 순간부터
+    // 있어야 한다. 전송 경로마다 손으로 다는 건 하나를 빠뜨렸고(실제로 그랬다) 새 경로가
+    // 생기면 또 빠진다. 참조 비교라 O(1) 이고, persistLayout 과 같은 디바운스 관용구다.
+    if (_ps && _ps.messages !== this.state.messages) {
+      clearTimeout(this._sessionT);
+      this._sessionT = setTimeout(() => this.saveSession(), 400);
     }
     // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
     if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
