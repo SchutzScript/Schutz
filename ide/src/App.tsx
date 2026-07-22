@@ -4663,7 +4663,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
     return (
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 3, padding: "0 12px 6px",
-        paddingLeft: this.state.uiMode === "agent" ? "max(18px, calc((100% - 88ch) / 2))" : undefined,
+        paddingLeft: this.state.uiMode === "agent" ? "max(24px, calc((100% - 52rem) / 2))" : undefined,
         overflowX: "auto" }}>
         {tab("all", t("chat.tabAll"))}
         <span style={{ flex: "none", width: 1, height: 13, background: "var(--w07)", margin: "0 3px" }} />
@@ -4722,11 +4722,50 @@ ${(r.output || "").slice(0, 2000)}`;
       return <div style={{ fontSize: 12.5, color: "var(--fg-dim2)", padding: "18px 2px", fontFamily: SUIT }}>{t("mode.transcriptEmpty")}</div>;
     }
     return rows.map(r => {
-      if (r.k === "msg") return this.renderChatMsg(r.v as ChatMsg);
+      if (r.k === "msg") return this.renderAgentMsg(r.v as ChatMsg);
       if (r.k === "tool") return this.renderToolRow(r.v as ToolItem);
       if (r.k === "prop") return this.renderProposalCard(r.v as Proposal, { wide: true });
       return this.renderApprovalCard(r.v as { command: string; rationale: string; agent: string });
     });
+  }
+
+  // ── 에이전트 모드 표기법 ──────────────────────────────────────────────────
+  // 대화 앱의 문법이다. 좁은 칼럼용 장치(아바타 거터·◆ 마커·작은 글씨)를 그대로 넓히면
+  // 사이드바를 늘려놓은 것처럼 보인다 — 여기서는 읽는 화면으로 다시 짠다.
+  //
+  //  · 사람 말은 부드러운 사각 안에 담고, 에이전트 말은 아무 것에도 담지 않는다.
+  //    담긴 쪽과 담기지 않은 쪽의 대비만으로 누가 말하는지 알 수 있어, 이름표가 필요 없다.
+  //  · 글자는 비례 폰트 15px, 행간 1.75. 읽으라고 만든 화면이라 코드 폰트를 쓰지 않는다.
+  //  · 턴 사이 24px. 빽빽하면 기록이 되고 성기면 대화가 된다.
+  private renderAgentMsg(m: ChatMsg) {
+    if (m.role === "user") {
+      return (
+        <div key={m.id} className="sz-in" style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{
+            maxWidth: "84%", padding: "12px 16px", borderRadius: 16,
+            background: "var(--w05)", border: "1px solid var(--w06)",
+            fontFamily: SUIT, fontSize: 14.5, lineHeight: 1.7, color: "var(--fg)",
+            whiteSpace: "pre-wrap", overflowWrap: "anywhere",
+          }}>{m.text}</div>
+        </div>
+      );
+    }
+    return (
+      <div key={m.id} className="sz-in sz-msg" style={{ position: "relative", paddingRight: 26 }}>
+        {/* 여러 에이전트가 도는 앱이라 이름은 남긴다 — 다만 아주 조용히, 문단 위에 얹는다 */}
+        {m.who && <div style={{ fontSize: 11.5, fontWeight: 600, color: this.chatAgentColor(m.agent), marginBottom: 6 }}>{m.who}</div>}
+        <div style={{
+          fontFamily: SUIT, fontSize: 15, lineHeight: 1.78, color: "var(--fg-code)",
+          whiteSpace: "pre-wrap", overflowWrap: "anywhere",
+        }}>
+          {m.text}
+          {m.streaming && <span style={{ display: "inline-block", width: 2, height: 14, marginLeft: 2, background: "var(--accent)", verticalAlign: -2, animation: "szBlink 1s steps(1) infinite" }} />}
+        </div>
+        <button className="sz-msg-copy hv05" title={t("chat.copyMsg")}
+          onClick={() => { navigator.clipboard.writeText(m.text ?? "").then(() => this.toast("ok", t("chat.copied")), () => { /* 거부 */ }); }}
+          style={{ position: "absolute", top: 0, right: 0, height: 21, padding: "0 8px", fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-dim)", background: "var(--bg-card)", border: "1px solid var(--w08)" }}>⧉</button>
+      </div>
+    );
   }
 
   /** 도구 호출 한 줄. CLI 의 리듬을 만드는 자리라 모노스페이스다.
@@ -4742,14 +4781,19 @@ ${(r.output || "").slice(0, 2000)}`;
           <span style={{ flex: "none", width: 9, fontSize: 8, color: "var(--fg-dim)" }}>{canOpen ? (open ? "▾" : "▸") : ""}</span>
           <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: color, opacity: ti.st === "run" ? 1 : .5 }} />
           <span style={{ flex: "none", color: "var(--fg-sub)" }}>{ti.verb}</span>
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-dim)" }}>{ti.path}</span>
+          {/* 경로만 코드 폰트다 — 거기만 글자 정렬이 뜻을 가진다. 누르면 시트로 뜬다. */}
+          {ti.path && this.state.workspace
+            ? <span onClick={e => { e.stopPropagation(); this.openSheet(ti.path); }} title={t("mode.openInSheet")}
+                style={{ minWidth: 0, fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-dim)", cursor: "pointer", textDecorationLine: "underline", textDecorationColor: "var(--w14)", textUnderlineOffset: 3 }}>{ti.path}</span>
+            : <span style={{ minWidth: 0, fontFamily: MONO, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-dim)" }}>{ti.path}</span>}
           <div style={{ flex: 1 }} />
           {ti.st === "run"
             ? <span style={{ flex: "none", width: 9, height: 9, borderRadius: "50%", border: "1.5px solid var(--w14)", borderTopColor: color, animation: "szSpin .8s linear infinite" }} />
-            : <span style={{ flex: "none", fontSize: 10.5, color: "var(--fg-dim2)" }}>{ti.note}</span>}
+            : <span style={{ flex: "none", fontSize: 11, color: "var(--fg-dim2)" }}>{ti.note}</span>}
+          {canOpen && <span style={{ flex: "none", fontSize: 8, color: "var(--fg-dim)" }}>{open ? "▾" : "▸"}</span>}
         </div>
         {open && ti.out && (
-          <pre style={{ margin: "0 0 0 23px", padding: "8px 10px", maxHeight: 320, overflow: "auto", fontFamily: MONO, fontSize: 11, lineHeight: 1.6, color: "var(--fg-code)", background: "var(--bg-editor)", border: "1px solid var(--w06)", borderRadius: 8, whiteSpace: "pre" }}>{ti.out}</pre>
+          <pre style={{ margin: 0, padding: "10px 13px", maxHeight: 320, overflow: "auto", fontFamily: MONO, fontSize: 11, lineHeight: 1.6, color: "var(--fg-code)", background: "var(--bg-editor)", border: "1px solid var(--w06)", borderRadius: 8, whiteSpace: "pre" }}>{ti.out}</pre>
         )}
       </div>
     );
@@ -4790,7 +4834,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const a = this.state.askRun;
     if (!a) return null;
     return (
-      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 9, padding: "7px 14px", paddingLeft: "max(18px, calc((100% - 88ch) / 2))", paddingRight: "max(18px, calc((100% - 88ch) / 2))", borderTop: "1px solid #C4A88233", background: "color-mix(in srgb, #C4A882 8%, transparent)" }}>
+      <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 9, padding: "7px 14px", paddingLeft: "max(24px, calc((100% - 52rem) / 2))", paddingRight: "max(24px, calc((100% - 52rem) / 2))", borderTop: "1px solid #C4A88233", background: "color-mix(in srgb, #C4A882 8%, transparent)" }}>
         <span style={{ fontSize: 11.5, color: "#D8C09A", fontFamily: SUIT }}>{t("mode.approvalWaiting")}</span>
         <span style={{ minWidth: 0, flex: 1, fontFamily: MONO, fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>$ {a.command}</span>
         <button className="hv05" onClick={() => this.answerRun(false)}
@@ -4828,7 +4872,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const ag = s.uiMode === "agent";
     return (
       <div data-tour="chat" className="vtConversation" style={ag ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : { flex: "none", height: s.chatH, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: "none", height: ag ? 40 : 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
+        <div style={{ flex: "none", height: ag ? 40 : 34, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>
           {t("chat.title")}
           <div style={{ flex: 1 }} />
           {window.schutz && s.cliAgents.claude?.ok && s.workspace && !s.running && (
@@ -4852,14 +4896,14 @@ ${(r.output || "").slice(0, 2000)}`;
           </button>
         )}
         <div ref={el => { this._chat = el; }} onScroll={this.onChatScroll} style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden", scrollbarGutter: "stable",
-            padding: ag ? "16px max(18px, calc((100% - 88ch) / 2)) 22px" : "0 16px 14px",
-            display: "flex", flexDirection: "column", gap: ag ? 13 : 10 }}>
+            padding: ag ? "28px max(24px, calc((100% - 52rem) / 2)) 40px" : "0 16px 14px",
+            display: "flex", flexDirection: "column", gap: ag ? 24 : 10 }}>
           {ag ? this.renderAgentRows() : this.visibleMessages().map(m => this.renderChatMsg(m))}
         </div>
         </div>
         {ag && this.renderApprovalBar()}
         {window.schutz && s.workspace && (
-          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, position: "relative", borderTop: "1px solid var(--w06)" }}>
+          <div style={{ flex: "none", display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", padding: "8px 12px 2px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, position: "relative", borderTop: "1px solid var(--w06)" }}>
             <button className="hv05" title={t("chat.attachFileTitle")} onClick={() => this.setState(st => ({ attachPickerOpen: !st.attachPickerOpen, attachQuery: "" }))}
               style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachFile")}</button>
             <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
@@ -4892,8 +4936,8 @@ ${(r.output || "").slice(0, 2000)}`;
             })()}
           </div>
         )}
-        <div style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingRight: ag ? "max(18px, calc((100% - 88ch) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
-          <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
+        <div style={{ flex: "none", padding: "10px 12px", paddingLeft: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingRight: ag ? "max(24px, calc((100% - 52rem) / 2))" : undefined, paddingBottom: ag ? 16 : 10, borderTop: s.attach.length || (window.schutz && s.workspace) ? "none" : "1px solid var(--w06)", display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
+          <div className="szMoving" style={{ flex: 1, padding: 1.5, borderRadius: ag ? 20 : 10, background: s.running ? "linear-gradient(90deg,#4D5D53,var(--accent),#A9BCA9,var(--accent),#4D5D53)" : "var(--w10)", backgroundSize: s.running ? "200% 100%" : "auto", animation: s.running ? "szRingFlow 2.2s linear infinite" : "none", transition: "background .4s ease" }}>
             {(() => {
               const models = this.modelPalette();
               const list = models.length ? [] : this.slashList();
@@ -4967,13 +5011,18 @@ ${(r.output || "").slice(0, 2000)}`;
                 }
               }}
               placeholder={t("chat.inputPlaceholder")}
-              style={{ width: "100%", background: "var(--bg-root)", border: "none", borderRadius: 8.5, minHeight: 34, maxHeight: 148, padding: "8px 13px", color: "var(--fg)", fontSize: 12.5, lineHeight: 1.5, fontFamily: SUIT, outline: "none", display: "block", resize: "none", overflowY: "auto" }} />
+              style={{ width: "100%", background: "var(--bg-root)", border: "none",
+                borderRadius: ag ? 19 : 8.5,
+                minHeight: ag ? 52 : 34, maxHeight: ag ? 240 : 148,
+                padding: ag ? "15px 20px" : "8px 13px",
+                color: "var(--fg)", fontSize: ag ? 14.5 : 12.5, lineHeight: ag ? 1.6 : 1.5,
+                fontFamily: SUIT, outline: "none", display: "block", resize: "none", overflowY: "auto" }} />
           </div>
           {(() => {
             const canSend = (!!this.state.input.trim() || this.state.attach.length > 0) && !this.state.running;
             return (
               <button className="hvAccent" onClick={() => this.send()} disabled={!canSend} title={this.state.running ? t("chat.sending") : t("chat.send")}
-                style={{ height: 37, width: 40, fontSize: 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: 9, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", fontWeight: 700, transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
+                style={{ height: ag ? 44 : 37, width: ag ? 44 : 40, fontSize: ag ? 16 : 14, fontFamily: "inherit", cursor: canSend ? "pointer" : "default", borderRadius: ag ? 22 : 9, color: canSend ? "var(--bg-root)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--w06)", border: "none", fontWeight: 700, transition: "background var(--dur) var(--ease), color var(--dur) var(--ease)" }}>↑</button>
             );
           })()}
         </div>
