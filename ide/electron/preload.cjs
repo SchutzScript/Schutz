@@ -66,6 +66,13 @@ contextBridge.exposeInMainWorld("schutz", {
   /** Claude Code · Codex 커스텀 명령 발견 */
   agentCommands: (root) => ipcRenderer.invoke("schutz:agentCommands", root),
 
+  /** 지난 대화 가져오기 — 파일 수만 센다(내용 안 읽음). 오프닝이 블록을 띄울지 정하는 용도 */
+  cliChatCounts: () => ipcRenderer.invoke("schutz:cliChatCounts"),
+  /** 목록 — 각 파일 앞부분 headBytes 만. 해석은 src/cliChats.ts 가 한다 */
+  cliChatList: (agent, headBytes) => ipcRenderer.invoke("schutz:cliChatList", agent, headBytes),
+  /** 열기 — 파일 끝 tailBytes 만 */
+  cliChatRead: (agent, file, tailBytes) => ipcRenderer.invoke("schutz:cliChatRead", agent, file, tailBytes),
+
   /** MCP 호스트 — Schutz가 직접 stdio MCP 서버를 실행/사용 */
   mcpList: () => ipcRenderer.invoke("schutz:mcpList"),
   mcpStart: (name) => ipcRenderer.invoke("schutz:mcpStart", name),
