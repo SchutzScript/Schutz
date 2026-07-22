@@ -22,6 +22,7 @@ export default defineConfig({
       "src/agentTimeline.test.ts",
       "src/conversations.test.ts",
       "src/cliChats.test.ts",
+      "src/tour.test.ts",
     ],
   },
 });

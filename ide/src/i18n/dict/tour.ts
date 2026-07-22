@@ -41,11 +41,13 @@ export const dict: Record<string, Record<string, string>> = {
   },
 
   "tour.editor.title": { ko: "에디터", en: "Editor", de: "Editor", ja: "エディタ" },
+  // Ctrl+K 는 이 앱의 간판이라 편집기 단계 안에 같이 넣는다 — 같은 곳을 두 번
+  // 가리키는 단계로 나누면 진도가 안 나가는 느낌이 든다.
   "tour.editor.body": {
-    ko: "탭을 드래그해 순서를 바꾸고, 보기 메뉴에서 화면을 2·4분할할 수 있습니다. 파일이 많으면 탭 줄을 휠로 굴리세요.",
-    en: "Drag tabs to reorder them, and split the view into 2 or 4 panes from the View menu. With many files open, scroll the tab strip with the wheel.",
-    de: "Tabs per Drag umsortieren; im Ansichtsmenü lässt sich die Fläche 2- oder 4-fach teilen. Bei vielen Dateien die Tab-Leiste mit dem Mausrad scrollen.",
-    ja: "タブはドラッグで並べ替えでき、表示メニューから画面を2分割・4分割できます。ファイルが多いときはタブ列をホイールでスクロールします。",
+    ko: "탭을 드래그해 순서를 바꾸고, 보기 메뉴에서 2·4분할할 수 있습니다. 그리고 여기서 코드를 고르고 Ctrl+K 를 누르면 **그 부분만** 고쳐달라고 시킬 수 있어요 — 바뀐 줄이 제자리에서 타이핑되며 나타납니다.",
+    en: "Drag tabs to reorder, split into 2 or 4 panes from the View menu. And select code here, press Ctrl+K, and ask for a change to **just that part** — the new lines type themselves in place.",
+    de: "Tabs per Drag umsortieren, im Ansichtsmenü 2- oder 4-fach teilen. Und: Code markieren, Strg+K drücken und **nur diesen Teil** ändern lassen — die neuen Zeilen tippen sich an Ort und Stelle.",
+    ja: "タブはドラッグで並べ替え、表示メニューから2・4分割できます。さらにコードを選んで Ctrl+K を押せば、**その部分だけ**の修正を頼めます — 変わる行がその場でタイピングされて現れます。",
   },
 
   // ── 핵심 ─────────────────────────────────────────────────────────────
@@ -91,11 +93,13 @@ export const dict: Record<string, Record<string, string>> = {
 
   // ── 개발 환경 ────────────────────────────────────────────────────────
   "tour.terminal.title": { ko: "터미널과 문제", en: "Terminal & Problems", de: "Terminal & Probleme", ja: "ターミナルと問題" },
+  // 명령 실행(승인)도 여기서 말한다. 따로 단계를 두면 터미널 바로 옆에서 같은
+  // 이야기를 두 번 하게 된다.
   "tour.terminal.body": {
-    ko: "진짜 셸입니다 — 대화형 프로그램도 그대로 돌아갑니다. 탭을 여러 개 열 수 있고, AI 탭에는 에이전트가 지금 무엇을 하는지 흘러갑니다. 문제 탭에는 언어 서버가 찾은 오류와 경고가 모입니다.",
-    en: "A real shell — interactive programs work as they should. Open multiple tabs; the AI tab streams what the agents are doing right now. The Problems tab collects errors and warnings from the language servers.",
-    de: "Eine echte Shell — interaktive Programme funktionieren wie erwartet. Mehrere Tabs möglich; der KI-Tab zeigt live, was die Agenten tun. Der Probleme-Tab sammelt Fehler und Warnungen der Sprachserver.",
-    ja: "本物のシェルです — 対話型プログラムもそのまま動きます。タブを複数開けて、AIタブにはエージェントの動きが流れます。問題タブには言語サーバーが見つけたエラーと警告が集まります。",
+    ko: "진짜 셸입니다 — 대화형 프로그램도 그대로 돌아갑니다. AI 탭에는 에이전트가 지금 무엇을 하는지, 문제 탭에는 언어 서버가 찾은 오류가 모입니다. 에이전트가 명령을 돌리려 하면 **무엇을 돌릴지 먼저 보여주고 물어봅니다** — 승인하기 전에는 아무것도 실행되지 않습니다.",
+    en: "A real shell — interactive programs work as they should. The AI tab streams what the agents are doing; Problems collects what the language servers found. When an agent wants to run a command it **shows you the command first and asks** — nothing runs before you approve.",
+    de: "Eine echte Shell — interaktive Programme funktionieren wie erwartet. Der KI-Tab zeigt live, was die Agenten tun; Probleme sammelt Funde der Sprachserver. Will ein Agent einen Befehl ausführen, **zeigt er ihn erst und fragt** — vor Ihrer Zustimmung läuft nichts.",
+    ja: "本物のシェルです — 対話型プログラムもそのまま動きます。AIタブにはエージェントの動きが、問題タブには言語サーバーが見つけたエラーが集まります。エージェントがコマンドを実行しようとすると、**何を実行するかを先に見せて尋ねます** — 承認するまで何も実行されません。",
   },
 
   "tour.git.title": { ko: "소스 컨트롤", en: "Source Control", de: "Versionskontrolle", ja: "ソース管理" },
@@ -136,5 +140,73 @@ export const dict: Record<string, Record<string, string>> = {
     en: "You can replay this walkthrough anytime from Help → Replay Tutorial. The full keyboard shortcut list lives in the same menu.",
     de: "Sie können diese Führung jederzeit über Hilfe → Tutorial wiederholen erneut ansehen. Die vollständige Tastenkürzelliste findet sich im selben Menü.",
     ja: "この案内はヘルプメニューの「チュートリアルをもう一度」からいつでも見返せます。ショートカット一覧も同じメニューにあります。",
+  },
+
+  // ── 에이전트 모드 트랙 ──────────────────────────────────────────────
+  // 이 모드에 예전엔 단계가 7개뿐이었고 그나마 절반이 공용 크롬이었다.
+  "tour.agChat.title": { ko: "대화가 화면 전체입니다", en: "The conversation is the screen", de: "Das Gespräch ist der Bildschirm", ja: "会話が画面全体です" },
+  "tour.agChat.body": {
+    ko: "파일 트리도 탭도 없습니다. 요청하면 무엇을 읽고 무엇을 고쳤는지가 이 한 줄기로 흐르고, 코드는 필요할 때만 옆에 떠오릅니다.",
+    en: "No file tree, no tabs. Ask for something and everything read and changed flows here in one thread — code surfaces beside it only when you need it.",
+    de: "Kein Dateibaum, keine Tabs. Stellen Sie eine Anfrage: Gelesenes und Geändertes läuft hier in einem Strang — Code erscheint nur bei Bedarf daneben.",
+    ja: "ファイルツリーもタブもありません。依頼すると、何を読み何を変えたかがひと続きで流れ、コードは必要なときだけ横に現れます。",
+  },
+  "tour.agComposer.title": { ko: "도구는 입력 상자 안에", en: "The tools live in the box", de: "Die Werkzeuge sitzen im Feld", ja: "ツールは入力欄の中に" },
+  "tour.agComposer.body": {
+    ko: "파일을 붙이고, 편집기에서 고른 부분을 넘기고, 어느 에이전트에게 시킬지 고르는 걸 전부 여기서 합니다. 실행 중에는 보내기 자리가 중지로 바뀝니다.",
+    en: "Attach a file, hand over the selection from the editor, pick which agent takes it — all from here. While a run is in flight, send becomes stop.",
+    de: "Datei anhängen, die Auswahl aus dem Editor übergeben, den zuständigen Agenten wählen — alles von hier. Während eines Laufs wird aus Senden ein Stopp.",
+    ja: "ファイルを添え、エディタで選んだ範囲を渡し、どのエージェントに任せるかを選ぶ — すべてここで行います。実行中は送信が停止に変わります。",
+  },
+  "tour.agAside.title": { ko: "왼쪽에 늘 있는 것들", en: "Always on the left", de: "Immer links", ja: "左に常にあるもの" },
+  "tour.agAside.body": {
+    ko: "새 대화를 열고, 이 대화가 만든 변경을 보고, 설정으로 갑니다. 지난 대화는 그 아래에 쌓입니다.",
+    en: "Start a new conversation, see what this one changed, jump to settings. Past conversations stack up below.",
+    de: "Neue Unterhaltung beginnen, sehen was diese geändert hat, zu den Einstellungen springen. Frühere Unterhaltungen sammeln sich darunter.",
+    ja: "新しい会話を始め、この会話が加えた変更を見て、設定へ移ります。過去の会話はその下にたまります。",
+  },
+  "tour.agRecents.title": { ko: "대화는 지워지지 않습니다", en: "Conversations don't vanish", de: "Unterhaltungen verschwinden nicht", ja: "会話は消えません" },
+  "tour.agRecents.body": {
+    ko: "새 대화를 열어도 앞의 것은 남습니다. 오늘·어제·이전으로 묶여 있고, 눌러서 언제든 이어갈 수 있습니다.",
+    en: "Starting a new one keeps the old ones. They group by today, yesterday, and earlier — click any of them to pick it back up.",
+    de: "Eine neue zu beginnen behält die alten. Sie gruppieren sich nach heute, gestern und früher — klicken Sie eine an, um weiterzumachen.",
+    ja: "新しく始めても前のものは残ります。今日・昨日・それ以前でまとまり、押せばいつでも続けられます。",
+  },
+  "tour.agArtifacts.title": { ko: "이 대화가 만든 것", en: "What this conversation made", de: "Was diese Unterhaltung erzeugt hat", ja: "この会話が作ったもの" },
+  "tour.agArtifacts.body": {
+    ko: "여기 모이는 건 프로젝트 전체 파일이 아니라 **이 대화에서 손댄 것**뿐입니다. 눌러서 오른쪽에 펼쳐 볼 수 있습니다.",
+    en: "This collects only what this conversation touched — not every file in the project. Click one to open it on the right.",
+    de: "Hier sammelt sich nur, was diese Unterhaltung angefasst hat — nicht jede Datei im Projekt. Klicken Sie eine an, um sie rechts zu öffnen.",
+    ja: "ここに集まるのはプロジェクト全体ではなく、**この会話で触れたもの**だけです。押すと右側に開きます。",
+  },
+  "tour.agSide.title": { ko: "코드는 옆에 뜹니다", en: "Code opens beside you", de: "Code öffnet sich daneben", ja: "コードは横に開きます" },
+  "tour.agSide.body": {
+    ko: "대화를 덮지 않습니다 — 왼쪽에서 계속 말하면서 오른쪽에서 코드를 볼 수 있어요. 가장자리를 끌어 폭을 바꾸고, Esc 로 닫습니다.",
+    en: "It never covers the conversation — keep talking on the left while you read on the right. Drag the edge to resize, Esc to close.",
+    de: "Es verdeckt nie das Gespräch — links weiterreden, rechts mitlesen. Ziehen Sie die Kante zum Anpassen, Esc schließt.",
+    ja: "会話を覆いません — 左で話しながら右でコードを読めます。端をドラッグして幅を変え、Escで閉じます。",
+  },
+  "tour.agImport.title": { ko: "쓰던 대화를 데려오기", en: "Bring your old chats", de: "Frühere Chats mitbringen", ja: "使っていた会話を連れてくる" },
+  "tour.agImport.body": {
+    ko: "Claude Code 나 Codex 로 나눈 대화를 가져와 여기서 이어갈 수 있습니다. 사이드바의 가져오기, 또는 AI 메뉴에서요. 원본 파일은 건드리지 않습니다.",
+    en: "Pull in conversations you had in Claude Code or Codex and continue them here — from Import in the sidebar, or the AI menu. The original files are left untouched.",
+    de: "Holen Sie Unterhaltungen aus Claude Code oder Codex herüber und führen Sie sie hier fort — über Importieren in der Seitenleiste oder das KI-Menü. Die Originaldateien bleiben unberührt.",
+    ja: "Claude Code や Codex での会話を取り込んで、ここで続けられます。サイドバーの取り込む、またはAIメニューから。元のファイルは触りません。",
+  },
+  "tour.agReview.title": { ko: "반영은 당신이 정합니다", en: "You decide what lands", de: "Sie entscheiden, was bleibt", ja: "反映はあなたが決めます" },
+  "tour.agReview.body": {
+    ko: "고칠 것이 생기면 흐름 안에 카드로 올라옵니다. 바뀐 줄을 그 자리에서 보고 수락하거나 거절하세요 — 수락하기 전에는 파일이 바뀌지 않습니다.",
+    en: "When there's an edit, it arrives as a card in the flow. Read the changed lines right there and accept or reject — nothing touches the file until you accept.",
+    de: "Steht eine Änderung an, erscheint sie als Karte im Verlauf. Lesen Sie die geänderten Zeilen dort und nehmen Sie an oder lehnen Sie ab — vor der Annahme ändert sich keine Datei.",
+    ja: "直すものがあると流れの中にカードで現れます。変わる行をその場で見て、受け入れるか拒否してください — 受け入れるまでファイルは変わりません。",
+  },
+
+  // ── 모드 전환 — 두 트랙을 잇는 다리 ─────────────────────────────────
+  "tour.mode.title": { ko: "다른 모양도 있습니다", en: "There's another shape", de: "Es gibt noch eine Form", ja: "もう一つの形もあります" },
+  "tour.mode.body": {
+    ko: "에디터는 파일과 탭이 중심, 에이전트는 대화가 화면 전체입니다. 여기서 언제든 오갈 수 있고 — 열어둔 파일도 대화도 그대로 남습니다. 프로젝트마다 따로 기억합니다. Ctrl+Shift+M.",
+    en: "Editor puts files and tabs at the centre; Agent gives the whole screen to the conversation. Switch anytime here — open files and the conversation both survive. Remembered per project. Ctrl+Shift+M.",
+    de: "Editor stellt Dateien und Tabs in den Mittelpunkt; Agent gibt dem Gespräch den ganzen Bildschirm. Jederzeit hier wechseln — offene Dateien und das Gespräch bleiben. Pro Projekt gemerkt. Strg+Umschalt+M.",
+    ja: "エディタはファイルとタブが中心、エージェントは会話が画面全体です。ここでいつでも行き来でき、開いたファイルも会話もそのまま残ります。プロジェクトごとに記憶します。Ctrl+Shift+M。",
   },
 };
