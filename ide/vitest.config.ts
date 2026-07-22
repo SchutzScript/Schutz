@@ -21,6 +21,7 @@ export default defineConfig({
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",
       "src/conversations.test.ts",
+      "src/cliChats.test.ts",
     ],
   },
 });
