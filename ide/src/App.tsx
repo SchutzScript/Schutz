@@ -4242,6 +4242,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.models": this.openO({ openMenu: null, settingsOpen: true }); return;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
+                                case "ai.import": this.setState({ openMenu: null }); this.openImport(); return;
                                 case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
                                 case "view.split4": this.setLayout(4); return;
