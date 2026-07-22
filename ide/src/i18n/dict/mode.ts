@@ -58,4 +58,24 @@ export const dict: Record<string, Record<string, string>> = {
     ja: "保存容量が足りずツール履歴を保存できませんでした。会話は残っています。",
   },
   "conv.untitled": { ko: "새 대화", en: "New conversation", de: "Neue Unterhaltung", ja: "新しい会話" },
+  // ── 에이전트 모드 사이드바 ──
+  "aside.newChat":   { ko: "새 대화", en: "New chat", de: "Neue Unterhaltung", ja: "新しい会話" },
+  "aside.artifacts": { ko: "아티팩트", en: "Artifacts", de: "Artefakte", ja: "アーティファクト" },
+  "aside.customize": { ko: "사용자 지정", en: "Customize", de: "Anpassen", ja: "カスタマイズ" },
+  "aside.today":     { ko: "오늘", en: "Today", de: "Heute", ja: "今日" },
+  "aside.yesterday": { ko: "어제", en: "Yesterday", de: "Gestern", ja: "昨日" },
+  "aside.older":     { ko: "이전", en: "Earlier", de: "Früher", ja: "それ以前" },
+  "aside.noRecents": {
+    ko: "아직 대화가 없습니다.",
+    en: "No conversations yet.",
+    de: "Noch keine Unterhaltungen.",
+    ja: "まだ会話がありません。",
+  },
+  // 에이전트가 만든 것만 여기 모인다 — 프로젝트 전체 파일 목록이 아니다
+  "aside.noArtifacts": {
+    ko: "이 대화에서 만든 변경이 여기에 모입니다.",
+    en: "Changes made in this conversation collect here.",
+    de: "Änderungen aus dieser Unterhaltung sammeln sich hier.",
+    ja: "この会話で加えた変更がここに集まります。",
+  },
 };
