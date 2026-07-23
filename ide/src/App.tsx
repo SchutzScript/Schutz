@@ -4149,7 +4149,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.state.demoRunning && (
           <button onClick={() => this.skipDemo()} className="hv08"
             style={{
-              position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 12, zIndex: 481,
+              position: "fixed", right: 18, bottom: 12, zIndex: 481,
               fontFamily: SUIT, fontSize: 12, padding: "7px 16px", borderRadius: 8, cursor: "pointer",
               border: "1px solid var(--w12)", background: "var(--w04)", color: "var(--fg-sub)",
               backdropFilter: "blur(6px)",
@@ -4714,8 +4714,21 @@ ${(r.output || "").slice(0, 2000)}`;
                 <div style={{ flex: 1 }} />
                 {t.st === "run"
                   ? <span style={{ ...spinner("var(--accent)", "rgba(143,168,147,.25)"), flex: "none" }} />
-                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55" }}>{t.note || doneLabel}</span>}
+                  /* 완료 라벨은 스피너가 있던 자리에 **떠오르며** 들어온다 — 스피너에서 이
+                     span 으로 노드가 갈리므로 이 애니메이션은 완료되는 그 순간 한 번 돈다.
+                     예전엔 스피너가 사라지고 글자가 제자리에 툭 나타나서 "끝나는 과정" 이
+                     안 보였다. */
+                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55", animation: "szFadeUp .32s var(--ease) both" }}>{t.note || doneLabel}</span>}
               </div>
+              {/* 명령 출력 — 있으면 도구 줄 밑에 그대로 편다. 에디터 모드에서 도구는 이 flow
+                  패널에만 뜨는데(대화 옆 renderToolRow 는 에이전트 모드용) 여기엔 출력이 안
+                  보여서, 실행 결과가 "돌지도 않고 완료" 로 읽혔다. 한 줄씩 흘려 넣으면 이 자리에
+                  줄이 차오르며 실제로 도는 것처럼 마친다. */}
+              {t.out && (
+                <pre style={{ margin: "6px 0 0 22px", padding: "8px 11px", maxHeight: 160, overflow: "auto",
+                  fontFamily: MONO, fontSize: 10.5, lineHeight: 1.65, color: "var(--fg-code)",
+                  background: "var(--bg-editor)", border: "1px solid var(--w06)", borderRadius: 7, whiteSpace: "pre" }}>{t.out}</pre>
+              )}
             </div>
           );
         })}
@@ -6971,7 +6984,27 @@ ${(r.output || "").slice(0, 2000)}`;
         await this.demoSleep(2600);
         if (this._demoAbort) { this.setState({ askRun: null }); return; }
         this.setState({ askRun: null });
-        await this.demoTool("run", DEMO_CMD, 1200, DEMO_CMD_OUT);
+        // 실행은 시연의 클라이맥스다. 예전엔 스피너 1.2초 뒤 결과가 통째로 툭 떴다 —
+        // "돌려도 되냐" 를 물어놓고 정작 도는 모습이 안 보였다. 여기서는 도구 줄의
+        // 출력을 펼친 채로 한 줄씩 흘려, 테스트가 **실제로 도는 것처럼** 마친다.
+        {
+          const runId = "t" + (this._uid++);
+          this.addTool(runId, "claude", t("open.tool.run"), DEMO_CMD);
+          this.setState(st => ({ openTools: { ...st.openTools, [runId]: true } }));
+          const lines = DEMO_CMD_OUT.split("\n");
+          let acc = "";
+          for (let i = 0; i < lines.length; i++) {
+            if (this._demoAbort) return;
+            acc += (i ? "\n" : "") + lines[i];
+            this.setTool(runId, { out: acc });
+            await this.demoSleep(340);
+          }
+          if (this._demoAbort) return;
+          await this.demoSleep(420);
+          this.setTool(runId, { st: "done" });   // 출력이 다 흐른 뒤에야 완료로 넘긴다
+        }
+        await this.demoSleep(500);
+        if (this._demoAbort) return;
         this.setState(s => ({
           messages: [...s.messages, { id: "a" + (this._uid++), role: "ai" as const, who: this.agDef("claude").name, agent: "claude", text: t("open.runDone") }],
         }));
