@@ -248,7 +248,8 @@ export class Opening extends React.Component<Props, State> {
     // key 를 쪽 번호로 두면 넘길 때마다 노드가 갈리므로 애니메이션이 다시 재생된다.
     // 내비게이션은 이 밖에 둔다 — 버튼이 같이 미끄러지면 누른 것이 도망가는 것처럼 보인다.
     // 쪽마다 붙는 예시 그림 — 1쪽의 모드 카드처럼, 그 쪽이 무엇을 정하는지 뼈대로 보여준다.
-    const topic = ({ 2: "ai", 3: "autonomy", 4: "keymap", 5: "fonts" } as const)[s.page as 2 | 3 | 4 | 5];
+    // 키맵(4쪽)은 세 옵션 카드가 **각각** 예시라 위쪽 공용 그림을 붙이지 않는다.
+    const topic = ({ 2: "ai", 3: "autonomy", 5: "fonts" } as Record<number, "ai" | "autonomy" | "fonts">)[s.page];
     return (
       <>
         <div key={s.page} className={s.pageDir > 0 ? "sz-step-fwd" : "sz-step-back"}
@@ -400,18 +401,76 @@ export class Opening extends React.Component<Props, State> {
     );
   }
 
-  /** 4쪽 — 키맵. 손에 배인 단축키가 있으면 여기서 정하는 게 제일 편하다. */
-  private stepKeymap(tk: typeof THEME_TOKENS[string], pill: (on: boolean) => React.CSSProperties, lede: (k: string) => React.ReactNode) {
+  /** 4쪽 — 키맵. 셋을 나란한 **예시 카드**로 둔다. 각 카드가 그 키맵의 시그니처 단축키를
+   *  실제로 보여준다(MonacoPane 이 거는 바인딩 그대로) — 이름만 고르는 것보다, 무엇이
+   *  달라지는지 보고 고른다. */
+  private stepKeymap(tk: typeof THEME_TOKENS[string], _pill: (on: boolean) => React.CSSProperties, lede: (k: string) => React.ReactNode) {
     const s = this.state;
+    // [키 표기, 동작 이름키]. IntelliJ 는 applyIntellijKeymap, VS Code 는 Monaco 기본,
+    // Vim 은 monaco-vim 의 모달 편집 — 각 키맵이 정말로 하는 것을 적는다.
+    const SHORTCUTS: Record<string, { keys: string[]; label: string }[]> = {
+      intellij: [
+        { keys: ["Ctrl", "D"], label: "open.km.dupLine" },
+        { keys: ["Ctrl", "W"], label: "open.km.expandSel" },
+        { keys: ["Ctrl", "/"], label: "open.km.comment" },
+      ],
+      vscode: [
+        { keys: ["Ctrl", "D"], label: "open.km.nextOccur" },
+        { keys: ["Alt", "↑"], label: "open.km.moveLine" },
+        { keys: ["Ctrl", "/"], label: "open.km.comment" },
+      ],
+      vim: [
+        { keys: ["d", "d"], label: "open.km.delLine" },
+        { keys: ["y", "y"], label: "open.km.yank" },
+        { keys: [":", "w"], label: "open.km.save" },
+      ],
+    };
+    const cap = (label: string) => (
+      <kbd key={label} style={{
+        minWidth: 20, height: 22, padding: "0 6px", borderRadius: 5, fontFamily: "inherit",
+        border: `1px solid ${tk.w14}`, background: tk.bgRoot, color: tk.fgSub,
+        display: "inline-grid", placeItems: "center", fontSize: 11, fontWeight: 600,
+      }}>{label}</kbd>
+    );
     return (
       <>
         {lede("open.step.keymap.lede")}
-        <div style={{ display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
-          {KEYMAPS.map(([k, name]) => (
-            <button key={k} aria-pressed={s.keymap === k}
-              onClick={() => { this.setState({ keymap: k }); setEditorPrefs({ keymap: k }); }}
-              style={{ ...pill(s.keymap === k), fontSize: 13.5, padding: "11px 22px" }}>{name}</button>
-          ))}
+        <div style={{ display: "flex", gap: 13, justifyContent: "center", flexWrap: "wrap" }}>
+          {KEYMAPS.map(([k, name]) => {
+            const on = s.keymap === k;
+            const vim = k === "vim";
+            return (
+              <button key={k} aria-pressed={on}
+                onClick={() => { this.setState({ keymap: k }); setEditorPrefs({ keymap: k }); }}
+                style={{
+                  width: 210, padding: "14px 15px 15px", borderRadius: 13, cursor: "pointer",
+                  fontFamily: "inherit", textAlign: "left",
+                  background: tk.bgPanel, color: tk.fg,
+                  border: `2px solid ${on ? tk.accent : "transparent"}`,
+                  boxShadow: on ? `0 0 24px ${tk.accentSoft}` : "none",
+                  transform: on ? "scale(1.03)" : "none",
+                  transition: "transform .25s cubic-bezier(.22,1.2,.36,1), border-color .2s, box-shadow .3s",
+                  display: "grid", gap: 11,
+                }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 650 }}>{name}</span>
+                  {vim && <span style={{ fontSize: 9.5, letterSpacing: ".08em", color: tk.accent,
+                    background: tk.accentSoft, borderRadius: 4, padding: "1px 6px" }}>{t("open.km.modal")}</span>}
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {SHORTCUTS[k].map(sc => (
+                    <div key={sc.label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <div style={{ display: "flex", gap: 3, flex: "none" }}>
+                        {vim ? cap(sc.keys.join("")) : sc.keys.map(cap)}
+                      </div>
+                      <span style={{ fontSize: 11.5, color: tk.fgDim2, minWidth: 0,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t(sc.label)}</span>
+                    </div>
+                  ))}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </>
     );
@@ -854,7 +913,7 @@ function ModeDiagram({ mode, tk }: { mode: string; tk: any }) {
  */
 function StepFigure(
   { topic, tk, uiStack, codeStack, policy }:
-  { topic: "ai" | "autonomy" | "keymap" | "fonts"; tk: any; uiStack?: string; codeStack?: string; policy?: string },
+  { topic: "ai" | "autonomy" | "fonts"; tk: any; uiStack?: string; codeStack?: string; policy?: string },
 ) {
   const box: React.CSSProperties = {
     width: 176, height: 60, borderRadius: 10, background: tk.bgEditor,
@@ -899,18 +958,6 @@ function StepFigure(
           display: "grid", placeItems: "center" }}>
           <span style={{ fontSize: 12, lineHeight: 1, color: auto ? tk.onAccent : tk.accent }}>✓</span>
         </div>
-      </div>
-    );
-  } else if (topic === "keymap") {
-    // 손에 익은 단축키 — 키캡 두 개.
-    const cap = (label: string) => (
-      <div style={{ minWidth: 24, height: 26, padding: "0 7px", borderRadius: 6,
-        border: `1px solid ${tk.w14}`, background: tk.bgPanel, color: tk.fgSub,
-        display: "grid", placeItems: "center", fontSize: 12.5, fontWeight: 600 }}>{label}</div>
-    );
-    inner = (
-      <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 auto" }}>
-        {cap("⌘")}<span style={{ color: tk.fgDim, fontSize: 12 }}>+</span>{cap("K")}
       </div>
     );
   } else {
