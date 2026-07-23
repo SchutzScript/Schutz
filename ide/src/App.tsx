@@ -2444,10 +2444,19 @@ ${(r.output || "").slice(0, 2000)}`;
         const calls: ToolCall[] = [];
         let stopReason: string = "end";
 
+        // 스트리밍 텍스트 커밋을 **프레임 단위로 합친다.** 예전엔 토큰 하나마다 setMsg →
+        // 7천 줄짜리 트리를 통째로 다시 그렸고(트랜스크립트·트리·검토 전부), buildTimeline 도
+        // 매 토큰 정렬됐다 — 긴 답을 받는 내내 UI 가 덜덜거렸다. 이제 최대 ~25fps 로만
+        // 커밋하고, 마지막 텍스트는 루프가 끝날 때 반드시 한 번 밀어 넣는다.
+        let lastFlush = 0, flushTimer = 0;
+        const flushText = () => { flushTimer = 0; lastFlush = performance.now(); this.setMsg(aiId, { text: turnText }); };
+
         for await (const ev of provider.streamAgentTurn({ transcript, system, tools, signal: abort.signal })) {
           if (ev.type === "text") {
             turnText += ev.delta;
-            this.setMsg(aiId, { text: turnText });
+            const now = performance.now();
+            if (now - lastFlush >= 40) { if (flushTimer) { clearTimeout(flushTimer); flushTimer = 0; } flushText(); }
+            else if (!flushTimer) { flushTimer = window.setTimeout(flushText, 40); }
           } else if (ev.type === "tool_call") {
             calls.push(ev.call);
             this.setState({ statusKey: "tool" });
@@ -2457,13 +2466,17 @@ ${(r.output || "").slice(0, 2000)}`;
           } else if (ev.type === "stop") {
             stopReason = ev.reason;
           } else if (ev.type === "error") {
+            if (flushTimer) { clearTimeout(flushTimer); flushTimer = 0; }
             turnText = turnText ? turnText + "\n\n⚠️ " + ev.message : "⚠️ " + ev.message;
             this.setMsg(aiId, { text: turnText });
             stopReason = "error";
             this.maybeRevertModel(agentId, ev.message);
           }
         }
-        this.setMsg(aiId, { streaming: false });
+        // 대기 중인 프레임 커밋이 있으면 취소하고, 마지막 텍스트까지 한 번에 확정한다 —
+        // 안 그러면 마지막 몇 토큰이 화면에 안 남을 수 있다.
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = 0; }
+        this.setMsg(aiId, { text: turnText, streaming: false });
         if (!turnText) {
           this.setState(s => ({ messages: s.messages.filter(m => m.id !== aiId) }));
         }
@@ -4407,7 +4420,10 @@ ${(r.output || "").slice(0, 2000)}`;
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
             <div data-tour="left-panel" key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: ag ? 0 : TREE_MIN_H, display: "flex", flexDirection: "column", ...gone }}>
-              {s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree()}
+              {/* 에이전트 모드에선 이 칸이 display:none 이다 — 그런데도 매 렌더마다 트리·플로우를
+                  통째로 다시 만들면(큰 저장소는 수천 행) 보이지도 않는 것에 프레임을 태운다.
+                  숨겨져 있으면 아예 그리지 않는다. 모드를 되돌리면 그때 다시 그린다. */}
+              {!ag && (s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree())}
             </div>
             {/* 트리↔대화 세로 리사이즈 핸들 */}
             <div onMouseDown={e => this.startChatResize(e)} title={t("sc4.resizeHandleV")}
@@ -5087,11 +5103,23 @@ ${(r.output || "").slice(0, 2000)}`;
    *  반환하는데(에이전트 모드엔 탭이 없으니 늘 그렇다), 그 뒤에 있는 i-1 인접 페어링
    *  휴리스틱은 도구 줄이 섞이면 깨진다. **조기 반환을 "정리" 하지 말 것** — 그게
    *  여기서 유일하게 안전을 보장하는 장치다. */
+  /** buildTimeline 결과 캐시 — 입력 넷의 참조가 그대로면 정렬을 다시 안 한다. 에이전트
+   *  모드에선 visibleMessages() 가 s.messages 를 그대로 돌려주므로(chatTab "all") 참조가
+   *  안정적이다. 컴포저에 글자를 칠 때처럼 트랜스크립트와 무관한 리렌더에서 매번 합치고
+   *  정렬하던 것을 건너뛴다. */
+  private _timelineCache: { m: unknown; t: unknown; p: unknown; a: unknown; rows: ReturnType<typeof buildTimeline> } | null = null;
+
   private renderAgentRows() {
     const s = this.state;
-    const rows = buildTimeline({
-      messages: this.visibleMessages(), tools: s.tools, proposals: s.proposals, ask: s.askRun,
-    });
+    const msgs = this.visibleMessages();
+    const c = this._timelineCache;
+    let rows: ReturnType<typeof buildTimeline>;
+    if (c && c.m === msgs && c.t === s.tools && c.p === s.proposals && c.a === s.askRun) {
+      rows = c.rows;
+    } else {
+      rows = buildTimeline({ messages: msgs, tools: s.tools, proposals: s.proposals, ask: s.askRun });
+      this._timelineCache = { m: msgs, t: s.tools, p: s.proposals, a: s.askRun, rows };
+    }
     if (!rows.length) {
       return <div style={{ fontSize: 12.5, color: "var(--fg-dim2)", padding: "18px 2px", fontFamily: SUIT }}>{t("mode.transcriptEmpty")}</div>;
     }
