@@ -3,7 +3,6 @@ import { t, LANGS, getLang, setLang, onLangChange } from "../i18n";
 import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiMode";
-import { ENGINE_CREDIT } from "../ide/data";
 import { KEYMAPS, UI_FONTS, CODE_FONTS, getEditorPrefs, setEditorPrefs, applyUiFont, getAutonomy, setAutonomy } from "../settings";
 import { PROVIDERS_MAP } from "../ai/registry";
 import { getStoredKey, setStoredKey } from "../ai/provider";
@@ -134,13 +133,21 @@ export class Opening extends React.Component<Props, State> {
     this.langOff = null;
   }
 
-  /** 아무 키나 누르면 빠져나간다 — 붙잡아두는 게 아니라 보여주는 것이라 길이 늘 열려 있어야 한다. */
+  /** 키보드 단축. Esc 는 어느 국면에서든 빠져나간다(붙잡아두는 게 아니라 보여주는 것이라
+   *  길이 늘 열려 있어야 한다). Enter 는 **세팅에서만** 진행 키다 — 화면의 Next 버튼과
+   *  똑같은 규칙으로 다음 쪽으로 넘기고, 마지막 쪽에서만 무대를 넘긴다.
+   *
+   *  예전엔 국면·페이지와 무관하게 곧장 pass() 를 불렀다. 세팅이 한 장이던 시절의 코드라,
+   *  다섯 장으로 나뉜 뒤로는 (1) 첫 쪽에서 Enter → 자율성·키맵·글꼴을 건너뛰고 데모로 튀고,
+   *  (2) 마무리 화면에서 Enter → 데모가 통째로 재실행됐다(마무리에서도 tick 이 시계를
+   *  게이트까지 밀어두므로 조건이 참이 된다). */
   private onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") { this.finish(false); return; }
-    // 게이트에서는 Enter 로 진행
-    if (e.key === "Enter" && !this.state.passedGate && this.state.t >= (gateAt() ?? Infinity)) {
-      this.pass();
-    }
+    if (e.key !== "Enter") return;
+    if (this.props.phase !== "intro") return;                       // 마무리 화면은 버튼만 받는다
+    if (this.state.passedGate || this.state.t < (gateAt() ?? Infinity)) return;
+    if (this.state.page >= STEP_TITLES.length) this.pass();
+    else this.goStep(this.state.page + 1);
   };
 
   private tick = (now: number) => {
@@ -334,7 +341,10 @@ export class Opening extends React.Component<Props, State> {
                   <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                     <input type="password" value={s.keyDraft} autoFocus
                       onChange={e => this.setState({ keyDraft: e.target.value })}
-                      onKeyDown={e => { if (e.key === "Enter") this.saveKey(p.id); }}
+                      /* 이 입력 안의 키는 창 레벨 onKey 로 새지 않게 막는다 — 그렇지 않으면
+                         Enter 가 키를 저장하면서 세팅까지 넘겨버리고, Esc 가 오프닝 전체를
+                         닫아버린다. stopPropagation 이 네이티브 이벤트 전파도 멈춘다. */
+                      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") this.saveKey(p.id); }}
                       placeholder={t("open.conn.keyPlaceholder")}
                       style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 12.5, padding: "8px 11px",
                         borderRadius: 9, border: `1px solid ${tk.w12}`, background: tk.bgRoot, color: tk.fg, outline: "none" }} />
@@ -529,7 +539,11 @@ export class Opening extends React.Component<Props, State> {
           opacity: Math.max(0, E(2400, 3400) * 0.85 - S(4800, 5400)),
           transform: `translateY(${(1 - E(2400, 3400)) * 8}px)`,
         }}>
-          {t("open.poweredBy", { engine: ENGINE_CREDIT })}
+          {/* 첫 화면은 스택 목록이 아니라 한 줄의 크레딧이다 — 세 이름을 늘어놓으면 마크
+              밑에서 시끄럽다. 앱을 담고 있는 껍데기(Electron)만, **언어와 무관하게** 고정으로
+              적는다(uppercase 변환으로 화면엔 POWERED BY ELECTRON). 스택 전체
+              (Electron · Monaco · React)는 정보 창이 그대로 크레딧한다. */}
+          Powered by Electron
         </div>
 
         {/* 2 선언 */}
