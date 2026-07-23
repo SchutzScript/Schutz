@@ -4,7 +4,7 @@ import type { Lang } from "../i18n";
 import { THEME_TOKENS, applyTheme, setThemeId, getThemeId } from "../theme";
 import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiMode";
 import { KEYMAPS, UI_FONTS, CODE_FONTS, getEditorPrefs, setEditorPrefs, applyUiFont, getAutonomy, setAutonomy } from "../settings";
-import { PROVIDERS_MAP } from "../ai/registry";
+import { PROVIDERS_MAP, getManagerId } from "../ai/registry";
 import { getStoredKey, setStoredKey } from "../ai/provider";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
@@ -247,17 +247,14 @@ export class Opening extends React.Component<Props, State> {
 
     // key 를 쪽 번호로 두면 넘길 때마다 노드가 갈리므로 애니메이션이 다시 재생된다.
     // 내비게이션은 이 밖에 둔다 — 버튼이 같이 미끄러지면 누른 것이 도망가는 것처럼 보인다.
-    // 쪽마다 붙는 예시 그림 — 1쪽의 모드 카드처럼, 그 쪽이 무엇을 정하는지 뼈대로 보여준다.
-    // 자율성(3쪽)·키맵(4쪽)은 옵션 카드가 **각각** 예시라 위쪽 공용 그림을 붙이지 않는다.
-    const topic = ({ 2: "ai", 5: "fonts" } as Record<number, "ai" | "fonts">)[s.page];
+    // 위쪽 공용 그림은 AI 쪽만. 자율성·키맵은 옵션 카드가, 글꼴은 실제 코드 미리보기가
+    // 각각 예시라 따로 붙이지 않는다.
+    const topic = ({ 2: "ai" } as Record<number, "ai">)[s.page];
     return (
       <>
         <div key={s.page} className={s.pageDir > 0 ? "sz-step-fwd" : "sz-step-back"}
           style={{ display: "grid", justifyItems: "center", gap: "clamp(14px,1.8vw,26px)", width: "100%" }}>
-          {topic && (
-            <StepFigure topic={topic} tk={tk}
-              uiStack={UI_FONTS[s.uiFont]?.stack} codeStack={CODE_FONTS[s.codeFont]?.stack} />
-          )}
+          {topic && <StepFigure topic={topic} tk={tk} />}
           {s.page === 2 && this.stepAi(tk, pill, lede)}
           {s.page === 3 && this.stepAutonomy(tk, lede)}
           {s.page === 4 && this.stepKeymap(tk, pill, lede)}
@@ -314,6 +311,8 @@ export class Opening extends React.Component<Props, State> {
       { id: "claude", name: "Claude", cli: "claude", role: "open.conn.roleClaude" },
       { id: "gpt", name: "GPT", cli: "codex", role: "open.conn.roleGpt" },
     ];
+    // 실제 관리자 지정. 미설정이면 Claude 가 기본 관리자다(App 의 관리자 선택과 같은 규칙).
+    const managerId = getManagerId() || "claude";
     return (
       <>
         {lede("open.step.ai.lede")}
@@ -332,11 +331,18 @@ export class Opening extends React.Component<Props, State> {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 14, fontWeight: 650, color: tk.fg }}>{p.name}</span>
+                      {p.id === managerId && (
+                        <span style={{ fontSize: 9.5, letterSpacing: ".04em", color: tk.accent,
+                          background: tk.accentSoft, borderRadius: 4, padding: "1px 6px" }}>{t("open.conn.managerBadge")}</span>
+                      )}
                       <span style={{ fontSize: 11.5, color: on ? tk.accent : tk.fgDim2 }}>
                         {on ? t("open.conn.on") : t("open.conn.off")}
                       </span>
                     </div>
-                    <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>{t(p.role)}</div>
+                    {/* 이름 아래 한 줄은 "무엇을 하는지" — 관리자면 계획·위임, 아니면 편집·명령 실행 */}
+                    <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>
+                      {t(p.id === managerId ? "open.conn.roleManager" : "open.conn.roleAgent")}
+                    </div>
                   </div>
                   <div style={{ flex: 1 }} />
                   <button onClick={() => { try { (window as any).schutz?.cliLogin?.(p.cli); } catch { /* */ } }}
@@ -507,9 +513,23 @@ export class Opening extends React.Component<Props, State> {
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "center" }}>{node}</div>
       </div>
     );
+    const uiStack = UI_FONTS[s.uiFont]?.stack;
+    const codeStack = CODE_FONTS[s.codeFont]?.stack;
     return (
       <>
         {lede("open.step.fonts.lede")}
+        {/* 실제 미리보기 — 고른 UI 글꼴로 한 줄, 고른 코드 글꼴·크기로 진짜 코드 한 조각.
+            이름만 고르는 대신, 바꾸는 즉시 이 조각이 그 글꼴·크기로 다시 그려진다. */}
+        <div style={{ width: "min(440px,84vw)", borderRadius: 12, background: tk.bgEditor,
+          border: `1px solid ${tk.w12}`, overflow: "hidden", textAlign: "left" }}>
+          <div style={{ padding: "9px 14px", borderBottom: `1px solid ${tk.w08}`,
+            fontFamily: uiStack, fontSize: 13, color: tk.fgSub }}>{t("open.fonts.pvUi")}</div>
+          <pre style={{ margin: 0, padding: "12px 14px", fontFamily: codeStack, fontSize: s.fontSize,
+            lineHeight: 1.65, color: tk.fg, whiteSpace: "pre", overflowX: "auto" }}>
+            <span style={{ color: tk.fgDim }}>{t("open.fonts.pvComment")}</span>{"\n"}
+            <span style={{ color: tk.accent }}>const</span>{" year "}<span style={{ color: tk.fgDim2 }}>=</span>{" new Date().getFullYear();"}
+          </pre>
+        </div>
         <div style={{ display: "grid", gap: 18 }}>
           {row(t("settings.uiFont"), Object.entries(UI_FONTS).map(([k, v]) => (
             <button key={k} aria-pressed={s.uiFont === k}
@@ -933,10 +953,7 @@ function ModeDiagram({ mode, tk }: { mode: string; tk: any }) {
  * 아이콘도 아니고 **뼈대 한 조각**으로 그 쪽이 무엇을 정하는지 한눈에 보여준다.
  * 글꼴은 고른 값을 그대로 그려(진짜 미리보기), 나머지는 개념을 그린다.
  */
-function StepFigure(
-  { topic, tk, uiStack, codeStack }:
-  { topic: "ai" | "fonts"; tk: any; uiStack?: string; codeStack?: string },
-) {
+function StepFigure({ topic, tk }: { topic: "ai"; tk: any }) {
   const box: React.CSSProperties = {
     width: 176, height: 60, borderRadius: 10, background: tk.bgEditor,
     border: `1px solid ${tk.w12}`, padding: 9, display: "flex", alignItems: "center",
@@ -944,37 +961,24 @@ function StepFigure(
   };
   const bar = (w: string | number, o = 1, c?: string): React.CSSProperties =>
     ({ height: 3, width: w, borderRadius: 2, background: c ?? tk.fgDim, opacity: o });
-
-  let inner: React.ReactNode;
-  if (topic === "ai") {
-    // AI 가 쓴다 — 편집기 한 줄이 액센트로 차오르고(방금 쓴 줄), 커서 한 조각. 오른쪽에
-    // 연결된 두 에이전트 점.
-    inner = (
-      <>
-        <div style={{ width: 7, alignSelf: "stretch", borderRadius: 3, background: tk.w12 }} />
-        <div style={{ flex: 1, display: "grid", gap: 6 }}>
-          <div style={bar("64%", .5)} />
-          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-            <div style={bar("46%", 1, tk.accent)} />
-            <div style={{ width: 2, height: 10, background: tk.accent, borderRadius: 1 }} />
-          </div>
-          <div style={bar("54%", .35)} />
+  void topic;   // 지금은 AI 한 종류뿐 — 훗날 다른 쪽이 공용 그림을 다시 쓰면 분기한다.
+  // AI 가 쓴다 — 편집기 한 줄이 액센트로 차오르고(방금 쓴 줄), 커서 한 조각. 오른쪽에
+  // 연결된 두 에이전트 점.
+  return (
+    <div style={box} aria-hidden>
+      <div style={{ width: 7, alignSelf: "stretch", borderRadius: 3, background: tk.w12 }} />
+      <div style={{ flex: 1, display: "grid", gap: 6 }}>
+        <div style={bar("64%", .5)} />
+        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+          <div style={bar("46%", 1, tk.accent)} />
+          <div style={{ width: 2, height: 10, background: tk.accent, borderRadius: 1 }} />
         </div>
-        <div style={{ display: "grid", gap: 5 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.accent }} />
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.w14 }} />
-        </div>
-      </>
-    );
-  } else {
-    // 글꼴 — 고른 UI·코드 글꼴로 실제 미리보기.
-    inner = (
-      <div style={{ display: "flex", alignItems: "center", gap: 15, margin: "0 auto" }}>
-        <span style={{ fontFamily: uiStack, fontSize: 27, fontWeight: 600, color: tk.fg, lineHeight: 1 }}>Aa</span>
-        <div style={{ width: 1, height: 26, background: tk.w12 }} />
-        <span style={{ fontFamily: codeStack, fontSize: 15, color: tk.fgSub }}>{"() => {}"}</span>
+        <div style={bar("54%", .35)} />
       </div>
-    );
-  }
-  return <div style={box} aria-hidden>{inner}</div>;
+      <div style={{ display: "grid", gap: 5 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.accent }} />
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.w14 }} />
+      </div>
+    </div>
+  );
 }
