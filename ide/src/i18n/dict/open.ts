@@ -178,6 +178,14 @@ export const dict: Record<string, Record<string, string>> = {
   // 1쪽은 무엇을 보는가(언어·테마·모양), 2쪽은 무엇으로 일하는가(AI·자율성·키맵·글꼴).
   // 시연 도중의 탈출구. "건너뛰기" 만으로는 무엇을 건너뛰는지 애매해서 대상을 밝힌다.
   "open.demoSkip": { ko: "시연 건너뛰기", en: "Skip the demo", de: "Demo überspringen", ja: "デモをスキップ" },
+  // 세팅→시연 사이의 안내 한 박자 — 데모가 갑자기 뜨지 않게.
+  "open.demoIntro.title": { ko: "이제 시연을 보여드릴게요", en: "Now for a quick demo", de: "Jetzt eine kurze Demo", ja: "ここからデモをお見せします" },
+  "open.demoIntro.sub": {
+    ko: "방금 고른 설정 그대로 — 실제로 어떻게 동작하는지 보여드립니다.",
+    en: "With the settings you just chose — here's how it actually works.",
+    de: "Mit Ihren gewählten Einstellungen — so funktioniert es wirklich.",
+    ja: "選んだ設定そのままで、実際の動きをお見せします。",
+  },
   "open.setup.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
   "open.setup.ai": { ko: "AI 연결", en: "Connect AI", de: "KI verbinden", ja: "AI 接続" },
   "open.setup.autonomy": { ko: "어디까지 맡길까요", en: "How much to hand over", de: "Wie viel übergeben", ja: "どこまで任せますか" },
