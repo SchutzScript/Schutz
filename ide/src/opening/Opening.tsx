@@ -247,10 +247,16 @@ export class Opening extends React.Component<Props, State> {
 
     // key 를 쪽 번호로 두면 넘길 때마다 노드가 갈리므로 애니메이션이 다시 재생된다.
     // 내비게이션은 이 밖에 둔다 — 버튼이 같이 미끄러지면 누른 것이 도망가는 것처럼 보인다.
+    // 쪽마다 붙는 예시 그림 — 1쪽의 모드 카드처럼, 그 쪽이 무엇을 정하는지 뼈대로 보여준다.
+    const topic = ({ 2: "ai", 3: "autonomy", 4: "keymap", 5: "fonts" } as const)[s.page as 2 | 3 | 4 | 5];
     return (
       <>
         <div key={s.page} className={s.pageDir > 0 ? "sz-step-fwd" : "sz-step-back"}
           style={{ display: "grid", justifyItems: "center", gap: "clamp(14px,1.8vw,26px)", width: "100%" }}>
+          {topic && (
+            <StepFigure topic={topic} tk={tk}
+              uiStack={UI_FONTS[s.uiFont]?.stack} codeStack={CODE_FONTS[s.codeFont]?.stack} policy={s.policy} />
+          )}
           {s.page === 2 && this.stepAi(tk, pill, lede)}
           {s.page === 3 && this.stepAutonomy(tk, lede)}
           {s.page === 4 && this.stepKeymap(tk, pill, lede)}
@@ -563,10 +569,22 @@ export class Opening extends React.Component<Props, State> {
               opacity: op, transform: `translateY(${(1 - inP) * 16 - outP * 10}px)`,
               pointerEvents: op > 0.5 ? "auto" : "none",
             }}>
-              {/* 내용은 위쪽에서 가운데 정렬, 내비는 아래에 고정. 예전엔 하나의 grid 를
-                  alignContent:center 로 두어, 쪽마다 내용 높이가 다르면 전체가 다시
-                  가운데로 맞춰졌다 — "다음" 이 쪽을 넘길 때마다 위아래로 튀었다.
-                  둘을 가르면 내비의 y 는 창 높이에만 달리므로 어느 쪽에서든 같다. */}
+              {/* 헤더(마크·제목)는 **중앙 정렬 콘텐츠 밖**에 둔다. 예전엔 콘텐츠와 같은
+                  grid 안(alignContent:center)에 있어, 쪽마다 콘텐츠 높이가 다르면 전체가
+                  다시 가운데로 맞춰지며 로고·제목이 위아래로 튀었다. 여기 고정하면 로고·제목은
+                  어느 쪽에서도 같은 자리다 — 밑의 콘텐츠만 바뀐다.
+                  방금 획이 그려진 그 마크를 작게 얹어 앞 장면과 이 화면을 잇는다. */}
+              <div style={{ flex: "none", display: "grid", justifyItems: "center", gap: 14,
+                paddingTop: "clamp(26px,6vh,72px)", paddingBottom: "clamp(12px,2.4vh,26px)" }}>
+                <Mark color={tk.accent} size={44} width={9} />
+                <div style={{ width: 26, height: 1, background: tk.w14 }} />
+                {/* 두 쪽의 제목이 같으면 넘겼는데 같은 화면이 다시 뜬 것처럼 보인다. */}
+                <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
+                  {t(STEP_TITLES[this.state.page - 1] ?? "open.setup.title")}
+                </h2>
+              </div>
+
+              {/* 콘텐츠만 가운데 정렬. 내비는 이 밖(아래)에 고정. */}
               <div style={{
                 flex: 1, minHeight: 0,
                 // 넘칠 때만 세로로 구른다. 가로는 **잘라낸다** — 쪽 전환이 translateX 로
@@ -577,19 +595,8 @@ export class Opening extends React.Component<Props, State> {
                 // 세로 바가 생기고 없어질 때 폭이 튀지 않게 자리를 늘 비워둔다.
                 scrollbarGutter: "stable",
                 display: "grid", placeItems: "center", alignContent: "center",
-                gap: 26, paddingTop: "clamp(16px,4vh,52px)", paddingBottom: 18,
+                gap: 26, paddingBottom: 18,
               }}>
-              {/* 제목만 덩그러니 있으면 허전하다. 방금 획이 그려진 그 마크를 작게 얹어
-                  앞 장면과 이 화면을 잇는다 — 새 그림을 들이는 것보다 낫다. */}
-              <div style={{ display: "grid", justifyItems: "center", gap: 14 }}>
-                <Mark color={tk.accent} size={44} width={9} />
-                <div style={{ width: 26, height: 1, background: tk.w14 }} />
-                {/* 두 쪽의 제목이 같으면 넘겼는데 같은 화면이 다시 뜬 것처럼 보인다. */}
-                <h2 style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0 }}>
-                  {t(STEP_TITLES[this.state.page - 1] ?? "open.setup.title")}
-                </h2>
-              </div>
-
               {this.state.page > 1 ? this.renderStep(tk) : <>
               {/* 언어가 먼저다 — 읽지 못하는 화면에서 테마를 고르게 할 수는 없다. */}
               <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
@@ -838,4 +845,83 @@ function ModeDiagram({ mode, tk }: { mode: string; tk: any }) {
       )}
     </div>
   );
+}
+
+/**
+ * 세팅 쪽마다 붙는 작은 예시 그림. 1쪽의 모드 카드(ModeDiagram)와 같은 어법 — 스크린샷도
+ * 아이콘도 아니고 **뼈대 한 조각**으로 그 쪽이 무엇을 정하는지 한눈에 보여준다.
+ * 글꼴은 고른 값을 그대로 그려(진짜 미리보기), 나머지는 개념을 그린다.
+ */
+function StepFigure(
+  { topic, tk, uiStack, codeStack, policy }:
+  { topic: "ai" | "autonomy" | "keymap" | "fonts"; tk: any; uiStack?: string; codeStack?: string; policy?: string },
+) {
+  const box: React.CSSProperties = {
+    width: 176, height: 60, borderRadius: 10, background: tk.bgEditor,
+    border: `1px solid ${tk.w12}`, padding: 9, display: "flex", alignItems: "center",
+    gap: 9, overflow: "hidden",
+  };
+  const bar = (w: string | number, o = 1, c?: string): React.CSSProperties =>
+    ({ height: 3, width: w, borderRadius: 2, background: c ?? tk.fgDim, opacity: o });
+
+  let inner: React.ReactNode;
+  if (topic === "ai") {
+    // AI 가 쓴다 — 편집기 한 줄이 액센트로 차오르고(방금 쓴 줄), 커서 한 조각. 오른쪽에
+    // 연결된 두 에이전트 점.
+    inner = (
+      <>
+        <div style={{ width: 7, alignSelf: "stretch", borderRadius: 3, background: tk.w12 }} />
+        <div style={{ flex: 1, display: "grid", gap: 6 }}>
+          <div style={bar("64%", .5)} />
+          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <div style={bar("46%", 1, tk.accent)} />
+            <div style={{ width: 2, height: 10, background: tk.accent, borderRadius: 1 }} />
+          </div>
+          <div style={bar("54%", .35)} />
+        </div>
+        <div style={{ display: "grid", gap: 5 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.accent }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.w14 }} />
+        </div>
+      </>
+    );
+  } else if (topic === "autonomy") {
+    // 반영은 당신이 정한다 — 제안 카드 + 수락 체크. auto 면 체크가 이미 차 있다.
+    const auto = policy === "auto";
+    inner = (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 auto" }}>
+        <div style={{ width: 104, borderRadius: 7, border: `1px solid ${tk.w12}`, background: tk.bgPanel, padding: "8px 9px", display: "grid", gap: 5 }}>
+          <div style={bar("72%", .6)} />
+          <div style={bar("50%", .38)} />
+        </div>
+        <div style={{ width: 22, height: 22, borderRadius: "50%", flex: "none",
+          background: auto ? tk.accent : "transparent", border: `1.5px solid ${tk.accent}`,
+          display: "grid", placeItems: "center" }}>
+          <span style={{ fontSize: 12, lineHeight: 1, color: auto ? tk.onAccent : tk.accent }}>✓</span>
+        </div>
+      </div>
+    );
+  } else if (topic === "keymap") {
+    // 손에 익은 단축키 — 키캡 두 개.
+    const cap = (label: string) => (
+      <div style={{ minWidth: 24, height: 26, padding: "0 7px", borderRadius: 6,
+        border: `1px solid ${tk.w14}`, background: tk.bgPanel, color: tk.fgSub,
+        display: "grid", placeItems: "center", fontSize: 12.5, fontWeight: 600 }}>{label}</div>
+    );
+    inner = (
+      <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 auto" }}>
+        {cap("⌘")}<span style={{ color: tk.fgDim, fontSize: 12 }}>+</span>{cap("K")}
+      </div>
+    );
+  } else {
+    // 글꼴 — 고른 UI·코드 글꼴로 실제 미리보기.
+    inner = (
+      <div style={{ display: "flex", alignItems: "center", gap: 15, margin: "0 auto" }}>
+        <span style={{ fontFamily: uiStack, fontSize: 27, fontWeight: 600, color: tk.fg, lineHeight: 1 }}>Aa</span>
+        <div style={{ width: 1, height: 26, background: tk.w12 }} />
+        <span style={{ fontFamily: codeStack, fontSize: 15, color: tk.fgSub }}>{"() => {}"}</span>
+      </div>
+    );
+  }
+  return <div style={box} aria-hidden>{inner}</div>;
 }
