@@ -34,6 +34,8 @@ const STEP_TITLES = [
 const EXIT_FROM = 12300, EXIT_TO = 13100;
 /** 무대를 진짜 UI 에 넘기기까지. 퇴장보다 조금 넉넉해야 마지막 프레임이 잘리지 않는다. */
 const EXIT_MS = 950;
+/** 세팅이 걷힌 뒤 "이제 시연" 을 알리고 넘어가기까지. 안내 없이 넘기면 IDE 가 툭 뜬다. */
+const ANNOUNCE_MS = 1900;
 /** 마무리 화면이 물러나는 시간. 짧게 — 여기서 기다리게 하면 시작이 늦어진 것으로 느낀다. */
 const LEAVE_MS = 340;
 
@@ -83,6 +85,8 @@ interface State {
   /** 이 컴퓨터에 남아 있는 Claude Code · Codex 대화 수. null = 아직 안 세봤다. */
   pastChats: number | null;
   wantsImport: boolean;
+  /** 세팅이 걷힌 뒤 "이제 시연" 안내를 띄우는 중. 이게 있어야 IDE 가 툭 뜨지 않는다. */
+  announcing: boolean;
 }
 
 export class Opening extends React.Component<Props, State> {
@@ -91,7 +95,7 @@ export class Opening extends React.Component<Props, State> {
     return {
       t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
       page: 1 as const, pageDir: 1 as const, leaving: false, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
-      policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0,
+      policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0, announcing: false,
     };
   })();
   private raf = 0;
@@ -126,6 +130,7 @@ export class Opening extends React.Component<Props, State> {
   }
   componentWillUnmount() {
     clearTimeout(this.handOff);
+    clearTimeout(this.announceT);
     clearTimeout(this.leaveT);
     cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey);
@@ -165,6 +170,8 @@ export class Opening extends React.Component<Props, State> {
 
   /** 세팅에서 무대를 넘기기까지. 퇴장이 끝나는 시각(EXIT_END)에서 게이트를 뺀 값. */
   private handOff = 0;
+  /** 세팅이 걷힌 뒤 "이제 시연" 안내를 띄우는 타이머. */
+  private announceT = 0;
 
   private pass = () => {
     // 세팅이 끝나면 오버레이를 걷고 진짜 UI 로 넘긴다. 모션 최소화를 켠 사람은
@@ -178,9 +185,11 @@ export class Opening extends React.Component<Props, State> {
     //
     // 이제 게이트를 풀어 시계를 다시 흘려보낸다. 세팅이 물러나는 걸 보고 나서 넘긴다.
     this.setState({ passedGate: true });
-    // 시간이 아니라 타이머로 넘기는 이유: 창이 뒤로 가면 rAF 가 스로틀돼 시계가
+    // 세팅이 걷힌 뒤 "이제 시연을 보여드릴게요" 를 잠깐 띄우고 넘어간다 — 안 그러면 IDE 가
+    // 툭 뜬다. 시간이 아니라 타이머로 넘기는 이유: 창이 뒤로 가면 rAF 가 스로틀돼 시계가
     // 거의 멈춘다. 그러면 무대가 영영 안 넘어간다.
-    this.handOff = window.setTimeout(() => this.props.onStartDemo(), EXIT_MS);
+    this.announceT = window.setTimeout(() => this.setState({ announcing: true }), EXIT_MS);
+    this.handOff = window.setTimeout(() => this.props.onStartDemo(), EXIT_MS + ANNOUNCE_MS);
   };
 
   /** 언어를 바꾸면 이 화면의 글자도 바뀌어야 한다 — 클래스 컴포넌트라 구독해서 직접 리렌더.
@@ -819,8 +828,33 @@ export class Opening extends React.Component<Props, State> {
           );
         })()}
 
+        {/* "이제 시연" 안내 — 세팅이 걷힌 뒤, IDE 가 뜨기 전에 잠깐. 데모가 너무 갑자기
+            나오지 않게 한 박자 둔다. 게이트를 지난 뒤 announceT 가 이걸 켜고, handOff 가
+            곧 onStartDemo 로 넘긴다. */}
+        {this.state.announcing && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 6, display: "grid", placeItems: "center",
+            padding: "0 10vw", textAlign: "center", background: tk.bgRoot,
+            animation: "szFadeIn 420ms var(--ease) both",
+          }}>
+            <div style={{ display: "grid", justifyItems: "center", gap: 18 }}>
+              <div style={{ animation: "szFadeUp .5s var(--ease) both", animationDelay: "80ms" }}>
+                <Mark color={tk.accent} size={44} width={9} />
+              </div>
+              <p style={{ fontSize: "clamp(22px,3.2vw,40px)", fontWeight: 350, letterSpacing: "-.02em", margin: 0, color: tk.fg,
+                animation: "szFadeUp .5s var(--ease) both", animationDelay: "200ms" }}>
+                {t("open.demoIntro.title")}
+              </p>
+              <p style={{ fontSize: "clamp(13px,1.4vw,16px)", color: tk.fgSub, margin: 0, maxWidth: "56ch", lineHeight: 1.6,
+                animation: "szFadeUp .5s var(--ease) both", animationDelay: "340ms" }}>
+                {t("open.demoIntro.sub")}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* 항상 열려 있는 탈출구 */}
-        {beat.id !== "settle" && (
+        {beat.id !== "settle" && !this.state.announcing && (
           <button onClick={() => this.finish(false)} style={{
             position: "absolute", right: 18, top: 16, fontFamily: "inherit", fontSize: 12,
             padding: "6px 14px", borderRadius: 8, border: `1px solid ${tk.w12}`,
