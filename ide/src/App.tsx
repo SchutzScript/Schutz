@@ -7260,7 +7260,7 @@ ${(r.output || "").slice(0, 2000)}`;
               같은 말(여기가 화면의 어디인가)을 두 번 다르게 그리지 않는다. */}
           {step.figure && (
             <div style={{ marginBottom: 11, border: "1px solid var(--w08)", borderRadius: 8, overflow: "hidden" }}>
-              <TourFigure region={step.figure as FigureRegion} />
+              <TourFigure region={step.figure as FigureRegion} mode={this.state.uiMode} />
             </div>
           )}
           <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--fg)", marginBottom: 7 }}>{t(step.titleKey)}</div>
