@@ -197,6 +197,33 @@ export const dict: Record<string, Record<string, string>> = {
   "open.conn.key": { ko: "API 키", en: "API key", de: "API-Schlüssel", ja: "APIキー" },
   "open.conn.save": { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },
   "open.conn.keyPlaceholder": { ko: "키를 붙여넣으세요", en: "Paste your key", de: "Schlüssel einfügen", ja: "キーを貼り付け" },
+  // 게임 엔진(OVERDARE) 연결 — AI 연결 쪽 하단의 선택 카드. 폴더만 고르면 자동 등록된다.
+  "open.engine.badge": { ko: "게임 엔진", en: "Game engine", de: "Game-Engine", ja: "ゲームエンジン" },
+  "open.engine.connected": { ko: "연결됨", en: "Connected", de: "Verbunden", ja: "接続済み" },
+  "open.engine.off": { ko: "아직", en: "Not yet", de: "Noch nicht", ja: "まだ" },
+  "open.engine.desc": {
+    ko: "OVERDARE Studio 프로젝트 폴더를 고르면 AI가 그 안에서 직접 트리·스크립트를 만들어 게임을 빌드합니다.",
+    en: "Pick your OVERDARE Studio project folder and the AI builds the game inside it — trees, scripts, and all.",
+    de: "Wähle deinen OVERDARE-Studio-Projektordner, und die KI baut das Spiel darin — Bäume, Skripte, alles.",
+    ja: "OVERDARE Studio のプロジェクトフォルダーを選ぶと、AI がその中でツリーやスクリプトを作ってゲームを組み立てます。",
+  },
+  "open.engine.connect": { ko: "폴더 고르고 연결", en: "Pick folder & connect", de: "Ordner wählen & verbinden", ja: "フォルダーを選んで接続" },
+  "open.engine.connecting": { ko: "연결 중…", en: "Connecting…", de: "Verbinden…", ja: "接続中…" },
+  // 처음 쓰는 사용자 — MCP 서버를 제작자 GitHub 에서 가져와 설치한다.
+  "open.engine.install": { ko: "게임 엔진 설치", en: "Install game engine", de: "Game-Engine installieren", ja: "ゲームエンジンを導入" },
+  "open.engine.installDesc": {
+    ko: "OVERDARE 연동 도구를 제작자의 GitHub에서 가져와 설치합니다. (git·node가 있어야 해요)",
+    en: "Installs the OVERDARE connector from the creator's GitHub. (requires git and node)",
+    de: "Installiert den OVERDARE-Connector vom GitHub des Erstellers. (git und node erforderlich)",
+    ja: "OVERDARE 連携ツールを制作者の GitHub から取得して導入します。（git・node が必要）",
+  },
+  "open.engine.creator": { ko: "제작", en: "Made by", de: "Erstellt von", ja: "制作" },
+  "open.engine.doInstall": { ko: "설치", en: "Install", de: "Installieren", ja: "導入" },
+  "open.engine.installing": { ko: "설치 중…", en: "Installing…", de: "Installieren…", ja: "導入中…" },
+  "open.engine.phaseClone": { ko: "내려받는 중…", en: "Downloading…", de: "Herunterladen…", ja: "ダウンロード中…" },
+  "open.engine.phaseInstall": { ko: "패키지 설치 중…", en: "Installing packages…", de: "Pakete installieren…", ja: "パッケージ導入中…" },
+  "open.engine.phaseBuild": { ko: "빌드 중…", en: "Building…", de: "Erstellen…", ja: "ビルド中…" },
+  "open.engine.installFail": { ko: "설치 실패 — git·node가 설치돼 있는지 확인하세요.", en: "Install failed — check that git and node are installed.", de: "Installation fehlgeschlagen — prüfe, ob git und node installiert sind.", ja: "導入に失敗 — git・node が入っているか確認してください。" },
   // 지금 안 해도 된다고 분명히 말한다 — 첫 화면에서 로그인을 강요당하면 그대로 닫는다.
   "open.conn.hint": {
     ko: "지금 넘어가도 됩니다. 나중에 설정에서 언제든 연결할 수 있어요. 구독으로 로그인하면 창이 하나 열립니다.",
