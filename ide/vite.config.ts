@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
   plugins: [react()],
+  // 버전을 package.json 에서 한 번만 읽어 주입한다 — 예전엔 App.tsx 에 손으로 박아 두어
+  // 0.0.4 를 냈는데도 정보 창이 0.0.3 을 보여줬다. 이제 릴리스마다 저절로 맞는다.
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   // Electron 패키징 시 file:// 로드에서도 에셋 경로가 깨지지 않도록 상대 경로
   base: "./",
   server: { port: 4322, strictPort: true },

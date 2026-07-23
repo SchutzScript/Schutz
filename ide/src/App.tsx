@@ -96,7 +96,10 @@ interface Proposal {
 const MONO = "var(--font-code,'IBM Plex Mono','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',monospace)";
 const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Symbol','Segoe UI Emoji',sans-serif)";
 
-const APP_VERSION = "0.0.3";
+// 빌드 시 vite.config 이 package.json 버전을 주입한다(define). 손으로 박지 않는다 —
+// 예전엔 0.0.4 를 냈는데도 여기가 0.0.3 이라 정보 창이 옛 버전을 보여줬다.
+declare const __APP_VERSION__: string;
+const APP_VERSION = __APP_VERSION__;
 // 좌측 컬럼 세로 분할의 하한. 대화는 제목·탭·입력창만 130px 가량 먹어서
 // 이보다 낮추면 메시지가 한 줄도 안 남는다.
 const CHAT_MIN_H = 180;
@@ -3574,7 +3577,9 @@ ${(r.output || "").slice(0, 2000)}`;
     else if (k === "tab") { e.preventDefault(); this.cycleMru(e.shiftKey ? -1 : 1); }
     else if (k === ",") { e.preventDefault(); this.openO({ settingsOpen: true }); }
     else if (k === "`") { e.preventDefault(); this.toggleTerm(); }
-    else if (k === "m" && e.shiftKey) { e.preventDefault(); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); }
+    // 키를 누르고 있으면 OS 자동 반복이 keydown 을 쏟아낸다 — 모드 변신이 매 반복마다
+    // 시작돼 확확 뒤집힌다. 반복 이벤트(e.repeat)는 무시하고 한 번만 토글한다.
+    else if (k === "m" && e.shiftKey && !e.repeat) { e.preventDefault(); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); }
   };
 
   /** Ctrl+Tab MRU 탭 순환 */

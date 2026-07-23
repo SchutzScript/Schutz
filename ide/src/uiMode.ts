@@ -83,21 +83,31 @@ export function applyUiMode(m: UiMode): void {
  *  (언어 전환도 같은 이름들을 지나가지만 그쪽은 상자가 안 바뀌므로 기본 디졸브로 둔다.) */
 const ANIM_ATTR = "modeAnim";
 
+/** 변신이 도는 중인가. 단축키 연타·키 리핏으로 겹쳐 부르면 전환들이 서로를 끊고, 먼저 것의
+ *  finished 가 ANIM_ATTR 를 지워 나중 전환의 CSS 이름이 중간에 빠진다 — 그러면 부드러운
+ *  변신 대신 "확 바뀜" 이 된다. 도는 동안엔 새 요청을 무시해 한 번에 하나만 돈다. */
+let switching = false;
+
 export function switchUiMode(next: UiMode, commit: () => void, flush: (fn: () => void) => void): void {
   const doc = document as Document & {
     startViewTransition?: (cb: () => void) => { ready: Promise<void>; finished: Promise<void> };
   };
   const start = doc.startViewTransition;
   if (reducedMotion() || typeof start !== "function") { commit(); return; }
+  // 이미 변신 중이면 이 요청은 버린다 — 겹치면 애니메이션이 깨진다. 도는 동안의 연타는
+  // "한 번 더 토글" 이 아니라 "지금 걸 마저 보여줘" 로 해석하는 게 자연스럽다.
+  if (switching) return;
 
   try {
+    switching = true;
     document.documentElement.dataset[ANIM_ATTR] = next === "agent" ? "to-agent" : "to-editor";
     // flushSync 가 없으면 브라우저가 아직 옛 화면인 상태를 "새 화면" 으로 잡아
     // 아무것도 안 바뀐 디졸브가 된다 — 언어 전환에서 이미 확인한 함정이다.
     const vt = start.call(doc, () => flush(commit));
     void vt.ready.catch(() => { /* 도중에 다른 전환이 끼어들면 reject 된다 — 정상 */ });
-    void vt.finished.finally(() => { try { delete document.documentElement.dataset[ANIM_ATTR]; } catch { /* */ } });
+    void vt.finished.finally(() => { switching = false; try { delete document.documentElement.dataset[ANIM_ATTR]; } catch { /* */ } });
   } catch {
+    switching = false;
     try { delete document.documentElement.dataset[ANIM_ATTR]; } catch { /* */ }
     commit();   // 연출이 실패해도 모드는 바뀌어야 한다
   }
