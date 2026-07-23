@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.0.5] — A first run that shows, not tells
+
+A pass over the first-run experience and a few things that were rough in daily use. Every setting page now demonstrates the choice with the app's real behavior, the window keeps running in the tray, and streaming no longer stutters.
+
+### First run
+
+- **Every setup page now shows a real example, not just buttons.** AI connection shows each provider's role (manager · plans and delegates, versus takes tasks and runs commands), reflecting the actual manager assignment. Autonomy shows how the same files are judged under each policy — `README.md` and `utils.test.ts` auto-accept, `main.ts` waits for review — straight from the real auto-accept rules. Keymap is three cards, each with that editor's actual shortcuts (IntelliJ `Ctrl+D` duplicate line, VS Code `Ctrl+D` next occurrence, Vim `dd`/`yy`/`:w`). Type shows a live code preview in the chosen fonts and size.
+- **The logo and title stay put as you page through setup.** They used to drift up and down because each page re-centered the whole column; the header is now pinned above the scrolling content.
+- **A short "now, a quick demo" beat** sits between setup and the demo, so the IDE no longer appears out of nowhere.
+- **Enter no longer skips the rest of setup.** It advanced straight to the demo from any page — a leftover from when setup was one screen. It now moves one page at a time and only launches on the last, and a key typed into the API-key field no longer leaks to the window shortcuts.
+- The first-screen credit line is now a fixed "Powered by Electron"; the full stack is credited in the About window.
+
+### Tray
+
+- **Closing the window minimizes to the tray instead of quitting.** The app keeps running — in-flight agent turns and dev servers stay alive, and the tray icon marks that it's still there. Reopen from the tray; quit from its menu. (macOS keeps its own convention.)
+
+### Fixes
+
+- **Mode switching by shortcut (`Ctrl+Shift+M`) now animates.** Holding the key spilled auto-repeat events that restarted the morph every frame, and overlapping switches wiped each other's transition names mid-flight. Repeats are ignored and a switch in progress is left to finish.
+- **The version shown in About was stuck at 0.0.3** even after 0.0.4 shipped — it was hand-typed. It's now injected from `package.json` at build time, so it stays correct every release.
+- **The guided tour cards no longer jump** as you advance — the welcome and closing cards were missing the skeleton figure the middle cards had, so the text shifted; every card carries one now.
+- **App and taskbar icon color** no longer sticks on the wrong theme color when themes are switched quickly.
+
+### Performance
+
+- **Streaming AI replies no longer stutter.** Each token used to re-render the entire UI and re-sort the transcript; text now commits at most ~25 times a second, and the transcript timeline is memoized so unrelated re-renders (typing in the composer) skip the work.
+- **Agent mode stops rebuilding the hidden file tree** on every render — a large workspace was reconstructing thousands of rows behind a `display:none`.
+
 ## [0.0.4] — Agent mode, and a first run that shows its work
 
 The release that gave Schutz a second face — a conversation app for working with agents — and rebuilt the first run so it demonstrates the real product instead of a mockup.
