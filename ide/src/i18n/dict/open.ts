@@ -246,6 +246,16 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Behalten Sie die Kürzel Ihres bisherigen Editors. Später in den Einstellungen änderbar.",
     ja: "使っていたエディタのショートカットをそのまま使えます。あとで設定から変えられます。",
   },
+  // 키맵별 예시에 쓰는 동작 이름 — MonacoPane 이 실제로 거는 바인딩 그대로다.
+  "open.km.dupLine":   { ko: "라인 복제", en: "Duplicate line", de: "Zeile duplizieren", ja: "行を複製" },
+  "open.km.expandSel": { ko: "선택 확장", en: "Expand selection", de: "Auswahl erweitern", ja: "選択を拡張" },
+  "open.km.comment":   { ko: "주석 토글", en: "Toggle comment", de: "Kommentar umschalten", ja: "コメント切替" },
+  "open.km.nextOccur": { ko: "다음 항목 선택", en: "Select next occurrence", de: "Nächstes Vorkommen", ja: "次の候補を選択" },
+  "open.km.moveLine":  { ko: "라인 이동", en: "Move line", de: "Zeile verschieben", ja: "行を移動" },
+  "open.km.delLine":   { ko: "라인 삭제", en: "Delete line", de: "Zeile löschen", ja: "行を削除" },
+  "open.km.yank":      { ko: "복사(yank)", en: "Yank (copy)", de: "Yank (kopieren)", ja: "ヤンク(コピー)" },
+  "open.km.save":      { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },
+  "open.km.modal":     { ko: "모드 전환 편집", en: "Modal editing", de: "Modales Editieren", ja: "モーダル編集" },
 
   "open.step.fonts": { ko: "어떤 글씨가 편한가요", en: "What reads best for you", de: "Was liest sich für Sie am besten", ja: "どの書体が読みやすいですか" },
   "open.step.fonts.lede": {
