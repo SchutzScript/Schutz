@@ -233,6 +233,14 @@ export const dict: Record<string, Record<string, string>> = {
   },
   "open.conn.roleClaude": { ko: "구독 또는 API 키", en: "Subscription or API key", de: "Abo oder API-Schlüssel", ja: "サブスクまたはAPIキー" },
   "open.conn.roleGpt": { ko: "구독 또는 API 키", en: "Subscription or API key", de: "Abo oder API-Schlüssel", ja: "サブスクまたはAPIキー" },
+  // 역할 — 실제 관리자 지정(getManagerId)에 따라 갈린다. 관리자는 계획하고 다른 에이전트에게
+  // 위임하고, 나머지는 요청을 받아 편집·명령을 실행한다. 설정에서 언제든 바꿀 수 있다.
+  "open.conn.roleManager": { ko: "관리자 · 계획하고 위임", en: "Manager · plans and delegates", de: "Manager · plant und delegiert", ja: "マネージャー · 計画して委任" },
+  "open.conn.roleAgent":   { ko: "요청을 받아 편집·명령 실행", en: "Takes tasks, edits and runs commands", de: "Nimmt Aufgaben, bearbeitet und führt aus", ja: "依頼を受けて編集・コマンド実行" },
+  "open.conn.managerBadge": { ko: "관리자", en: "Manager", de: "Manager", ja: "マネージャー" },
+  // 글꼴 쪽 미리보기 — 고른 UI·코드 글꼴/크기로 실제 한 조각을 그린다.
+  "open.fonts.pvUi":      { ko: "이 글씨로 읽습니다", en: "You'll read in this", de: "So lesen Sie", ja: "この書体で読みます" },
+  "open.fonts.pvComment": { ko: "// 올해를 계산한다", en: "// compute the current year", de: "// aktuelles Jahr berechnen", ja: "// 今年を計算する" },
 
   "open.step.autonomy": { ko: "어디까지 맡길까요", en: "How much do you hand over", de: "Wie viel übergeben Sie", ja: "どこまで任せますか" },
   "open.step.autonomy.lede": {
