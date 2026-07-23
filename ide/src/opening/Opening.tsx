@@ -248,15 +248,15 @@ export class Opening extends React.Component<Props, State> {
     // key 를 쪽 번호로 두면 넘길 때마다 노드가 갈리므로 애니메이션이 다시 재생된다.
     // 내비게이션은 이 밖에 둔다 — 버튼이 같이 미끄러지면 누른 것이 도망가는 것처럼 보인다.
     // 쪽마다 붙는 예시 그림 — 1쪽의 모드 카드처럼, 그 쪽이 무엇을 정하는지 뼈대로 보여준다.
-    // 키맵(4쪽)은 세 옵션 카드가 **각각** 예시라 위쪽 공용 그림을 붙이지 않는다.
-    const topic = ({ 2: "ai", 3: "autonomy", 5: "fonts" } as Record<number, "ai" | "autonomy" | "fonts">)[s.page];
+    // 자율성(3쪽)·키맵(4쪽)은 옵션 카드가 **각각** 예시라 위쪽 공용 그림을 붙이지 않는다.
+    const topic = ({ 2: "ai", 5: "fonts" } as Record<number, "ai" | "fonts">)[s.page];
     return (
       <>
         <div key={s.page} className={s.pageDir > 0 ? "sz-step-fwd" : "sz-step-back"}
           style={{ display: "grid", justifyItems: "center", gap: "clamp(14px,1.8vw,26px)", width: "100%" }}>
           {topic && (
             <StepFigure topic={topic} tk={tk}
-              uiStack={UI_FONTS[s.uiFont]?.stack} codeStack={CODE_FONTS[s.codeFont]?.stack} policy={s.policy} />
+              uiStack={UI_FONTS[s.uiFont]?.stack} codeStack={CODE_FONTS[s.codeFont]?.stack} />
           )}
           {s.page === 2 && this.stepAi(tk, pill, lede)}
           {s.page === 3 && this.stepAutonomy(tk, lede)}
@@ -369,30 +369,52 @@ export class Opening extends React.Component<Props, State> {
     );
   }
 
-  /** 3쪽 — 자율성. 읽고 정해야 하는 것이라 카드를 크게 두고 설명을 붙인다. */
+  /** 3쪽 — 자율성. 셋을 예시 카드로 둔다. 각 카드가 **같은 파일들이 이 정책에서 어떻게
+   *  판정되는지**를 실제 규칙(settings.ts autoAcceptFor)대로 보여준다 — 문서·테스트·의존성은
+   *  balanced 에서 자동, 로직은 검토, auto 는 전부 자동, manual 은 전부 검토. */
   private stepAutonomy(tk: typeof THEME_TOKENS[string], lede: (k: string) => React.ReactNode) {
     const s = this.state;
+    const codeStack = CODE_FONTS[s.codeFont]?.stack;
+    // autoAcceptFor 를 그대로 따른 예시 — 지어낸 게 아니라 진짜 판정이다.
+    const EX: Record<string, { name: string; auto: boolean }[]> = {
+      manual:   [{ name: "main.ts", auto: false }, { name: "README.md", auto: false }],
+      balanced: [{ name: "README.md", auto: true }, { name: "utils.test.ts", auto: true }, { name: "main.ts", auto: false }],
+      auto:     [{ name: "main.ts", auto: true }, { name: "styles.css", auto: true }],
+    };
     return (
       <>
         {lede("open.step.autonomy.lede")}
-        <div style={{ display: "flex", gap: 13, justifyContent: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 13, justifyContent: "center", flexWrap: "wrap", alignItems: "stretch" }}>
           {(["manual", "balanced", "auto"] as const).map(k => {
             const on = s.policy === k;
             return (
               <button key={k} aria-pressed={on}
                 onClick={() => { this.setState({ policy: k }); setAutonomy({ policy: k }); }}
                 style={{
-                  width: 205, padding: "16px 16px 15px", borderRadius: 13, cursor: "pointer",
+                  width: 214, padding: "15px 15px 14px", borderRadius: 13, cursor: "pointer",
                   fontFamily: "inherit", textAlign: "left", whiteSpace: "normal", overflow: "hidden",
                   background: tk.bgPanel, color: tk.fg,
                   border: `2px solid ${on ? tk.accent : "transparent"}`,
                   boxShadow: on ? `0 0 24px ${tk.accentSoft}` : "none",
                   transform: on ? "scale(1.03)" : "none",
                   transition: "transform .25s cubic-bezier(.22,1.2,.36,1), border-color .2s, box-shadow .3s",
-                  display: "grid", gap: 7,
+                  display: "grid", gap: 9, alignContent: "start",
                 }}>
                 <span style={{ fontSize: 13.5, fontWeight: 650 }}>{t("open.pol." + k)}</span>
-                <span style={{ fontSize: 11.5, lineHeight: 1.6, color: tk.fgDim2 }}>{t("open.pol." + k + ".desc")}</span>
+                <span style={{ fontSize: 11.5, lineHeight: 1.55, color: tk.fgDim2 }}>{t("open.pol." + k + ".desc")}</span>
+                {/* 실제 판정 예시 — 같은 파일들이 이 정책에서 자동/검토로 갈린다 */}
+                <div style={{ display: "grid", gap: 5, marginTop: 2, paddingTop: 9, borderTop: `1px solid ${tk.w08}` }}>
+                  {EX[k].map(ex => (
+                    <div key={ex.name} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <span style={{ flex: "none", width: 13, textAlign: "center", fontSize: 11,
+                        color: ex.auto ? tk.accent : tk.fgDim }}>{ex.auto ? "✓" : "✎"}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontFamily: codeStack, fontSize: 10.5, color: tk.fgSub,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ex.name}</span>
+                      <span style={{ flex: "none", fontSize: 9.5, letterSpacing: ".04em",
+                        color: ex.auto ? tk.accent : tk.fgDim2 }}>{t(ex.auto ? "open.pol.markAuto" : "open.pol.markReview")}</span>
+                    </div>
+                  ))}
+                </div>
               </button>
             );
           })}
@@ -912,8 +934,8 @@ function ModeDiagram({ mode, tk }: { mode: string; tk: any }) {
  * 글꼴은 고른 값을 그대로 그려(진짜 미리보기), 나머지는 개념을 그린다.
  */
 function StepFigure(
-  { topic, tk, uiStack, codeStack, policy }:
-  { topic: "ai" | "autonomy" | "fonts"; tk: any; uiStack?: string; codeStack?: string; policy?: string },
+  { topic, tk, uiStack, codeStack }:
+  { topic: "ai" | "fonts"; tk: any; uiStack?: string; codeStack?: string },
 ) {
   const box: React.CSSProperties = {
     width: 176, height: 60, borderRadius: 10, background: tk.bgEditor,
@@ -943,22 +965,6 @@ function StepFigure(
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.w14 }} />
         </div>
       </>
-    );
-  } else if (topic === "autonomy") {
-    // 반영은 당신이 정한다 — 제안 카드 + 수락 체크. auto 면 체크가 이미 차 있다.
-    const auto = policy === "auto";
-    inner = (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 auto" }}>
-        <div style={{ width: 104, borderRadius: 7, border: `1px solid ${tk.w12}`, background: tk.bgPanel, padding: "8px 9px", display: "grid", gap: 5 }}>
-          <div style={bar("72%", .6)} />
-          <div style={bar("50%", .38)} />
-        </div>
-        <div style={{ width: 22, height: 22, borderRadius: "50%", flex: "none",
-          background: auto ? tk.accent : "transparent", border: `1.5px solid ${tk.accent}`,
-          display: "grid", placeItems: "center" }}>
-          <span style={{ fontSize: 12, lineHeight: 1, color: auto ? tk.onAccent : tk.accent }}>✓</span>
-        </div>
-      </div>
     );
   } else {
     // 글꼴 — 고른 UI·코드 글꼴로 실제 미리보기.

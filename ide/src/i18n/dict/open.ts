@@ -219,6 +219,9 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Läuft ohne Unterbrechung durch",
     ja: "止まらずに進めます",
   },
+  // 정책 카드의 파일 예시에 붙는 표시 — autoAcceptFor 의 실제 판정 그대로.
+  "open.pol.markAuto":   { ko: "자동", en: "auto", de: "auto", ja: "自動" },
+  "open.pol.markReview": { ko: "검토", en: "review", de: "prüfen", ja: "確認" },
 
   // ── 세팅 쪽 제목 — 한 쪽에 하나씩 묻는다 ─────────────────────────────
   "open.step.ai": { ko: "무엇과 함께 일할까요", en: "Who will you work with", de: "Mit wem arbeiten Sie", ja: "誰と一緒に働きますか" },
