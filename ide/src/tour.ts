@@ -54,7 +54,9 @@ export interface TourStep {
 }
 
 export const TOUR_STEPS: TourStep[] = [
-  { id: "welcome", anchor: null, titleKey: "tour.welcome.title", bodyKey: "tour.welcome.body" },
+  // 환영·마무리는 어느 한 곳을 짚지 않지만 **화면 전체** 그림을 준다 — 모든 카드가 같은
+  // 크기의 그림을 가져야 단계를 넘길 때 제목·본문이 위아래로 흔들리지 않는다(overview).
+  { id: "welcome", figure: "overview", anchor: null, titleKey: "tour.welcome.title", bodyKey: "tour.welcome.body" },
 
   // ── 에디터 모드 트랙 ────────────────────────────────────────────────
   // 레일은 트리·소스컨트롤·디버그·확장 넷의 입구다. 넷을 각각 한 단계씩 주면
@@ -115,7 +117,7 @@ export const TOUR_STEPS: TourStep[] = [
   { id: "mcp", figure: "menubar", anchor: "mcp", titleKey: "tour.mcp.title", bodyKey: "tour.mcp.body", placement: "below" },
   // 모드 전환은 두 트랙을 잇는 다리다 — 방금 배운 것 말고 **다른 모양도 있다**.
   { id: "mode", figure: "mode", anchor: "mode", titleKey: "tour.mode.title", bodyKey: "tour.mode.body", placement: "below" },
-  { id: "done", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },
+  { id: "done", figure: "overview", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },
 ];
 
 /** 지금 모양에서 **실제로 보게 될** 단계들.
