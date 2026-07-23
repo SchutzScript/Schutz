@@ -21,6 +21,11 @@ const MAX_DEPTH = 8;
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — 에디터로 열 상한
 
 let winCounter = 0;
+// 진짜 종료 중인가. 평소 창 닫기는 트레이로 최소화하지만(아래 win.on("close")),
+// 트레이 '종료' → app.quit() → before-quit 에서 이 값이 서면 창이 정상적으로 닫힌다.
+let isQuitting = false;
+// 트레이로 최소화된다는 안내를 처음 한 번만 띄운다.
+let trayHintShown = false;
 function createWindow(layout) {
   const winId = winCounter++;
   const win = new BrowserWindow({
@@ -72,6 +77,23 @@ function createWindow(layout) {
   win.webContents.on("will-navigate", (e, url) => {
     const here = isDev ? DEV_URL : "file://";
     if (!url.startsWith(here) && !url.startsWith("file://")) e.preventDefault();
+  });
+
+  // 창을 닫으면 **종료가 아니라 트레이로 최소화**한다 — 앱은 계속 돈다(진행 중인 에이전트
+  // 턴·개발 서버가 살아 있어야 하고, 트레이 아이콘이 "아직 돌고 있다" 를 알린다). 다시
+  // 열려면 트레이 아이콘을 누른다. 진짜 종료(트레이 '종료' → app.quit())일 때만 isQuitting 이
+  // 서서 정상적으로 닫힌다. macOS 는 "창 닫기 = 창만 닫힘, 앱은 독에 남음" 관례가 강하고
+  // darwin 은 어차피 앱이 살아 있으므로 건드리지 않는다.
+  win.on("close", (e) => {
+    if (isQuitting || process.platform === "darwin") return;
+    e.preventDefault();
+    win.hide();
+    // 앱이 사라진 게 아니라 트레이로 갔다는 걸 처음 한 번만 알린다(윈도우 전용 풍선).
+    // 트레이 메뉴가 한국어로 하드코딩돼 있으므로 여기도 맞춘다.
+    if (!trayHintShown && tray) {
+      trayHintShown = true;
+      try { tray.displayBalloon({ title: "Schutz", content: "트레이에서 계속 실행됩니다. 아이콘을 눌러 다시 엽니다." }); } catch { /* 풍선을 못 띄워도 무방 */ }
+    }
   });
   return win;
 }
@@ -534,9 +556,9 @@ ipcMain.on("schutz:setAppIcon", (e, dataUrl) => {
 // ── 트레이(숨겨진 아이콘 표시) ──────────────────────────────────────────────
 //
 // 앱이 도는 동안 트레이에 뜬다 — 테마 색으로 칠한 아이콘과 빠른 메뉴(열기·새 창·종료).
-// macOS 는 마지막 창을 닫아도 앱이 살아 있어(darwin 관례) 트레이만으로 다시 열 수 있지만,
-// Windows·Linux 는 window-all-closed 에서 app.quit() 하므로 마지막 창을 닫으면 앱과 함께
-// 트레이도 사라진다("닫으면 트레이로 최소화"는 별도 결정 사항이라 지금은 하지 않는다).
+// 창을 닫아도 앱은 종료되지 않고 트레이로 최소화되므로(createWindow 의 win.on("close")),
+// 트레이가 "아직 돌고 있다" 를 알리는 유일한 표식이자 다시 여는 통로다. 진짜 종료는 여기
+// '종료' 로만 — app.quit() → before-quit 에서 isQuitting 이 서고, 그때 이 트레이도 놓아준다.
 //
 // 창 아이콘과 **같은 그림**을 쓴다 — 렌더러가 테마 색으로 칠해 보내주는 그 PNG 다. 따로
 // 자산을 두면 테마를 바꿨을 때 트레이만 옛 색으로 남는다.
@@ -1299,6 +1321,8 @@ app.whenReady().then(() => {
 // 백그라운드 실행(dev 서버)은 앱보다 오래 산다 — 종료 때 정리하지 않으면
 // 포트를 계속 물고 있어 다음 실행이 EADDRINUSE 로 죽는다.
 app.on("before-quit", () => {
+  // 이제부터의 창 닫기는 트레이 최소화가 아니라 진짜 종료다 — win.on("close") 가 이 값을 본다.
+  isQuitting = true;
   for (const c of runProcs.values()) { try { killProcTree(c); } catch { /* 이미 죽음 */ } }
   runProcs.clear();
 });
