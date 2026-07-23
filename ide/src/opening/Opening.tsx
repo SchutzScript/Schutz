@@ -89,14 +89,14 @@ interface State {
   wantsImport: boolean;
   /** 세팅이 걷힌 뒤 "이제 시연" 안내를 띄우는 중. 이게 있어야 IDE 가 툭 뜨지 않는다. */
   announcing: boolean;
-  /** 게임 엔진(OVERDARE)이 연결됐나 — AI 쪽 선택 섹션에서 폴더를 고르면 켜진다. */
-  engineOn: boolean;
-  /** 게임 엔진 연결이 진행 중(폴더 선택 → 등록 → 시작). 버튼을 잠근다. */
-  engineBusy: boolean;
-  /** MCP 서버가 이 기기에 이미 설치돼 있나(GitHub 설치본 또는 발견된 설정). */
-  engineInstalled: boolean;
-  /** 설치 안내 패널(제작자 표시)이 펼쳐져 있나. */
-  engineExpand: boolean;
+  /** 이번 세션에 연결한 엔진 어댑터 id 들. */
+  engineConnected: string[];
+  /** 어댑터 id → 이미 설치·발견돼 바로 연결 가능한가(설치 버튼 대신 연결 버튼을 보인다). */
+  engineAvail: Record<string, boolean>;
+  /** 연결이 진행 중인 어댑터 id("" = 없음). 그 카드 버튼을 잠근다. */
+  engineBusy: string;
+  /** 설치 안내(제작자) 패널이 펼쳐진 어댑터 id("" = 접힘). */
+  engineExpand: string;
   /** GitHub 설치(clone→build)가 도는 중. */
   engineInstalling: boolean;
   /** 설치 진행 문구(내려받는 중·설치 중·빌드 중). */
@@ -112,8 +112,8 @@ export class Opening extends React.Component<Props, State> {
       t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
       page: 1 as const, pageDir: 1 as const, leaving: false, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
       policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0, announcing: false,
-      engineOn: engines.ADAPTERS.some(a => mcp.getMcpTools().some(tl => tl.server === a.serverName)), engineBusy: false,
-      engineInstalled: false, engineExpand: false, engineInstalling: false, enginePhase: "", engineErr: "",
+      engineConnected: engines.ADAPTERS.filter(a => mcp.getMcpTools().some(tl => tl.server === a.serverName)).map(a => a.id),
+      engineAvail: {}, engineBusy: "", engineExpand: "", engineInstalling: false, enginePhase: "", engineErr: "",
     };
   })();
   private raf = 0;
@@ -135,16 +135,18 @@ export class Opening extends React.Component<Props, State> {
     // 지난 대화가 **있을 때만** 물어본다. 처음 쓰는 사람에게 "가져올까요?" 는 아무 뜻이
     // 없고, 세팅 화면만 한 칸 길어진다. 파일 수만 세므로 1GB 를 읽지 않는다.
     void this.countPastChats();
-    // 게임 엔진 MCP 를 이미 쓸 수 있으면(GitHub 설치본이 있거나, ~/.claude.json 등에서 발견되면)
-    // '설치' 대신 '연결'만 보여준다. 둘 다 없는 처음 쓰는 사용자에게만 설치를 권한다.
-    const a0 = engines.ADAPTERS[0];
-    if (a0?.install && window.schutz) {
-      void Promise.all([
-        window.schutz.engineInstalledPath({ id: a0.id, entry: a0.install.entry }),
-        mcp.discover(null),
-      ]).then(([p, disc]) => {
-        if (p || (disc || []).some(d => d.name === a0.serverName)) this.setState({ engineInstalled: true });
-      }).catch(() => { /* 못 물어봐도 그냥 설치 버튼을 보여준다 */ });
+    // 각 엔진이 이미 쓸 수 있으면(발견된 설정이 있거나 GitHub 설치본이 있으면) '설치' 대신 '연결'만
+    // 보여준다. 둘 다 없는 처음 쓰는 사용자에게만(그리고 install 스펙이 있는 엔진만) 설치를 권한다.
+    if (window.schutz) {
+      void mcp.discover(null).then(async disc => {
+        const avail: Record<string, boolean> = {};
+        for (const a of engines.ADAPTERS) {
+          let ok = (disc || []).some(d => d.name === a.serverName);
+          if (!ok && a.install) { try { ok = !!(await window.schutz!.engineInstalledPath({ id: a.id, entry: a.install.entry })); } catch { /* */ } }
+          avail[a.id] = ok;
+        }
+        this.setState({ engineAvail: avail });
+      }).catch(() => { /* 못 물어봐도 그냥 버튼을 보여준다 */ });
     }
   }
 
@@ -406,14 +408,19 @@ export class Opening extends React.Component<Props, State> {
             );
           })}
         </div>
-        {/* 게임 엔진(선택) — 폴더 하나만 고르면 AI가 그 안에서 게임을 만든다. 코더가 아닌
-            사람도 여기서 바로 시작할 수 있게, MCP 패널이 아니라 첫 화면에 둔다. */}
-        {(() => {
-          const a = engines.ADAPTERS[0];
-          if (!a) return null;
-          const on = s.engineOn || mcp.getMcpTools().some(tl => tl.server === a.serverName);
+        {/* 게임·3D 엔진(선택) — 코더가 아닌 사람도 여기서 바로 붙일 수 있게, MCP 패널이 아니라
+            첫 화면에 둔다. 어댑터마다 한 장씩. 폴더가 있는 엔진은 폴더를, 설치가 필요하면 제작자를
+            띄운 뒤 GitHub 에서 가져온다. */}
+        {engines.ADAPTERS.map(a => {
+          const on = s.engineConnected.includes(a.id) || mcp.getMcpTools().some(tl => tl.server === a.serverName);
+          const available = !!s.engineAvail[a.id];
+          // 발견·설치돼 있으면 연결. 설치 스펙이 없는 엔진(Blender)은 preset 으로 늘 연결 가능하다.
+          // 설치 스펙이 있는 엔진(OVERDARE)은 preset(npm)이 미덥지 않으니 없을 때 설치를 권한다.
+          const connectable = available || (!!a.preset && !a.install);
+          const busy = s.engineBusy === a.id;
+          const expanded = s.engineExpand === a.id;
           return (
-            <div style={{ background: tk.bgPanel, border: `1.5px solid ${on ? tk.accent : tk.w08}`,
+            <div key={a.id} style={{ background: tk.bgPanel, border: `1.5px solid ${on ? tk.accent : tk.w08}`,
               borderRadius: 13, padding: "14px 16px", textAlign: "left", width: "min(600px,82vw)", transition: "border-color .2s" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                 <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", flex: "none", background: on ? tk.accent : tk.w14 }} />
@@ -423,22 +430,20 @@ export class Opening extends React.Component<Props, State> {
                     <span style={{ fontSize: 9.5, letterSpacing: ".04em", color: tk.fgDim2, background: tk.w08, borderRadius: 4, padding: "1px 6px" }}>{t("open.engine.badge")}</span>
                     <span style={{ fontSize: 11.5, color: on ? tk.accent : tk.fgDim2 }}>{on ? t("open.engine.connected") : t("open.engine.off")}</span>
                   </div>
-                  <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>{t("open.engine.desc")}</div>
+                  <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>{t(a.descKey)}</div>
                 </div>
                 <div style={{ flex: 1 }} />
-                {!on && (s.engineInstalled
-                  // 이미 설치/발견돼 있으면 폴더만 고르면 된다.
-                  ? <button onClick={() => void this.connectEngine(a)} disabled={s.engineBusy}
-                      style={{ ...pill(false), fontSize: 11.5, padding: "7px 12px", opacity: s.engineBusy ? 0.6 : 1, cursor: s.engineBusy ? "default" : "pointer" }}>
-                      {s.engineBusy ? t("open.engine.connecting") : t("open.engine.connect")}
+                {!on && (connectable
+                  ? <button onClick={() => void this.connectEngine(a)} disabled={busy}
+                      style={{ ...pill(false), fontSize: 11.5, padding: "7px 12px", opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}>
+                      {busy ? t("open.engine.connecting") : t(a.projectEnv ? "open.engine.connect" : "open.engine.connectPlain")}
                     </button>
-                  // 아직 없으면 설치 안내(제작자)를 펼친다.
-                  : a.install && <button onClick={() => this.setState({ engineExpand: !s.engineExpand, engineErr: "" })}
-                      style={{ ...pill(s.engineExpand), fontSize: 11.5, padding: "7px 12px" }}>{t("open.engine.install")}</button>
+                  : a.install && <button onClick={() => this.setState({ engineExpand: expanded ? "" : a.id, engineErr: "" })}
+                      style={{ ...pill(expanded), fontSize: 11.5, padding: "7px 12px" }}>{t("open.engine.install")}</button>
                 )}
               </div>
               {/* 설치 안내 — MCP 를 제작자의 GitHub 에서 가져온다. 설치 화면에 제작자를 띄운다. */}
-              {!on && !s.engineInstalled && s.engineExpand && a.install && (
+              {!on && !connectable && expanded && a.install && (
                 <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${tk.w08}` }}>
                   <div style={{ fontSize: 11.5, color: tk.fgDim2, lineHeight: 1.55 }}>{t("open.engine.installDesc")}</div>
                   <div style={{ fontSize: 11.5, color: tk.fgSub, marginTop: 7 }}>
@@ -451,14 +456,14 @@ export class Opening extends React.Component<Props, State> {
                       style={{ ...pill(true), fontSize: 12, opacity: s.engineInstalling ? 0.7 : 1, cursor: s.engineInstalling ? "default" : "pointer" }}>
                       {s.engineInstalling ? (s.enginePhase || t("open.engine.installing")) : t("open.engine.doInstall")}
                     </button>
-                    {!s.engineInstalling && <button onClick={() => this.setState({ engineExpand: false })}
+                    {!s.engineInstalling && <button onClick={() => this.setState({ engineExpand: "" })}
                       style={{ ...pill(false), fontSize: 12 }}>{t("common.cancel")}</button>}
                   </div>
                 </div>
               )}
             </div>
           );
-        })()}
+        })}
         <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-8px 0 0", maxWidth: "min(600px,82vw)", whiteSpace: "normal" }}>
           {t("open.conn.hint")}
         </p>
@@ -653,19 +658,20 @@ export class Opening extends React.Component<Props, State> {
    *  넘긴다(첫 화면에서 오류를 들이밀 이유가 없다 — 나중에 MCP 패널에서 다시 할 수 있다). */
   private async connectEngine(a: engines.EngineAdapter) {
     if (this.state.engineBusy || !window.schutz) return;
-    this.setState({ engineBusy: true });
+    this.setState({ engineBusy: a.id });
     try {
-      const folder = await window.schutz.openFolder();
-      if (!folder) return;
+      // 폴더가 필요한 엔진(OVERDARE)만 폴더를 묻는다. Blender 처럼 폴더가 없으면 바로 연결한다.
+      let folder: string | null = null;
+      if (a.projectEnv) { folder = await window.schutz.openFolder(); if (!folder) return; }
       const entry = a.install ? await window.schutz.engineInstalledPath({ id: a.id, entry: a.install.entry }) : null;
       const disc = (await mcp.discover(null)).find(d => d.name === a.serverName);
       const cfg = entry ? engines.installedConnectConfig(a, entry, folder) : engines.connectConfig(a, disc, folder);
       const added = await mcp.addServer(cfg.name, { command: cfg.command, args: cfg.args, env: cfg.env, overwrite: true });
       if (!added.ok) return;
       const started = await mcp.startServer(cfg.name);   // 도구 캐시까지 갱신된다
-      if (started.ok) this.setState({ engineOn: true, engineExpand: false });
+      if (started.ok) this.setState(st => ({ engineConnected: [...st.engineConnected, a.id], engineExpand: "" }));
     } catch { /* 조용히 — 나중에 설정에서 */ } finally {
-      this.setState({ engineBusy: false });
+      this.setState({ engineBusy: "" });
     }
   }
 
@@ -688,13 +694,13 @@ export class Opening extends React.Component<Props, State> {
     try {
       const r = await window.schutz.engineInstall({ id: a.id, repo: a.install.repo, build: a.install.build, entry: a.install.entry });
       if (!r.ok || !r.entryPath) { this.setState({ engineErr: r.error || t("open.engine.installFail") }); return; }
-      this.setState({ engineInstalled: true });
-      // 설치가 끝났으면 폴더를 골라 바로 등록한다.
-      const folder = await window.schutz.openFolder();
-      if (!folder) { this.setState({ engineExpand: false }); return; }   // 설치는 됐고 연결만 안 함
+      this.setState(st => ({ engineAvail: { ...st.engineAvail, [a.id]: true } }));
+      // 설치가 끝났으면(폴더가 필요한 엔진만) 폴더를 골라 바로 등록한다.
+      let folder: string | null = null;
+      if (a.projectEnv) { folder = await window.schutz.openFolder(); if (!folder) { this.setState({ engineExpand: "" }); return; } }
       const cfg = engines.installedConnectConfig(a, r.entryPath, folder);
       const added = await mcp.addServer(cfg.name, { command: cfg.command, args: cfg.args, env: cfg.env, overwrite: true });
-      if (added.ok) { const s = await mcp.startServer(cfg.name); if (s.ok) this.setState({ engineOn: true, engineExpand: false }); }
+      if (added.ok) { const s = await mcp.startServer(cfg.name); if (s.ok) this.setState(st => ({ engineConnected: [...st.engineConnected, a.id], engineExpand: "" })); }
     } catch (e) {
       this.setState({ engineErr: e instanceof Error ? e.message : String(e) });
     } finally {

@@ -17,7 +17,7 @@ describe("adapterForServer", () => {
 
 describe("riskFor", () => {
   it("non-engine servers are always safe (preserve no-gate behavior)", () => {
-    expect(riskFor("blender", "execute_blender_code")).toBe("safe");
+    expect(riskFor("some-random-mcp", "delete_everything")).toBe("safe");
   });
   it("reads are safe", () => {
     for (const t of ["overdare_browse", "overdare_status", "overdare_screenshot",
@@ -104,10 +104,10 @@ describe("connectConfig", () => {
     expect(cfg.env.OVERDARE_PROJECT_DIR).toBe("D:/World");
   });
   it("does not mutate the adapter preset array", () => {
-    const before = [...overdare.preset.args];
+    const before = [...overdare.preset!.args];
     const cfg = connectConfig(overdare, undefined, "X");
     cfg.args.push("mutated");
-    expect(overdare.preset.args).toEqual(before);
+    expect(overdare.preset!.args).toEqual(before);
   });
 });
 
@@ -132,10 +132,53 @@ describe("installedConnectConfig", () => {
 });
 
 describe("ADAPTERS registry", () => {
-  it("every adapter's play/stop tools appear in its tool set", () => {
+  it("every adapter has the required core fields", () => {
     for (const a of ADAPTERS) {
-      expect(a.tools.play).toBe(a.playTool);
-      expect(a.tools.stop).toBe(a.stopTool);
+      expect(a.id).toBeTruthy();
+      expect(a.serverName).toBeTruthy();
+      expect(a.descKey).toBeTruthy();
+      expect(a.systemGuide).toBeTruthy();
+      expect(a.risk).toBeDefined();
     }
+  });
+});
+
+describe("Blender adapter", () => {
+  const blender = adapterForServer("blender")!;
+  it("is registered as a second engine, no project folder", () => {
+    expect(blender.id).toBe("blender");
+    expect(blender.projectEnv).toBeUndefined();
+    expect(blender.install).toBeUndefined();     // 파이썬(uv) 배포 — npm 설치 흐름 없음
+    expect(blender.preset).toEqual({ command: "uvx", args: ["blender-mcp"] });
+  });
+  it("gates arbitrary code / downloads / generation, reads are safe", () => {
+    expect(riskFor("blender", "execute_blender_code")).toBe("confirm");
+    expect(riskFor("blender", "download_polyhaven_asset")).toBe("confirm");
+    expect(riskFor("blender", "generate_hyper3d_model_via_text")).toBe("confirm");
+    expect(riskFor("blender", "set_texture")).toBe("confirm");
+    expect(riskFor("blender", "get_scene_info")).toBe("safe");
+    expect(riskFor("blender", "get_viewport_screenshot")).toBe("safe");
+    expect(riskFor("blender", "search_polyhaven_assets")).toBe("safe");
+  });
+  it("has no asset-id hang / play concepts", () => {
+    expect(assetImportId("blender", "download_polyhaven_asset", { assetId: "x" })).toBeNull();
+    expect(mutatesWhilePlaying("blender", "execute_blender_code")).toBe(false);
+    expect(harvestAssetIds("blender", "get_scene_info", "ovdrassetid://1")).toEqual([]);
+  });
+});
+
+describe("connectConfig — folderless engine (Blender)", () => {
+  const blender = adapterForServer("blender")!;
+  it("uses preset with no project env when nothing discovered and no folder", () => {
+    const cfg = connectConfig(blender, undefined, null);
+    expect(cfg.command).toBe("uvx");
+    expect(cfg.args).toEqual(["blender-mcp"]);
+    expect(cfg.env).toEqual({});
+  });
+  it("reuses a discovered config verbatim (its env kept, no folder added)", () => {
+    const cfg = connectConfig(blender, { command: "cmd", args: ["/c", "uvx", "blender-mcp"], env: {} }, null);
+    expect(cfg.command).toBe("cmd");
+    expect(cfg.args).toEqual(["/c", "uvx", "blender-mcp"]);
+    expect(cfg.env).toEqual({});
   });
 });

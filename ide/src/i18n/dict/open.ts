@@ -201,13 +201,20 @@ export const dict: Record<string, Record<string, string>> = {
   "open.engine.badge": { ko: "게임 엔진", en: "Game engine", de: "Game-Engine", ja: "ゲームエンジン" },
   "open.engine.connected": { ko: "연결됨", en: "Connected", de: "Verbunden", ja: "接続済み" },
   "open.engine.off": { ko: "아직", en: "Not yet", de: "Noch nicht", ja: "まだ" },
-  "open.engine.desc": {
+  "open.engine.descOverdare": {
     ko: "OVERDARE Studio 프로젝트 폴더를 고르면 AI가 그 안에서 직접 트리·스크립트를 만들어 게임을 빌드합니다.",
     en: "Pick your OVERDARE Studio project folder and the AI builds the game inside it — trees, scripts, and all.",
     de: "Wähle deinen OVERDARE-Studio-Projektordner, und die KI baut das Spiel darin — Bäume, Skripte, alles.",
     ja: "OVERDARE Studio のプロジェクトフォルダーを選ぶと、AI がその中でツリーやスクリプトを作ってゲームを組み立てます。",
   },
+  "open.engine.descBlender": {
+    ko: "Blender를 연결하면 AI가 씬을 읽고 파이썬으로 모델링·에셋 배치를 직접 합니다. (Blender에 애드온이 켜져 있어야 해요)",
+    en: "Connect Blender and the AI reads the scene and models with Python — placing assets and building the scene. (needs the Blender add-on running)",
+    de: "Verbinde Blender, und die KI liest die Szene und modelliert per Python — platziert Assets und baut die Szene. (Blender-Add-on muss laufen)",
+    ja: "Blender をつなぐと、AI がシーンを読み、Python でモデリングやアセット配置を行います。（Blender のアドオンが必要）",
+  },
   "open.engine.connect": { ko: "폴더 고르고 연결", en: "Pick folder & connect", de: "Ordner wählen & verbinden", ja: "フォルダーを選んで接続" },
+  "open.engine.connectPlain": { ko: "연결", en: "Connect", de: "Verbinden", ja: "接続" },
   "open.engine.connecting": { ko: "연결 중…", en: "Connecting…", de: "Verbinden…", ja: "接続中…" },
   // 처음 쓰는 사용자 — MCP 서버를 제작자 GitHub 에서 가져와 설치한다.
   "open.engine.install": { ko: "게임 엔진 설치", en: "Install game engine", de: "Game-Engine installieren", ja: "ゲームエンジンを導入" },
