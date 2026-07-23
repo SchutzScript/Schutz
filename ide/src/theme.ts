@@ -135,10 +135,15 @@ export function applyTheme(id: string): void {
  *
  *  같은 색을 두 번 칠하지 않는다 — applyTheme 은 부팅·테마 변경·오프닝에서 여러 번 불린다. */
 let lastIconColor = "";
+// 요청 세대. 테마를 A→B 로 빨리 바꾸면 두 paint 가 겹치는데, 디코드가 끝나는 순서는
+// 요청 순서와 다를 수 있다 — A 가 B 보다 늦게 끝나면 아이콘이 옛 색 A 로 굳는다.
+// 각 호출이 세대를 하나 물고, 칠하기 직전에 자기가 여전히 최신인지 확인한다.
+let iconGen = 0;
 async function paintAppIcon(color: string): Promise<void> {
   const api = (window as any).schutz;
   if (!api?.setAppIcon || color === lastIconColor) return;
   lastIconColor = color;
+  const gen = ++iconGen;
   try {
     const img = new Image();
     img.src = "./assets/logo-t.png";
@@ -155,10 +160,12 @@ async function paintAppIcon(color: string): Promise<void> {
     g.globalCompositeOperation = "source-in";
     g.fillStyle = color;
     g.fillRect(0, 0, N, N);
+    if (gen !== iconGen) return;   // 그 사이 더 최근 색 요청이 들어왔다 — 이 결과는 버린다
     api.setAppIcon(c.toDataURL("image/png"));
   } catch {
     // 아이콘을 못 바꿔도 앱은 돈다. 다음 테마 변경 때 다시 시도할 수 있게 표식을 지운다.
-    lastIconColor = "";
+    // 단, 내가 최신일 때만 — 이미 밀려난 호출이 최신 색의 표식을 지우면 안 된다.
+    if (gen === iconGen) lastIconColor = "";
   }
 }
 
