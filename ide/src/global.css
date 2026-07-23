@@ -48,6 +48,9 @@ a:hover { color: var(--accent-hi); }
 @keyframes szFlash { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
 @keyframes szSweep { 0% { background-position: -140% 0; } 100% { background-position: 140% 0; } }
 @keyframes szGlow { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+/* 편집이 파일에 **착지**하는 순간. 제안이 수락으로 바뀔 때 카드 위를 초록 물결이 한 번
+   지나가고 사라진다 — 상태 글자만 툭 바뀌는 대신 반영이 내려앉은 게 보인다. */
+@keyframes szLand { 0% { opacity: .55; } 100% { opacity: 0; } }
 @keyframes szRingFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
 
 /* 튜토리얼 스포트라이트 — 홀(어두운 오버레이 컷아웃) + 맥동 강조 링 */

@@ -455,11 +455,19 @@ export class Opening extends React.Component<Props, State> {
         transition: `opacity ${LEAVE_MS}ms var(--ease), transform ${LEAVE_MS}ms var(--ease)`,
         pointerEvents: this.state.leaving ? "none" : "auto",
       }}>
-        <Mark color={tk.accent} size={44} width={9} />
-        <p style={{ fontSize: "clamp(24px,4vw,52px)", fontWeight: 300, letterSpacing: "-.03em", margin: 0, color: tk.fg }}>
+        {/* 마무리는 **도착해야** 한다. 예전엔 마크·제목·버튼이 배경이 걷히는 순간 한꺼번에
+            떠서, 시연이 끝나기도 전에 다음 화면이 툭 얹힌 것처럼 읽혔다. 차례로(마크 →
+            제목 → 버튼) 떠오르게 하면 "일이 정리되고, 이제 준비됐다" 로 읽힌다.
+            leaving 중에는 트랜지션으로 빠지므로 이 등장은 처음 뜰 때만 돈다. */}
+        <div style={{ animation: "szFadeUp .5s var(--ease) both", animationDelay: "60ms" }}>
+          <Mark color={tk.accent} size={44} width={9} />
+        </div>
+        <p style={{ fontSize: "clamp(24px,4vw,52px)", fontWeight: 300, letterSpacing: "-.03em", margin: 0, color: tk.fg,
+          animation: "szFadeUp .5s var(--ease) both", animationDelay: "200ms" }}>
           {t("open.done.title")}
         </p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap",
+          animation: "szFadeUp .5s var(--ease) both", animationDelay: "360ms" }}>
           <button onClick={() => this.finish(true)} style={{
             fontFamily: "inherit", fontSize: 14, padding: "11px 26px", borderRadius: 10, border: "none",
             background: tk.accent, color: tk.onAccent, fontWeight: 650, cursor: "pointer",
