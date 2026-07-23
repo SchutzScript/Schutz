@@ -2,11 +2,45 @@
 
 ## [Unreleased]
 
+## [0.0.4] — Agent mode, and a first run that shows its work
+
+The release that gave Schutz a second face — a conversation app for working with agents — and rebuilt the first run so it demonstrates the real product instead of a mockup.
+
+### Agent mode
+
+Schutz now has two modes. **Editor mode** is unchanged — file tree, tabs, and editor at the center, chat beside it. **Agent mode** is a conversation app: the dialogue is the screen, and code surfaces only when it's needed.
+
+- **Switching modes is a morph, not a cut.** Six structural regions (top bar, status, conversation, rail, aside, editor) are named and animate between the two layouts via the View Transitions API. The names are scoped to the morph so they don't interfere with other transitions.
+- **A conversation-app layout** — a left sidebar (new chat · artifacts · custom · recent items), the conversation in the middle, and an artifacts panel that opens on the right only when code, markdown, or a preview is shown. A split panel, not a full-screen sheet that buries the code.
+- **The composer holds its own tools.** The chrome above the conversation is gone; file and selection attachment and agent selection now live inside the input box.
+- **One transcript.** Messages, tool rows, proposals, and pending approvals interleave in a single timeline. Transcripts persist per conversation, and the first run lets you choose which mode to start in.
+- **Many conversations.** Each is stored individually behind a recent-items index, migrated once from the old single-session store.
+
+### First run
+
+The first run is now a short film over the **real app**, not a mockup — the demo drives real Monaco, real proposals, and the real accept path, with zero API calls, and never touches your files.
+
+- **It shows what the product actually does**: a request is typed, the agent searches and reads (every tool leaves a line), a proposal queues in review, accepting types the change into the editor, and a command is asked-before-run with its test output streaming line by line to completion.
+- **Setup asks one thing per page** — language and look, then AI connection, autonomy, keymap, and type — each page transitioning in.
+- **A skip button** sits in the corner throughout, and the closing screen arrives in sequence (mark, then title, then buttons) instead of popping in all at once.
+- **The window and taskbar icon follow the theme color**, and a tray icon is added.
+- **The guided tour has per-mode tracks** — agent mode gets its own walkthrough — with skeleton figures on the cards and a next button that stays in one place.
+
+### Import past conversations
+
+- **Bring your Claude Code and Codex history into Schutz.** The importer reads their JSONL transcripts, split by source, offered both in the first run and under the AI menu (below MCP servers). Large files are read tail-first, so a 200 MB session opens without loading the whole thing.
+
+### Language switching
+
+- **Switching language now transitions in both directions.** Only the arrival was faded before, so the old strings were still fully opaque at the frame everything changed — exactly when a Korean-to-German width change is most visible. The screen now blurs out, swaps at the bottom, and comes back. It applies everywhere language can be picked, including the first-run setup screen, which had no transition at all.
+
 ### Fixes
 
 - **The progress beam sat frozen at 8% for the whole run.** Its width came only from the completion ratio of the plan list, which real agent runs never populate — only the scripted demo does. Every actual run fell through to a hardcoded fallback and never moved. It now advances per round.
 - **Toasts were left mounted as invisible ghosts.** Their dismissal timers lived in the shared pool that starting or stopping an agent wipes wholesale, so any toast on screen at that moment never left the state. They now own their timers, matching what tab closing already did for the same reason.
-- **Switching language now transitions in both directions.** Only the arrival was faded before, so the old strings were still fully opaque at the frame everything changed — which is exactly when a Korean-to-German width change is most visible. The screen now blurs out, swaps at the bottom, and comes back. It also applies everywhere language can be picked: the first-run setup screen and onboarding previously had no transition at all.
+- **The first-run replay was dead after the first use.** The hash was already at the target value, so re-setting it fired no navigation. It's now driven by state instead.
+- **The skip button needed two presses.** It lived inside a block keyed by the caption, which remounts on every caption change; a press spanning a change dropped mousedown and mouseup on different nodes, so no click fired. It now lives outside, as one stable node.
+- **A scrollbar flickered and nudged the layout during page transitions** — a transform created transient scrollable overflow, now held with a stable gutter.
 
 ### Notes for installers
 
