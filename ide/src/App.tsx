@@ -35,6 +35,7 @@ import * as iconTheme from "./ext/iconTheme";
 import * as textmate from "./ext/textmate";
 import * as mcp from "./mcp/mcpClient";
 import * as mcpGen from "./mcp/generator";
+import * as engines from "./gameEngine/adapters";
 import { registerLspProviders } from "./editor/lspProviders";
 import { setThemeId, THEME_TOKENS, monacoThemeOf } from "./theme";
 import { applyTheme, getThemeId } from "./theme";
@@ -98,8 +99,11 @@ const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Sy
 
 // 빌드 시 vite.config 이 package.json 버전을 주입한다(define). 손으로 박지 않는다 —
 // 예전엔 0.0.4 를 냈는데도 여기가 0.0.3 이라 정보 창이 옛 버전을 보여줬다.
-declare const __APP_VERSION__: string;
-const APP_VERSION = __APP_VERSION__;
+// 빌드 때 vite define 이 package.json 버전으로 치환한다. dev 서버(vite serve)는 이 define 을
+// 소스에 적용하지 않아 예전엔 __APP_VERSION__ 이 그대로 남아 ReferenceError 로 앱이 죽었다.
+// typeof 가드는 undeclared 식별자에도 던지지 않으므로, 빌드에선 치환된 버전을, dev 에선 "dev" 를 쓴다.
+declare const __APP_VERSION__: string | undefined;
+const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
 // 좌측 컬럼 세로 분할의 하한. 대화는 제목·탭·입력창만 130px 가량 먹어서
 // 이보다 낮추면 메시지가 한 줄도 안 남는다.
 const CHAT_MIN_H = 180;
@@ -241,6 +245,8 @@ interface S {
   mcpServers: mcp.McpServerInfo[];
   mcpDiscovered: { name: string; source: string; command: string; args: string[]; env: Record<string, string>; url: string | null; added: boolean }[];
   mcpBusy: string;               // 진행 중 작업 라벨 (서버명 등)
+  /** 게임 엔진 접속 상태 — serverName → Studio 에 실제로 닿는지. 패널 열 때·연결 후에만 조회. */
+  engineStatus: Record<string, { reachable: boolean; detail: string }>;
   mcpJson: string;               // JSON 붙여넣기 추가
   mcpGen: null | { mode: "cli" | "project" | "openapi" | "generic"; input: string; status: string; };
   /** 사용법 스포트라이트 투어 */
@@ -449,7 +455,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
@@ -2204,6 +2210,27 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }));
   }
 
+  /** 검증된 asset id — 카탈로그 도구가 실제로 돌려준 것만 담는다. 미지의 id 로 asset_import 를
+   *  부르면 Studio 가 영구 행업하므로, 여기 없는 id 는 auto 모드에서도 승인을 강제한다. */
+  private _validatedAssetIds = new Set<string>();
+  /** 엔진별 플레이테스트 진행 여부(서버명 → playing). play 중 쓰기/임포트는 Studio 를 행업시킨다. */
+  private _enginePlaying = new Map<string, boolean>();
+
+  /** 연결된 게임 엔진이 있으면 그 운영 수칙을 시스템 프롬프트에 덧붙인다 — 편집 전 정지·
+   *  트리 먼저 읽기·asset id 추측 금지. 서버가 돌 때만(도구가 실제 노출될 때만) 붙인다. */
+  private engineSystemExtra(): string {
+    const running = new Set(mcp.getMcpTools().map(t => t.server));
+    const active = engines.ADAPTERS.filter(a => running.has(a.serverName));
+    if (!active.length) return "";
+    return "\n\n" + active.map(a =>
+      `[${a.label}] 게임 엔진이 연결되어 있습니다. 수칙: ` +
+      `① ${a.tools.browse} 로 DataModel 트리를 먼저 읽고, 모든 조작은 노드의 guid 로 지정한다. ` +
+      `② 편집·임포트 전에 ${a.tools.stop} 로 플레이테스트를 멈춘다(재생 중 쓰면 Studio 가 멈춘다). ` +
+      `③ asset id 는 절대 추측하지 말고 카탈로그(${a.assetCatalogTools.join(", ")})에서 고른다 — ` +
+      `잘못된 id 는 Studio 를 영구 행업시킨다. ④ 다 됐으면 ${a.tools.save} 로 저장한다.`
+    ).join("\n");
+  }
+
   /**
    * 사이드플로(인라인 편집·MCP 생성) 실행 종료. 에이전트 루프와 달리 락·상태 정리가 없어서
    * 컨트롤러 해제와 레코드 종료만 하면 된다. runId 가 비어 있으면(시작 전 실패) 무시한다.
@@ -2227,9 +2254,46 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       const r = mcp.resolveMcpTool(call.name);
       if (!r) return "오류: 알 수 없는 MCP 도구 " + call.name;
       const mid = "rt" + (this._uid++);
-      this.addTool(mid, agentId, "MCP", r.server + "·" + r.tool);
+      const adapter = engines.adapterForServer(r.server);
+      const label = adapter ? adapter.label : "MCP";
+      this.addTool(mid, agentId, label, r.server + "·" + r.tool);
+
+      // 게임 엔진 안전장치 — 일반 MCP 는 adapter 가 없어 아래를 전부 건너뛴다(무게이트 유지).
+      if (adapter) {
+        // ① 편집 전 정지 — 플레이테스트 중 쓰기/임포트는 Studio 를 행업시킨다.
+        if (this._enginePlaying.get(r.server) && engines.mutatesWhilePlaying(r.server, r.tool)) {
+          this.setTool(mid, { st: "done", note: t("eng.notePlaying") });
+          return `오류: 지금 ${adapter.label} 플레이테스트가 실행 중입니다. ${adapter.tools.stop} 로 먼저 멈춘 뒤 편집·임포트하세요(재생 중 쓰면 Studio 가 멈춥니다).`;
+        }
+        // ② 위험도 게이트 — 미검증 asset id 의 import 는 auto 모드에서도 막는다.
+        let risk = engines.riskFor(r.server, r.tool);
+        const importId = engines.assetImportId(r.server, r.tool, call.input ?? {});
+        const unverified = importId != null && !this._validatedAssetIds.has(engines.normalizeAssetId(importId));
+        if (importId != null && unverified) risk = "gated";
+        const need = risk === "gated" || (risk === "confirm" && getAutonomy().policy !== "auto");
+        if (need) {
+          const why = importId != null && unverified
+            ? t("eng.whyUnverifiedAsset", { id: importId })
+            : t("eng.whyEngineAction", { engine: adapter.label });
+          const ok = await this.askRunApproval(`${adapter.label} · ${r.tool}` + (importId ? ` (${importId})` : ""), why, agentId);
+          if (!ok) {
+            this.setTool(mid, { st: "done", note: t("sc2.noteRejected") });
+            return "사용자가 이 엔진 작업을 거절했습니다. 다른 방법을 제안하거나 작업 방법을 안내하세요.";
+          }
+          // 사용자가 명시적으로 승인한 id 는 이번 세션 동안 검증된 것으로 취급한다.
+          if (importId != null) this._validatedAssetIds.add(engines.normalizeAssetId(importId));
+        }
+      }
+
       try {
         const out = await mcp.callTool(r.server, r.tool, call.input ?? {});
+        // ③ 카탈로그가 돌려준 asset id 를 수확 → 이후 import 게이트를 완화한다.
+        if (adapter) {
+          for (const id of engines.harvestAssetIds(r.server, r.tool, out)) this._validatedAssetIds.add(engines.normalizeAssetId(id));
+          // ④ 재생/정지 상태 추적(플레이 가드용).
+          if (r.tool === adapter.playTool) this._enginePlaying.set(r.server, true);
+          else if (r.tool === adapter.stopTool) this._enginePlaying.set(r.server, false);
+        }
         this.setTool(mid, { st: "done", note: r.tool });
         return out;
       } catch (e) {
@@ -2408,11 +2472,16 @@ ${(r.output || "").slice(0, 2000)}`;
     this.abortCtls.set(run.runId, abort);
     this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
 
-    const useTools = !!(this.state.workspace && window.schutz);
+    // 워크스페이스가 열려야만 파일 도구를 준다. 하지만 MCP·게임 엔진 도구는 코드
+    // 프로젝트와 무관하다 — 예전엔 useTools 가 워크스페이스에 묶여 있어, OVERDARE 만
+    // 조종하려는 사용자가 빈 폴더를 열어야 도구가 모델에 보였다. 둘을 분리한다.
+    const useWs = !!(this.state.workspace && window.schutz);
+    const hasMcp = !!window.schutz && mcp.getMcpTools().length > 0;
     const others = this.configuredAgents().filter(id => id !== agentId);
-    const tools = useTools
-      ? [...(opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS), ...this.mcpToolDefs()]
-      : undefined;
+    const wsTools = useWs
+      ? [...(opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)]
+      : [];
+    const tools = (useWs || hasMcp) ? [...wsTools, ...this.mcpToolDefs()] : undefined;
     const system =
       schutzSystemPrompt() +
       // 위임 안내는 delegate_task 를 실제로 줄 때만 붙인다 — 도구 조건(others.length)과
@@ -2420,7 +2489,8 @@ ${(r.output || "").slice(0, 2000)}`;
       // "delegate_task 로 위임하세요, 이번 턴에 도구를 부르세요" + 빈 로스터를 주고
       // 정작 그 도구는 안 줬다. 앱이 환각을 만들어 놓고 아래 가드로 모델을 나무라던 셈.
       (opts.isManager && others.length ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
-      (useTools ? "\n현재 워크스페이스: " + this.state.workspace!.name : "");
+      (useWs ? "\n현재 워크스페이스: " + this.state.workspace!.name : "") +
+      this.engineSystemExtra();
 
     const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
@@ -6870,7 +6940,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── MCP 관리 ──
-  openMcp() { this.cancelClose("mcp"); this.setState({ mcpOpen: true }); void this.refreshMcp(); }
+  openMcp() { this.cancelClose("mcp"); this.setState({ mcpOpen: true }); void this.refreshMcp().then(() => this.refreshEngineStatus()); }
 
   // ── 첫 실행 데모 ─────────────────────────────────────────────────────────
   /** 데모 시작 전 워크스페이스 — 끝나면 여기로 돌려놓는다 */
@@ -7326,6 +7396,34 @@ ${(r.output || "").slice(0, 2000)}`;
     await mcp.refreshTools();
     this.setState({ mcpServers: servers, mcpDiscovered: discovered });
   }
+
+  /** 게임 엔진 접속 상태 조회 — 돌고 있는 엔진 서버마다 status 도구를 불러 Studio 도달성을 본다.
+   *  status 호출은 Studio 를 두드려 응답이 몇 초 걸릴 수 있으므로 패널 열 때·연결 후에만 부른다. */
+  async refreshEngineStatus() {
+    const running = new Set((await mcp.listServers()).filter(s => s.running).map(s => s.name));
+    const active = engines.ADAPTERS.filter(a => running.has(a.serverName));
+    await Promise.all(active.map(async a => {
+      const set = (reachable: boolean, detail: string) =>
+        this.setState(st => ({ engineStatus: { ...st.engineStatus, [a.serverName]: { reachable, detail } } }));
+      try {
+        const out = await mcp.callTool(a.serverName, a.tools.status, {});
+        const reachable = !/cannot reach|unreachable|not reachable|timed out|timeout|refused|econnrefused|⚠️/i.test(out);
+        set(reachable, out.split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 120) ?? "");
+      } catch (e) { set(false, e instanceof Error ? e.message : String(e)); }
+    }));
+  }
+
+  /** 게임 엔진 원클릭 연결 — 발견된 MCP 설정을 그대로 등록·시작한다(mcpImport 와 같은 경로).
+   *  연결 뒤 Studio 도달성까지 한 번 확인해 준다. */
+  engineConnect(d: { name: string; command: string; args: string[]; env: Record<string, string> }) {
+    void this.mcpAct(d.name, async () => {
+      const r = await mcp.addServer(d.name, { command: d.command, args: d.args, env: d.env });
+      if (!r.ok) { this.toast("error", t("sc5.mcpAddFail", { error: r.error || "" })); return; }
+      const s = await mcp.startServer(d.name);
+      this.toast(s.ok ? "ok" : "error", s.ok ? t("sc5.mcpImportedStarted", { name: d.name }) : t("sc5.mcpAddedStartFail", { name: d.name }));
+      if (s.ok) await this.refreshEngineStatus();
+    });
+  }
   private async mcpAct(name: string, fn: () => Promise<any>) {
     this.setState({ mcpBusy: name });
     try { await fn(); } finally { this.setState({ mcpBusy: "" }); await this.refreshMcp(); }
@@ -7459,6 +7557,47 @@ ${(r.output || "").slice(0, 2000)}`;
         <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.5 }}>
           {t("mcpui.intro")}
         </div>
+
+        {/* 게임 엔진 — 엔진 어댑터가 있는 서버(연결됐거나 발견된 것)만. 없으면 섹션 자체를 숨긴다. */}
+        {(() => {
+          const rows = engines.ADAPTERS
+            .map(a => ({ a, sv: s.mcpServers.find(x => x.name === a.serverName), disc: s.mcpDiscovered.find(d => d.name === a.serverName), est: s.engineStatus[a.serverName] }))
+            .filter(r => r.sv || r.disc);
+          if (!rows.length) return null;
+          return (
+            <div>
+              <div style={sectHdr}>{t("eng.section")}</div>
+              {rows.map(({ a, sv, disc, est }) => {
+                const running = !!sv?.running;
+                const reachable = running && !!est?.reachable;
+                const dot = reachable ? "var(--ok)" : running ? "#C9A227" : "var(--fg-dim3)";
+                const statusText = !sv ? t("eng.notConnected")
+                  : !running ? t("eng.stopped")
+                  : est ? (est.reachable ? t("eng.reachable") : t("eng.unreachable"))
+                  : t("eng.checking");
+                return (
+                  <div key={a.id} className="sz-in" style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", borderRadius: 9, background: "var(--bg-card)", border: "1px solid var(--w06)", marginTop: 6 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 5, background: dot, flex: "none", boxShadow: reachable ? "0 0 6px color-mix(in srgb, var(--ok) 60%, transparent)" : "none" }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{a.label}</div>
+                      <div style={{ fontSize: 10.5, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{statusText}{running && est?.detail && !/^[[{]/.test(est.detail) ? " · " + est.detail : ""}</div>
+                    </div>
+                    {sv?.running && <span style={{ flex: "none", fontSize: 10, color: "var(--accent-hi)" }}>{t("mcpui.toolCount", { n: sv.tools })}</span>}
+                    {!sv && disc && (
+                      <button className="hv08" disabled={busy(a.serverName)} onClick={() => this.engineConnect(disc)} style={{ flex: "none", padding: "4px 14px", fontSize: 11.5, fontWeight: 600, fontFamily: SUIT, cursor: "pointer", borderRadius: 7, border: "none", background: "var(--accent)", color: "var(--on-accent)" }}>{busy(a.serverName) ? "…" : t("eng.connect")}</button>
+                    )}
+                    {sv && !sv.running && (
+                      <button className="hv08" disabled={busy(a.serverName)} onClick={() => this.mcpStartServer(a.serverName)} style={{ flex: "none", padding: "4px 12px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: "var(--accent-hi)" }}>{busy(a.serverName) ? "…" : t("eng.reconnect")}</button>
+                    )}
+                    {sv?.running && (
+                      <button className="hv08" disabled={busy(a.serverName)} onClick={() => void this.refreshEngineStatus()} style={{ flex: "none", padding: "4px 10px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: "var(--fg-sub)" }}>{t("eng.checkStatus")}</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* 생성 */}
         <div>

@@ -17,6 +17,7 @@ export default defineConfig({
     // electron 까지 딸려와 이 설정의 전제(가벼운 node 환경)가 깨진다.
     include: [
       "src/engine/**/*.test.ts",
+      "src/gameEngine/**/*.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",
