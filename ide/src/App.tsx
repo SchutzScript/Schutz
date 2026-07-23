@@ -2222,13 +2222,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     const running = new Set(mcp.getMcpTools().map(t => t.server));
     const active = engines.ADAPTERS.filter(a => running.has(a.serverName));
     if (!active.length) return "";
-    return "\n\n" + active.map(a =>
-      `[${a.label}] 게임 엔진이 연결되어 있습니다. 수칙: ` +
-      `① ${a.tools.browse} 로 DataModel 트리를 먼저 읽고, 모든 조작은 노드의 guid 로 지정한다. ` +
-      `② 편집·임포트 전에 ${a.tools.stop} 로 플레이테스트를 멈춘다(재생 중 쓰면 Studio 가 멈춘다). ` +
-      `③ asset id 는 절대 추측하지 말고 카탈로그(${a.assetCatalogTools.join(", ")})에서 고른다 — ` +
-      `잘못된 id 는 Studio 를 영구 행업시킨다. ④ 다 됐으면 ${a.tools.save} 로 저장한다.`
-    ).join("\n");
+    // 엔진마다 운영 수칙이 다르다(OVERDARE 는 트리·정지·asset, Blender 는 파이썬·에셋) — 어댑터가
+    // 자기 systemGuide 를 들고 있고, 여기선 연결된 것만 이어 붙인다.
+    return "\n\n" + active.map(a => a.systemGuide).join("\n");
   }
 
   /**
@@ -2263,7 +2259,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         // ① 편집 전 정지 — 플레이테스트 중 쓰기/임포트는 Studio 를 행업시킨다.
         if (this._enginePlaying.get(r.server) && engines.mutatesWhilePlaying(r.server, r.tool)) {
           this.setTool(mid, { st: "done", note: t("eng.notePlaying") });
-          return `오류: 지금 ${adapter.label} 플레이테스트가 실행 중입니다. ${adapter.tools.stop} 로 먼저 멈춘 뒤 편집·임포트하세요(재생 중 쓰면 Studio 가 멈춥니다).`;
+          return `오류: 지금 ${adapter.label} 플레이테스트가 실행 중입니다. ${adapter.stopTool ?? "stop"} 로 먼저 멈춘 뒤 편집·임포트하세요(재생 중 쓰면 Studio 가 멈춥니다).`;
         }
         // ② 위험도 게이트 — 미검증 asset id 의 import 는 auto 모드에서도 막는다.
         let risk = engines.riskFor(r.server, r.tool);
@@ -7405,8 +7401,10 @@ ${(r.output || "").slice(0, 2000)}`;
     await Promise.all(active.map(async a => {
       const set = (reachable: boolean, detail: string) =>
         this.setState(st => ({ engineStatus: { ...st.engineStatus, [a.serverName]: { reachable, detail } } }));
+      // 상태 도구가 없는 엔진(예: Blender)은 도달성을 따로 못 물으니 running=연결로 본다.
+      if (!a.statusTool) { set(true, ""); return; }
       try {
-        const out = await mcp.callTool(a.serverName, a.tools.status, {});
+        const out = await mcp.callTool(a.serverName, a.statusTool, {});
         const reachable = !/cannot reach|unreachable|not reachable|timed out|timeout|refused|econnrefused|⚠️/i.test(out);
         set(reachable, out.split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 120) ?? "");
       } catch (e) { set(false, e instanceof Error ? e.message : String(e)); }

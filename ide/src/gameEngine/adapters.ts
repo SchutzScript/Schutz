@@ -1,28 +1,22 @@
 /**
- * 게임 엔진 어댑터 — 순수 데이터 + 위험도 판정.
+ * 엔진(게임·3D) 어댑터 — 순수 데이터 + 위험도 판정.
  *
- * Schutz 는 이미 stdio MCP 호스트다. 게임 엔진(OVERDARE Studio 등)은 그 위의 MCP 서버
- * 하나일 뿐이라 "연결" 자체는 기존 MCP 경로를 그대로 탄다. 이 파일이 더하는 건 두 가지:
- *  ⑴ 어느 MCP 서버가 "엔진" 인가(그래서 전용 UI·상태를 붙일 대상인가)를 데이터로 안다.
- *  ⑵ 엔진 도구마다 위험도를 매겨, 되돌릴 수 없는/스튜디오를 망가뜨릴 수 있는 호출 앞에
- *     승인 게이트를 세운다. (일반 MCP 도구는 예전처럼 무게이트 — 여기서 어댑터가 없으면
- *     safe 로 떨어진다.)
+ * Schutz 는 이미 stdio MCP 호스트다. 창작 엔진(OVERDARE Studio, Blender 등)은 그 위의 MCP
+ * 서버 하나일 뿐이라 "연결" 자체는 기존 MCP 경로를 그대로 탄다. 이 파일이 더하는 건 두 가지:
+ *  ⑴ 어느 MCP 서버가 "엔진" 인가(그래서 전용 UI·상태·안내를 붙일 대상인가)를 데이터로 안다.
+ *  ⑵ 엔진 도구마다 위험도를 매겨, 되돌릴 수 없는/엔진을 망가뜨릴 수 있는 호출 앞에 승인
+ *     게이트를 세운다. (일반 MCP 도구는 예전처럼 무게이트 — 어댑터가 없으면 safe 로 떨어진다.)
  *
  * 규칙(engine/types.ts 의 규율을 그대로 따른다): 이 파일은 React·Electron·DOM·window 를
- * import 하지 않는다. 순수 함수·상수만. 두 번째 엔진은 코드가 아니라 ADAPTERS 배열에
- * 항목 하나를 더하는 일이어야 한다.
- *
- * OVERDARE 특유의 위험(문서화된 것):
- *  - 잘못된 asset id 로 overdare_asset_import 를 부르면 Studio 가 **영구 행업**한다.
- *    그래서 카탈로그(overdare_assets)가 실제로 돌려준 id 가 아니면 auto 모드에서도 막는다.
- *  - 플레이테스트 중(overdare_play 이후) 쓰기/임포트를 하면 Studio 가 행업한다.
- *  - mesh_bulk_import 는 최대 200개를 한 번에 굽는 장시간 작업이라 늘 승인을 받는다.
+ * import 하지 않는다. 순수 함수·상수만. **두 번째 엔진은 코드가 아니라 ADAPTERS 배열에
+ * 항목 하나를 더하는 일이어야 한다.** OVERDARE 는 프로젝트 폴더·재생/정지·asset id 행업 같은
+ * 고유 개념이 있고 Blender 는 없다 — 그래서 그런 필드는 전부 선택(optional)으로 둔다.
  */
 
 /** 승인 강도.
  *  safe   : 게이트 없음(읽기·상태·스크린샷·재생/정지·저장).
  *  confirm: 자율성이 'auto' 가 아니면 승인(쓰기·삭제·임의 실행·퍼블리시 등).
- *  gated  : 자율성이 'auto' 여도 항상 승인(Studio 를 영구 파손할 수 있는 것). */
+ *  gated  : 자율성이 'auto' 여도 항상 승인(엔진을 영구 파손할 수 있는 것). */
 export type EngineRisk = "safe" | "confirm" | "gated";
 
 export interface EngineAdapter {
@@ -34,36 +28,36 @@ export interface EngineAdapter {
   serverName: string;
   /** 지금은 stdio 뿐. 미래에 HTTP MCP 가 나오면 유니온을 넓히고 호스트만 확장한다. */
   transport: "stdio";
-  /** 프로젝트 경로가 담기는 환경변수 이름(상태 표시·안내용). */
-  projectEnv: string;
-  /** 자주 부르는 핵심 도구의 실제 이름(prefix 없는 베어 이름). UI·가드가 참조한다. */
-  tools: {
-    status: string;
-    browse: string;
-    screenshot: string;
-    play: string;
-    stop: string;
-    save: string;
-  };
-  /** 검증된 asset id 를 수확할 카탈로그 도구들 — 이 결과에 나온 id 만 import 를 신뢰한다. */
-  assetCatalogTools: string[];
-  /** asset 을 실제로 들여오는 도구 — 미검증 id 면 gated 로 승격한다. */
-  assetImportTools: string[];
+  /** 온보딩 카드 설명 문구의 i18n 키. */
+  descKey: string;
+  /** 모델에게 줄 운영 수칙 — 엔진이 연결돼 있으면 시스템 프롬프트에 붙인다. */
+  systemGuide: string;
+
+  /** 프로젝트 경로가 담기는 환경변수 이름. 폴더 개념이 있는 엔진(OVERDARE)만. Blender 는 없음. */
+  projectEnv?: string;
+  /** 상태·도달성을 확인할 도구(있으면 연결 후 한 번 불러 reachable 판정). 없으면 running=연결로 본다. */
+  statusTool?: string;
+  /** 뷰포트 스냅샷 도구(Stage 3 UI 용). */
+  screenshotTool?: string;
+
   /** 위험도 분류. 목록에 없으면 safe. */
-  risk: {
-    confirm: string[];
-    gated: string[];
-  };
-  /** 플레이테스트 중 부르면 Studio 를 행업시키는 도구들(쓰기·임포트). play 중이면 막는다. */
-  unsafeWhilePlaying: string[];
-  /** 재생/정지 상태를 뒤집는 도구 — _enginePlaying 플래그를 이걸로 토글한다. */
-  playTool: string;
-  stopTool: string;
-  /** 미리 설정 안 한 사용자를 위한 기본 실행 프리셋. 발견된 MCP 설정이 없을 때 이걸로 등록한다 —
-   *  온보딩에서 "폴더만 고르면 자동 등록"이 성립하려면 command/args 를 앱이 알고 있어야 한다. */
-  preset: { command: string; args: string[] };
-  /** MCP 서버 자체를 GitHub 에서 가져와 설치하는 정보. 발견된 설정도, npm 프리셋도 아직 없는
-   *  처음 쓰는 사용자용 — clone → build → 진입 파일 실행. creator 는 설치 화면에 띄운다. */
+  risk: { confirm: string[]; gated: string[] };
+
+  // ── 아래는 엔진마다 있을 수도, 없을 수도 있는 것들 ──────────────────────────
+  /** 검증된 asset id 를 수확할 카탈로그 도구들(OVERDARE 전용). */
+  assetCatalogTools?: string[];
+  /** asset 을 들여오는 도구 — 미검증 id 면 gated 로 승격(OVERDARE 전용). */
+  assetImportTools?: string[];
+  /** 재생 중 부르면 엔진을 행업시키는 도구들(OVERDARE 전용). */
+  unsafeWhilePlaying?: string[];
+  /** 재생/정지 상태를 뒤집는 도구(OVERDARE 전용). */
+  playTool?: string;
+  stopTool?: string;
+
+  /** 미리 설정 안 한 사용자를 위한 기본 실행 프리셋. 발견된 MCP 설정이 없을 때 이걸로 등록한다. */
+  preset?: { command: string; args: string[] };
+  /** MCP 서버 자체를 GitHub 에서 가져와 설치하는 정보(npm 빌드 기반). 발견된 설정도 프리셋도
+   *  못 쓰는 처음 쓰는 사용자용 — clone → build → 진입 파일. creator 는 설치 화면에 띄운다. */
   install?: {
     repo: string;                          // https://github.com/…/…​.git
     build: string[];                       // 예: ["npm","run","build"]
@@ -74,8 +68,8 @@ export interface EngineAdapter {
 
 // ── OVERDARE Studio ─────────────────────────────────────────────────────────
 // Roblox 류 · Luau 스크립트 · Unreal 기반 UGC 메이커. DataModel 은 Roblox 를 본떴다.
-// 도구 이름은 모두 overdare_ 접두어를 쓴다(예: overdare_browse). resolveMcpTool 이
-// 돌려주는 .tool 이 바로 이 베어 이름이다.
+// 잘못된 asset id 로 import 하면 Studio 가 영구 행업 → 카탈로그가 준 id 만 신뢰(auto 여도).
+// 재생 중 쓰기도 행업 → play 중 편집을 막는다. 도구 이름은 모두 overdare_ 접두어.
 
 const OVERDARE_WRITE = [
   "overdare_create_instance", "overdare_create_instances", "overdare_create_part",
@@ -90,17 +84,16 @@ const OVERDARE: EngineAdapter = {
   label: "OVERDARE Studio",
   serverName: "overdare",
   transport: "stdio",
+  descKey: "open.engine.descOverdare",
+  systemGuide:
+    "[OVERDARE Studio] 게임 엔진이 연결되어 있습니다. 수칙: " +
+    "① overdare_browse 로 DataModel 트리를 먼저 읽고, 모든 조작은 노드의 guid 로 지정한다. " +
+    "② 편집·임포트 전에 overdare_stop 으로 플레이테스트를 멈춘다(재생 중 쓰면 Studio 가 멈춘다). " +
+    "③ asset id 는 절대 추측하지 말고 카탈로그(overdare_assets, overdare_rc_search_assets)에서 " +
+    "고른다 — 잘못된 id 는 Studio 를 영구 행업시킨다. ④ 다 됐으면 overdare_save 로 저장한다.",
   projectEnv: "OVERDARE_PROJECT_DIR",
-  tools: {
-    status: "overdare_status",
-    browse: "overdare_browse",
-    screenshot: "overdare_screenshot",
-    play: "overdare_play",
-    stop: "overdare_stop",
-    save: "overdare_save",
-  },
-  assetCatalogTools: ["overdare_assets", "overdare_rc_search_assets"],
-  assetImportTools: ["overdare_asset_import"],
+  statusTool: "overdare_status",
+  screenshotTool: "overdare_screenshot",
   risk: {
     confirm: [
       // 쓰기·삭제 (되돌리기 어려움)
@@ -121,11 +114,12 @@ const OVERDARE: EngineAdapter = {
       "overdare_mesh_bulk_import",
     ],
   },
+  assetCatalogTools: ["overdare_assets", "overdare_rc_search_assets"],
+  assetImportTools: ["overdare_asset_import"],
   unsafeWhilePlaying: OVERDARE_WRITE,
   playTool: "overdare_play",
   stopTool: "overdare_stop",
   // npm 배포본을 npx 로 실행 — 발견된 설정이 없는(처음 쓰는) 사용자용 폴백.
-  // 이 기기처럼 ~/.claude.json 에 이미 있으면 connectConfig 가 그쪽 command/args 를 우선한다.
   preset: { command: "npx", args: ["-y", "overdare-mcp"] },
   // npm 배포본이 없어도 되도록, 제작자 리포에서 직접 가져와 빌드한다.
   install: {
@@ -136,7 +130,45 @@ const OVERDARE: EngineAdapter = {
   },
 };
 
-export const ADAPTERS: readonly EngineAdapter[] = [OVERDARE];
+// ── Blender ──────────────────────────────────────────────────────────────────
+// 3D DCC. blender-mcp(Python, uvx 로 실행)가 Blender 애드온과 소켓으로 통신한다. OVERDARE 와
+// 달리 프로젝트 폴더도, 재생/정지도, asset id 행업도 없다 — 그 필드들은 전부 비운다. 위험한 건
+// execute_blender_code(Blender 안에서 임의 파이썬 실행)와 다운로드·생성·텍스처 적용이다.
+
+const BLENDER: EngineAdapter = {
+  id: "blender",
+  label: "Blender",
+  serverName: "blender",
+  transport: "stdio",
+  descKey: "open.engine.descBlender",
+  systemGuide:
+    "[Blender] 3D DCC 가 연결되어 있습니다. 수칙: " +
+    "① get_scene_info 로 씬을, get_object_info 로 개별 오브젝트를 먼저 읽는다. " +
+    "② 결과는 get_viewport_screenshot 으로 눈으로 확인한다. " +
+    "③ execute_blender_code 는 Blender 안에서 파이썬을 그대로 실행한다 — 되돌리기 어려우니 " +
+    "작은 단위로 신중히 부른다. ④ 에셋은 추측하지 말고 search/download(PolyHaven·Sketchfab) 나 " +
+    "generate(Hyper3D·Hunyuan)로 가져온다.",
+  // projectEnv 없음 · statusTool = 씬 조회로 도달성 확인 · 스크린샷 = 뷰포트
+  statusTool: "get_scene_info",
+  screenshotTool: "get_viewport_screenshot",
+  risk: {
+    confirm: [
+      "execute_blender_code",                          // 임의 파이썬 실행
+      "download_polyhaven_asset", "download_sketchfab_model",
+      "generate_hyper3d_model_via_text", "generate_hyper3d_model_via_images",
+      "generate_hunyuan3d_model",
+      "import_generated_asset", "import_generated_asset_hunyuan",
+      "set_texture",
+    ],
+    gated: [],   // Blender 는 OVERDARE 의 asset 행업 같은 영구 파손 케이스가 없다.
+  },
+  // uvx 로 실행 — 발견된 설정이 없을 때의 폴백(문서화된 실행 방식).
+  preset: { command: "uvx", args: ["blender-mcp"] },
+  // Blender MCP 는 파이썬(uv) 배포라 npm clone-build 설치 흐름(install)을 두지 않는다 —
+  // 발견되면 연결, 아니면 preset 으로 등록한다.
+};
+
+export const ADAPTERS: readonly EngineAdapter[] = [OVERDARE, BLENDER];
 
 /** MCP 서버 이름으로 엔진 어댑터를 찾는다. 엔진이 아니면 undefined. */
 export function adapterForServer(server: string): EngineAdapter | undefined {
@@ -155,7 +187,7 @@ export function riskFor(server: string, tool: string): EngineRisk {
 /** 이 호출이 asset import 라면 들여오려는 id 문자열을, 아니면 null 을 돌려준다. */
 export function assetImportId(server: string, tool: string, input: unknown): string | null {
   const a = adapterForServer(server);
-  if (!a || !a.assetImportTools.includes(tool)) return null;
+  if (!a || !(a.assetImportTools ?? []).includes(tool)) return null;
   const inp = (input ?? {}) as Record<string, unknown>;
   const raw = inp.assetId ?? inp.id ?? inp.asset_id;
   return typeof raw === "string" && raw.trim() ? raw.trim() : null;
@@ -172,7 +204,7 @@ export function normalizeAssetId(id: string): string {
  *  (파싱은 게이트를 **완화**하는 데만 쓴다 — 미지의 id 는 늘 gated 로 남는다.) */
 export function harvestAssetIds(server: string, tool: string, resultText: string): string[] {
   const a = adapterForServer(server);
-  if (!a || !a.assetCatalogTools.includes(tool)) return [];
+  if (!a || !(a.assetCatalogTools ?? []).includes(tool)) return [];
   const out = new Set<string>();
   for (const m of resultText.matchAll(/ovdrassetid:\/\/(\d+)/g)) {
     out.add(m[0]);        // 전체 표기
@@ -181,37 +213,31 @@ export function harvestAssetIds(server: string, tool: string, resultText: string
   return [...out];
 }
 
-/** 플레이테스트가 도는 동안 부르면 Studio 를 행업시키는 도구인가. */
+/** 재생 중 부르면 엔진을 행업시키는 도구인가. */
 export function mutatesWhilePlaying(server: string, tool: string): boolean {
   const a = adapterForServer(server);
-  return !!a && a.unsafeWhilePlaying.includes(tool);
+  return !!a && (a.unsafeWhilePlaying ?? []).includes(tool);
 }
 
 export interface EngineConnectCfg { name: string; command: string; args: string[]; env: Record<string, string> }
 
-/** "폴더만 고르면 등록"할 때 쓸 최종 MCP 설정을 만든다.
- *  발견된 설정(discovered)이 있으면 그 command/args·env 를 재사용하고(이미 이 기기에 맞음),
- *  없으면 preset 으로 대체한다. 어느 쪽이든 projectEnv 는 사용자가 고른 폴더로 채운다. */
+/** 연결할 때 쓸 최종 MCP 설정을 만든다. 발견된 설정(discovered)이 있으면 그 command/args·env 를
+ *  재사용하고(이미 이 기기에 맞음), 없으면 preset 으로 대체한다. 폴더가 필요한 엔진(projectEnv)만
+ *  고른 폴더를 env 에 채운다 — Blender 처럼 폴더가 없으면 folder 는 null 이어도 된다. */
 export function connectConfig(
   adapter: EngineAdapter,
   discovered: { command: string; args: string[]; env?: Record<string, string> } | undefined,
-  folder: string,
+  folder: string | null,
 ): EngineConnectCfg {
-  const base = discovered ? { command: discovered.command, args: discovered.args } : adapter.preset;
-  return {
-    name: adapter.serverName,
-    command: base.command,
-    args: [...base.args],
-    env: { ...(discovered?.env ?? {}), [adapter.projectEnv]: folder },
-  };
+  const base = discovered ? { command: discovered.command, args: discovered.args } : (adapter.preset ?? { command: "", args: [] });
+  const env: Record<string, string> = { ...(discovered?.env ?? {}) };
+  if (adapter.projectEnv && folder) env[adapter.projectEnv] = folder;
+  return { name: adapter.serverName, command: base.command, args: [...base.args], env };
 }
 
 /** GitHub 에서 설치(clone→build)를 마친 뒤, 그 진입 파일을 node 로 실행하도록 등록 설정을 만든다. */
-export function installedConnectConfig(adapter: EngineAdapter, entryPath: string, folder: string): EngineConnectCfg {
-  return {
-    name: adapter.serverName,
-    command: "node",
-    args: [entryPath],
-    env: { [adapter.projectEnv]: folder },
-  };
+export function installedConnectConfig(adapter: EngineAdapter, entryPath: string, folder: string | null): EngineConnectCfg {
+  const env: Record<string, string> = {};
+  if (adapter.projectEnv && folder) env[adapter.projectEnv] = folder;
+  return { name: adapter.serverName, command: "node", args: [entryPath], env };
 }
