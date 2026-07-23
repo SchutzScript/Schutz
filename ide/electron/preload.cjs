@@ -88,6 +88,14 @@ contextBridge.exposeInMainWorld("schutz", {
   cliHelp: (cmd) => ipcRenderer.invoke("schutz:cliHelp", cmd),
   mcpFetchSpec: (url) => ipcRenderer.invoke("schutz:mcpFetchSpec", url),
   mcpWriteServer: (name, code) => ipcRenderer.invoke("schutz:mcpWriteServer", name, code),
+  /** 게임 엔진 MCP 를 GitHub 에서 설치(clone→build) — 처음 쓰는 사용자용 */
+  engineInstall: (spec) => ipcRenderer.invoke("schutz:engineInstall", spec),
+  engineInstalledPath: (spec) => ipcRenderer.invoke("schutz:engineInstalledPath", spec),
+  onEngineInstallProgress: (cb) => {
+    const h = (_e, d) => cb(d);
+    ipcRenderer.on("schutz:engineInstallProgress", h);
+    return () => ipcRenderer.removeListener("schutz:engineInstallProgress", h);
+  },
   /** 앱 내 로그인 — 해당 CLI의 공식 OAuth 플로우를 콘솔로 실행 */
   cliLogin: (id) => ipcRenderer.send("schutz:cliLogin", id),
   /** Claude Code CLI 턴 실행 */

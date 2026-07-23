@@ -6,6 +6,8 @@ import { UI_MODES, getUiMode, setUiMode, applyUiMode, type UiMode } from "../uiM
 import { KEYMAPS, UI_FONTS, CODE_FONTS, getEditorPrefs, setEditorPrefs, applyUiFont, getAutonomy, setAutonomy } from "../settings";
 import { PROVIDERS_MAP, getManagerId } from "../ai/registry";
 import { getStoredKey, setStoredKey } from "../ai/provider";
+import * as mcp from "../mcp/mcpClient";
+import * as engines from "../gameEngine/adapters";
 import { TOTAL_MS, beatAt, clampToGate, gateAt, seg, ease } from "./beats";
 
 /**
@@ -87,6 +89,20 @@ interface State {
   wantsImport: boolean;
   /** 세팅이 걷힌 뒤 "이제 시연" 안내를 띄우는 중. 이게 있어야 IDE 가 툭 뜨지 않는다. */
   announcing: boolean;
+  /** 게임 엔진(OVERDARE)이 연결됐나 — AI 쪽 선택 섹션에서 폴더를 고르면 켜진다. */
+  engineOn: boolean;
+  /** 게임 엔진 연결이 진행 중(폴더 선택 → 등록 → 시작). 버튼을 잠근다. */
+  engineBusy: boolean;
+  /** MCP 서버가 이 기기에 이미 설치돼 있나(GitHub 설치본 또는 발견된 설정). */
+  engineInstalled: boolean;
+  /** 설치 안내 패널(제작자 표시)이 펼쳐져 있나. */
+  engineExpand: boolean;
+  /** GitHub 설치(clone→build)가 도는 중. */
+  engineInstalling: boolean;
+  /** 설치 진행 문구(내려받는 중·설치 중·빌드 중). */
+  enginePhase: string;
+  /** 설치 실패 메시지. 있으면 패널에 붉게 보여준다. */
+  engineErr: string;
 }
 
 export class Opening extends React.Component<Props, State> {
@@ -96,6 +112,8 @@ export class Opening extends React.Component<Props, State> {
       t: 0, passedGate: false, theme: getThemeId(), mode: getUiMode(), pastChats: null, wantsImport: false,
       page: 1 as const, pageDir: 1 as const, leaving: false, keymap: ed.keymap, uiFont: ed.uiFont, codeFont: ed.codeFont, fontSize: ed.fontSize,
       policy: getAutonomy().policy, keyOpen: null, keyDraft: "", connTick: 0, announcing: false,
+      engineOn: engines.ADAPTERS.some(a => mcp.getMcpTools().some(tl => tl.server === a.serverName)), engineBusy: false,
+      engineInstalled: false, engineExpand: false, engineInstalling: false, enginePhase: "", engineErr: "",
     };
   })();
   private raf = 0;
@@ -117,6 +135,17 @@ export class Opening extends React.Component<Props, State> {
     // 지난 대화가 **있을 때만** 물어본다. 처음 쓰는 사람에게 "가져올까요?" 는 아무 뜻이
     // 없고, 세팅 화면만 한 칸 길어진다. 파일 수만 세므로 1GB 를 읽지 않는다.
     void this.countPastChats();
+    // 게임 엔진 MCP 를 이미 쓸 수 있으면(GitHub 설치본이 있거나, ~/.claude.json 등에서 발견되면)
+    // '설치' 대신 '연결'만 보여준다. 둘 다 없는 처음 쓰는 사용자에게만 설치를 권한다.
+    const a0 = engines.ADAPTERS[0];
+    if (a0?.install && window.schutz) {
+      void Promise.all([
+        window.schutz.engineInstalledPath({ id: a0.id, entry: a0.install.entry }),
+        mcp.discover(null),
+      ]).then(([p, disc]) => {
+        if (p || (disc || []).some(d => d.name === a0.serverName)) this.setState({ engineInstalled: true });
+      }).catch(() => { /* 못 물어봐도 그냥 설치 버튼을 보여준다 */ });
+    }
   }
 
   /** 셋째 선택지를 띄울지 정한다. 실패하면 그냥 안 띄운다 — 첫 실행 화면에서 오류를
@@ -377,6 +406,59 @@ export class Opening extends React.Component<Props, State> {
             );
           })}
         </div>
+        {/* 게임 엔진(선택) — 폴더 하나만 고르면 AI가 그 안에서 게임을 만든다. 코더가 아닌
+            사람도 여기서 바로 시작할 수 있게, MCP 패널이 아니라 첫 화면에 둔다. */}
+        {(() => {
+          const a = engines.ADAPTERS[0];
+          if (!a) return null;
+          const on = s.engineOn || mcp.getMcpTools().some(tl => tl.server === a.serverName);
+          return (
+            <div style={{ background: tk.bgPanel, border: `1.5px solid ${on ? tk.accent : tk.w08}`,
+              borderRadius: 13, padding: "14px 16px", textAlign: "left", width: "min(600px,82vw)", transition: "border-color .2s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+                <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", flex: "none", background: on ? tk.accent : tk.w14 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 14, fontWeight: 650, color: tk.fg }}>{a.label}</span>
+                    <span style={{ fontSize: 9.5, letterSpacing: ".04em", color: tk.fgDim2, background: tk.w08, borderRadius: 4, padding: "1px 6px" }}>{t("open.engine.badge")}</span>
+                    <span style={{ fontSize: 11.5, color: on ? tk.accent : tk.fgDim2 }}>{on ? t("open.engine.connected") : t("open.engine.off")}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: tk.fgDim2, marginTop: 2 }}>{t("open.engine.desc")}</div>
+                </div>
+                <div style={{ flex: 1 }} />
+                {!on && (s.engineInstalled
+                  // 이미 설치/발견돼 있으면 폴더만 고르면 된다.
+                  ? <button onClick={() => void this.connectEngine(a)} disabled={s.engineBusy}
+                      style={{ ...pill(false), fontSize: 11.5, padding: "7px 12px", opacity: s.engineBusy ? 0.6 : 1, cursor: s.engineBusy ? "default" : "pointer" }}>
+                      {s.engineBusy ? t("open.engine.connecting") : t("open.engine.connect")}
+                    </button>
+                  // 아직 없으면 설치 안내(제작자)를 펼친다.
+                  : a.install && <button onClick={() => this.setState({ engineExpand: !s.engineExpand, engineErr: "" })}
+                      style={{ ...pill(s.engineExpand), fontSize: 11.5, padding: "7px 12px" }}>{t("open.engine.install")}</button>
+                )}
+              </div>
+              {/* 설치 안내 — MCP 를 제작자의 GitHub 에서 가져온다. 설치 화면에 제작자를 띄운다. */}
+              {!on && !s.engineInstalled && s.engineExpand && a.install && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${tk.w08}` }}>
+                  <div style={{ fontSize: 11.5, color: tk.fgDim2, lineHeight: 1.55 }}>{t("open.engine.installDesc")}</div>
+                  <div style={{ fontSize: 11.5, color: tk.fgSub, marginTop: 7 }}>
+                    {t("open.engine.creator")} · <a href={a.install.creator.url} target="_blank" rel="noopener noreferrer"
+                      style={{ color: tk.accent, textDecoration: "none", fontWeight: 600 }}>{a.install.creator.name}</a>
+                  </div>
+                  {s.engineErr && <div style={{ fontSize: 11, color: "#CE9A9A", marginTop: 7, whiteSpace: "pre-wrap", maxHeight: 66, overflow: "auto" }}>{s.engineErr}</div>}
+                  <div style={{ display: "flex", gap: 8, marginTop: 11, alignItems: "center" }}>
+                    <button onClick={() => void this.installEngine(a)} disabled={s.engineInstalling}
+                      style={{ ...pill(true), fontSize: 12, opacity: s.engineInstalling ? 0.7 : 1, cursor: s.engineInstalling ? "default" : "pointer" }}>
+                      {s.engineInstalling ? (s.enginePhase || t("open.engine.installing")) : t("open.engine.doInstall")}
+                    </button>
+                    {!s.engineInstalling && <button onClick={() => this.setState({ engineExpand: false })}
+                      style={{ ...pill(false), fontSize: 12 }}>{t("common.cancel")}</button>}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <p style={{ fontSize: 12, color: tk.fgDim2, margin: "-8px 0 0", maxWidth: "min(600px,82vw)", whiteSpace: "normal" }}>
           {t("open.conn.hint")}
         </p>
@@ -564,6 +646,61 @@ export class Opening extends React.Component<Props, State> {
   private saveKey(id: string) {
     setStoredKey(id as any, this.state.keyDraft.trim());
     this.setState(st => ({ keyOpen: null, keyDraft: "", connTick: st.connTick + 1 }));
+  }
+
+  /** 게임 엔진 연결 — 폴더 하나만 고르면 나머지는 앱이 채운다. 이미 설치된(GitHub 설치본)
+   *  진입 파일이 있으면 그걸, 없으면 발견된 설정을, 그것도 없으면 프리셋을 쓴다. 실패는 조용히
+   *  넘긴다(첫 화면에서 오류를 들이밀 이유가 없다 — 나중에 MCP 패널에서 다시 할 수 있다). */
+  private async connectEngine(a: engines.EngineAdapter) {
+    if (this.state.engineBusy || !window.schutz) return;
+    this.setState({ engineBusy: true });
+    try {
+      const folder = await window.schutz.openFolder();
+      if (!folder) return;
+      const entry = a.install ? await window.schutz.engineInstalledPath({ id: a.id, entry: a.install.entry }) : null;
+      const disc = (await mcp.discover(null)).find(d => d.name === a.serverName);
+      const cfg = entry ? engines.installedConnectConfig(a, entry, folder) : engines.connectConfig(a, disc, folder);
+      const added = await mcp.addServer(cfg.name, { command: cfg.command, args: cfg.args, env: cfg.env, overwrite: true });
+      if (!added.ok) return;
+      const started = await mcp.startServer(cfg.name);   // 도구 캐시까지 갱신된다
+      if (started.ok) this.setState({ engineOn: true, engineExpand: false });
+    } catch { /* 조용히 — 나중에 설정에서 */ } finally {
+      this.setState({ engineBusy: false });
+    }
+  }
+
+  /** 설치 단계 라벨. */
+  private enginePhaseLabel(phase: string): string {
+    return t(phase === "clone" ? "open.engine.phaseClone"
+      : phase === "install" ? "open.engine.phaseInstall"
+      : phase === "build" ? "open.engine.phaseBuild"
+      : "open.engine.installing");
+  }
+
+  /** 게임 엔진 MCP 를 제작자의 GitHub 에서 가져와 설치(clone→build)하고, 곧바로 폴더를 골라
+   *  등록·시작까지 한다. 진행 로그는 enginePhase 로 흘려 보여준다. git·npm 이 없으면 실패 메시지. */
+  private async installEngine(a: engines.EngineAdapter) {
+    if (this.state.engineInstalling || !a.install || !window.schutz) return;
+    this.setState({ engineInstalling: true, engineErr: "", enginePhase: this.enginePhaseLabel("clone") });
+    const off = window.schutz.onEngineInstallProgress(d => {
+      if (d.id === a.id) this.setState({ enginePhase: this.enginePhaseLabel(d.phase) });
+    });
+    try {
+      const r = await window.schutz.engineInstall({ id: a.id, repo: a.install.repo, build: a.install.build, entry: a.install.entry });
+      if (!r.ok || !r.entryPath) { this.setState({ engineErr: r.error || t("open.engine.installFail") }); return; }
+      this.setState({ engineInstalled: true });
+      // 설치가 끝났으면 폴더를 골라 바로 등록한다.
+      const folder = await window.schutz.openFolder();
+      if (!folder) { this.setState({ engineExpand: false }); return; }   // 설치는 됐고 연결만 안 함
+      const cfg = engines.installedConnectConfig(a, r.entryPath, folder);
+      const added = await mcp.addServer(cfg.name, { command: cfg.command, args: cfg.args, env: cfg.env, overwrite: true });
+      if (added.ok) { const s = await mcp.startServer(cfg.name); if (s.ok) this.setState({ engineOn: true, engineExpand: false }); }
+    } catch (e) {
+      this.setState({ engineErr: e instanceof Error ? e.message : String(e) });
+    } finally {
+      off();
+      this.setState({ engineInstalling: false, enginePhase: "" });
+    }
   }
 
   /** 데모가 끝난 뒤 마무리. 진짜 UI 를 뒤에 두고 그 위에 뜬다. */

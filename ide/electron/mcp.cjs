@@ -266,6 +266,61 @@ function init(ipcMain) {
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
+  // ── 게임 엔진 MCP 설치 — GitHub 에서 가져와 빌드한다 ─────────────────────────
+  // 처음 쓰는 사용자는 MCP 서버가 아예 없다. 발견된 설정도 npm 프리셋도 못 쓸 때,
+  // 제작자의 GitHub 리포를 clone → npm install → build 해서 dist 진입 파일을 만든다.
+  // 결과 경로를 renderer 가 받아 mcpAdd(command:"node", args:[entry]) 로 등록한다.
+  const enginesDir = () => path.join(app.getPath("userData"), "engines");
+  const engineEntry = (id, entry) => path.join(enginesDir(), id, entry);
+  function runStep(cmd, args, cwd, onLine) {
+    return new Promise((resolve) => {
+      let out = "";
+      // Windows 는 npm 이 npm.cmd 라 shell:true 로 PATH 해석을 맡긴다.
+      const p = spawn(cmd, args, { cwd, shell: true, windowsHide: true });
+      const feed = (d) => { const s = d.toString(); out += s; if (onLine) s.split(/\r?\n/).forEach(l => { const t = l.trim(); if (t) onLine(t); }); };
+      p.stdout.on("data", feed); p.stderr.on("data", feed);
+      p.on("error", (e) => resolve({ ok: false, out: out + "\n" + e.message }));
+      p.on("close", (code) => resolve({ ok: code === 0, code, out }));
+    });
+  }
+  // 이미 빌드돼 있으면 그 경로를, 아니면 null.
+  ipcMain.handle("schutz:engineInstalledPath", (_e, spec) => {
+    try {
+      if (!spec || typeof spec.id !== "string" || !/^[A-Za-z0-9._-]+$/.test(spec.id) || typeof spec.entry !== "string") return null;
+      const p = engineEntry(spec.id, spec.entry);
+      return fs.existsSync(p) ? p : null;
+    } catch { return null; }
+  });
+  ipcMain.handle("schutz:engineInstall", async (_e, spec) => {
+    try {
+      if (!spec || typeof spec.id !== "string" || !/^[A-Za-z0-9._-]+$/.test(spec.id)) return { ok: false, error: "잘못된 엔진 id" };
+      if (typeof spec.entry !== "string" || spec.entry.includes("..")) return { ok: false, error: "잘못된 entry" };
+      let repo; try { repo = new URL(spec.repo); } catch { return { ok: false, error: "잘못된 repo URL" }; }
+      // 임의 명령 방지 — 신뢰하는 github.com https 만 clone 한다(스펙은 앱이 준다).
+      if (repo.protocol !== "https:" || repo.hostname !== "github.com") return { ok: false, error: "github.com https 리포만 허용됩니다" };
+      const dir = path.join(enginesDir(), spec.id);
+      const entryPath = engineEntry(spec.id, spec.entry);
+      const emit = (phase, line) => { try { _e.sender.send("schutz:engineInstallProgress", { id: spec.id, phase, line }); } catch { /* */ } };
+      if (fs.existsSync(entryPath)) return { ok: true, entryPath, cached: true };
+      fs.mkdirSync(enginesDir(), { recursive: true });
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); // 반쪽 clone 정리
+      emit("clone", "git clone " + repo.href);
+      let r = await runStep("git", ["clone", "--depth", "1", repo.href, spec.id], enginesDir(), (l) => emit("clone", l));
+      if (!r.ok) return { ok: false, error: "clone 실패 — git 이 설치돼 있는지 확인하세요.\n" + r.out.slice(-400) };
+      emit("install", "npm install");
+      r = await runStep("npm", ["install"], dir, (l) => emit("install", l));
+      if (!r.ok) return { ok: false, error: "npm install 실패 — node/npm 이 설치돼 있는지 확인하세요.\n" + r.out.slice(-400) };
+      if (Array.isArray(spec.build) && spec.build.length) {
+        emit("build", spec.build.join(" "));
+        r = await runStep(spec.build[0], spec.build.slice(1), dir, (l) => emit("build", l));
+        if (!r.ok) return { ok: false, error: "빌드 실패\n" + r.out.slice(-400) };
+      }
+      if (!fs.existsSync(entryPath)) return { ok: false, error: "빌드 후 진입 파일이 없습니다: " + spec.entry };
+      emit("done", entryPath);
+      return { ok: true, entryPath };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+
   // 앱 종료 시 모든 MCP 서버 정리
   app.on("before-quit", () => { for (const name of [...servers.keys()]) killServer(name); });
 }

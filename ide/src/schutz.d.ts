@@ -118,6 +118,12 @@ interface SchutzApi {
   cliHelp(cmd: string): Promise<{ ok: boolean; text?: string; error?: string }>;
   mcpFetchSpec(url: string): Promise<{ ok: boolean; text?: string; status?: number; error?: string }>;
   mcpWriteServer(name: string, code: string): Promise<{ ok: boolean; path?: string; error?: string }>;
+  /** 게임 엔진 MCP 를 GitHub 에서 clone → build 하여 설치한다. entryPath 를 mcpAdd 로 등록한다. */
+  engineInstall(spec: { id: string; repo: string; build: string[]; entry: string }): Promise<{ ok: boolean; entryPath?: string; cached?: boolean; error?: string }>;
+  /** 이미 설치돼 있으면 진입 파일 절대경로, 아니면 null. */
+  engineInstalledPath(spec: { id: string; entry: string }): Promise<string | null>;
+  /** 설치 진행 로그 구독. 해제 함수를 반환한다. */
+  onEngineInstallProgress(cb: (d: { id: string; phase: string; line: string }) => void): () => void;
   cliLogin(id: string): void;
   cliRun(opts: { agent?: string; cwd?: string; prompt: string; resume?: string; continue?: boolean }): void;
   cliStop(): void;
