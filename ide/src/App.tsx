@@ -5948,6 +5948,16 @@ ${(r.output || "").slice(0, 2000)}`;
         const [sl, sc] = pstMap[p.status];
         return (
           <div key={p.id} className="sz-pop" style={{ position: "relative", background: opts?.wide ? "transparent" : "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: opts?.wide ? 12 : 10, overflow: "hidden" }}>
+            {/* 반영이 **착지**하는 순간의 물결. 수락으로 바뀔 때 한 번 지나가고 사라진다 —
+                key 를 status 로 줘서 pending→accepted 로 넘어가는 그 순간에만 마운트되어 돈다.
+                pointerEvents none 이라 카드 조작을 막지 않는다. */}
+            {p.status === "accepted" && (
+              <span key={"land" + p.status} aria-hidden style={{
+                position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none", borderRadius: "inherit",
+                background: "color-mix(in srgb, var(--ok) 22%, transparent)",
+                animation: "szLand .6s var(--ease) both",
+              }} />
+            )}
             {/* 좌측 스파인은 **좁은 검토 패널**에서 눈에 띄라고 만든 장치다. 읽는 화면에
                 그대로 얹으면 카드 하나가 문단보다 시끄럽다 — 넓은 자리에선 뺀다. */}
             {!opts?.wide && (
