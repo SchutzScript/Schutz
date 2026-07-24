@@ -247,6 +247,8 @@ interface S {
   mcpBusy: string;               // 진행 중 작업 라벨 (서버명 등)
   /** 게임 엔진 접속 상태 — serverName → Studio 에 실제로 닿는지. 패널 열 때·연결 후에만 조회. */
   engineStatus: Record<string, { reachable: boolean; detail: string }>;
+  /** Claude Code 스킬 — 이름·설명만. 본문은 모델이 고를 때 읽는다. */
+  skills: SkillInfo[];
   /** 엔진 뷰(전용 화면) 열림 */
   engineOpen: boolean;
   /** 엔진 뷰 — 뷰포트 스냅샷(data URL) · 씬 트리 텍스트 · 진행 중 동작 · 오류 */
@@ -471,7 +473,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, skills: [],
     engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
@@ -2279,6 +2281,47 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }));
   }
 
+  // ── 스킬 (Claude Code 생태계) ───────────────────────────────────────────────
+  // SKILL.md 는 Claude API 기능이 아니라 **프롬프트 묶음**이다. 그래서 어느 모델이든 똑같이
+  // 쓸 수 있고, Claude 든 GPT 든 같은 도구 하나로 노출한다.
+  //
+  // 본문을 시스템 프롬프트에 다 넣지 않는다 — 스킬이 수십 개면 매 턴 수만 토큰이 샌다.
+  // 목록에는 이름·설명만 주고, 모델이 고른 것만 skill 도구로 읽어 가게 한다.
+
+  /** 스킬 목록을 다시 읽는다(부팅·워크스페이스 변경·플러그인 토글 후). */
+  async refreshSkills() {
+    if (!window.schutz?.skillsList) return;
+    try {
+      const r = await window.schutz.skillsList(this.state.workspace?.root ?? null);
+      if (r.ok) this.setState({ skills: r.skills });
+    } catch { /* 스킬이 없어도 앱은 그대로 돈다 */ }
+  }
+
+  /** 스킬이 하나라도 있으면 도구 하나를 준다. 이름은 목록에서 고르게 한다. */
+  private skillToolDefs(): ToolDef[] {
+    const list = this.state.skills;
+    if (!list.length) return [];
+    return [{
+      name: "skill",
+      description:
+        "사용할 수 있는 스킬(작업 지침 묶음)의 내용을 읽어 온다. 아래 목록에 있는 스킬이 지금 하려는 일과 맞으면, " +
+        "먼저 이 도구로 그 지침을 읽고 그대로 따른다. 이름은 목록에 적힌 것을 그대로 쓴다.",
+      input_schema: {
+        type: "object",
+        properties: { name: { type: "string", description: "읽을 스킬 이름", enum: list.map(s => s.id) } },
+        required: ["name"],
+      },
+    }];
+  }
+
+  /** 어떤 스킬이 있는지 시스템 프롬프트에 한 줄씩 알린다(이름 + 설명만). */
+  private skillSystemExtra(): string {
+    const list = this.state.skills;
+    if (!list.length) return "";
+    const lines = list.slice(0, 60).map(s => `- ${s.id}: ${s.description.slice(0, 200)}`);
+    return "\n\n사용할 수 있는 스킬(필요하면 skill 도구로 내용을 읽고 따르세요):\n" + lines.join("\n");
+  }
+
   /** 검증된 asset id — 카탈로그 도구가 실제로 돌려준 것만 담는다. 미지의 id 로 asset_import 를
    *  부르면 Studio 가 영구 행업하므로, 여기 없는 id 는 auto 모드에서도 승인을 강제한다. */
   private _validatedAssetIds = new Set<string>();
@@ -2314,6 +2357,28 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   /** runId 는 파일 락 소유자로 기록된다 — 낡은 실행이 새 실행의 락을 풀지 않게. */
   private async execTool(agentId: string, call: ToolCall, runId: string): Promise<string> {
+    // 스킬 읽기 — 워크스페이스와 무관. 지침을 돌려줄 뿐이라 승인 게이트가 없다.
+    if (call.name === "skill") {
+      const want = String(call.input?.name ?? "").trim();
+      const sk = this.state.skills.find(s => s.id === want) ?? this.state.skills.find(s => s.name === want);
+      const sid = "rt" + (this._uid++);
+      this.addTool(sid, agentId, t("skill.verb"), want);
+      if (!sk || !window.schutz?.skillRead) {
+        this.setTool(sid, { st: "done", note: t("sc2.noteError") });
+        return `오류: '${want}' 스킬을 찾을 수 없습니다. 목록에 있는 이름을 그대로 쓰세요.`;
+      }
+      try {
+        const r = await window.schutz.skillRead(sk.file);
+        if (!r.ok || !r.body) { this.setTool(sid, { st: "done", note: t("sc2.noteError") }); return "스킬을 읽지 못했습니다: " + (r.error || ""); }
+        this.setTool(sid, { st: "done", note: sk.name });
+        // 스킬이 도구를 제한해 두었으면 그대로 알려 준다(강제는 Schutz 의 승인·자율성 계층이 한다).
+        const limit = sk.allowedTools.length ? `\n\n(이 스킬이 권하는 도구: ${sk.allowedTools.join(", ")})` : "";
+        return `# 스킬: ${sk.name}\n\n${r.body}${limit}`;
+      } catch (e) {
+        this.setTool(sid, { st: "done", note: t("sc2.noteError") });
+        return "스킬 오류: " + (e instanceof Error ? e.message : String(e));
+      }
+    }
     // MCP 도구 — 워크스페이스와 무관하게 실행
     if (mcp.isMcpToolName(call.name)) {
       const r = mcp.resolveMcpTool(call.name);
@@ -2546,7 +2611,8 @@ ${(r.output || "").slice(0, 2000)}`;
     const wsTools = useWs
       ? [...(opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)]
       : [];
-    const tools = (useWs || hasMcp) ? [...wsTools, ...this.mcpToolDefs()] : undefined;
+    const skillDefs = this.skillToolDefs();
+    const tools = (useWs || hasMcp || skillDefs.length) ? [...wsTools, ...this.mcpToolDefs(), ...skillDefs] : undefined;
     const system =
       schutzSystemPrompt() +
       // 위임 안내는 delegate_task 를 실제로 줄 때만 붙인다 — 도구 조건(others.length)과
@@ -2555,7 +2621,7 @@ ${(r.output || "").slice(0, 2000)}`;
       // 정작 그 도구는 안 줬다. 앱이 환각을 만들어 놓고 아래 가드로 모델을 나무라던 셈.
       (opts.isManager && others.length ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
       (useWs ? "\n현재 워크스페이스: " + this.state.workspace!.name : "") +
-      this.engineSystemExtra();
+      this.engineSystemExtra() + this.skillSystemExtra();
 
     const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
@@ -3576,6 +3642,8 @@ ${(r.output || "").slice(0, 2000)}`;
       // MCP 서버 시작 (Schutz 호스트) → 도구를 에이전트 루프에 노출
       mcp.setMcpChangeHandler(() => this.forceUpdate());
       void mcp.startAll();
+      // Claude Code 스킬 — 있으면 모델에게 노출한다(없으면 아무 일도 없다)
+      void this.refreshSkills();
       // 모델 목록 미리 조회 → /model 팔레트가 즉시 실시간 목록을 보여줌
       setTimeout(() => this.ensureModelsFetched(), 1500);
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.

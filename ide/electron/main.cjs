@@ -7,6 +7,7 @@ try { require("./lsp.cjs").init(ipcMain); } catch (e) { console.error("LSP init 
 try { require("./dap.cjs").init(ipcMain); } catch (e) { console.error("DAP init failed:", e && e.message); }
 try { require("./extensions.cjs").init(ipcMain); } catch (e) { console.error("EXT init failed:", e && e.message); }
 try { require("./mcp.cjs").init(ipcMain); } catch (e) { console.error("MCP init failed:", e && e.message); }
+try { require("./plugins.cjs").init(ipcMain); } catch (e) { console.error("PLUGINS init failed:", e && e.message); }
 
 const DEV_URL = process.env.SCHUTZ_DEV_URL || "http://localhost:4322";
 const isDev = !app.isPackaged;
