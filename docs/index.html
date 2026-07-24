@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Download Schutz</title>
+<meta name="description" content="Schutz — an AI-native IDE. The AI writes. You decide. Download for Windows, macOS, and Linux." />
+<link rel="icon" href="./logo.png" />
+<meta property="og:title" content="Download Schutz" />
+<meta property="og:description" content="An AI-native IDE. The AI writes. You decide." />
+<style>
+  :root {
+    --sage: #8FA893;
+    --bg: #F5F6F4;
+    --panel: #FFFFFF;
+    --fg: #1B211D;
+    --fg-sub: #55605A;
+    --fg-dim: #8A938D;
+    --border: #E1E5E1;
+    --accent: #3F7D57;      /* download green — strong enough for a CTA */
+    --accent-fg: #FFFFFF;
+    --shadow: 0 1px 2px rgba(27,33,29,.05), 0 12px 32px rgba(27,33,29,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0E110F;
+      --panel: #161A17;
+      --fg: #E7ECE8;
+      --fg-sub: #A7B0AA;
+      --fg-dim: #6E776F;
+      --border: #232824;
+      --accent: #6FB98A;
+      --accent-fg: #0E110F;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    -webkit-font-smoothing: antialiased; line-height: 1.55;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    padding: 7vh 20px 40px;
+  }
+  .mark {
+    width: 64px; height: 64px; margin-bottom: 22px;
+    background: var(--sage);
+    -webkit-mask: url(./logo.png) center / contain no-repeat;
+    mask: url(./logo.png) center / contain no-repeat;
+  }
+  h1 { font-size: 34px; letter-spacing: -.01em; margin: 0 0 8px; font-weight: 700; }
+  .tagline { color: var(--fg-sub); font-size: 15.5px; margin: 0 0 6px; text-align: center; }
+  .tagline .de { color: var(--fg-dim); font-style: italic; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 18px;
+    box-shadow: var(--shadow);
+    width: min(520px, 100%); margin-top: 34px; padding: 26px 26px 22px; text-align: center;
+  }
+  .primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 15px 22px; border-radius: 12px; border: none;
+    background: var(--accent); color: var(--accent-fg);
+    font: inherit; font-size: 16px; font-weight: 650; cursor: pointer; text-decoration: none;
+    transition: transform .12s ease, filter .12s ease;
+  }
+  .primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
+  .primary:active { transform: translateY(0); }
+  .primary .os-icon { width: 20px; height: 20px; flex: none; }
+  .meta { color: var(--fg-dim); font-size: 12.5px; margin-top: 10px; }
+  .meta a { color: var(--fg-sub); }
+
+  .others { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .others-title { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 12px; }
+  .plat { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .plat a {
+    display: block; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--border);
+    color: var(--fg-sub); text-decoration: none; font-size: 13px; background: transparent;
+    transition: border-color .12s ease, color .12s ease;
+  }
+  .plat a:hover { border-color: var(--sage); color: var(--fg); }
+  .plat a small { display: block; color: var(--fg-dim); font-size: 11px; margin-top: 1px; }
+
+  footer { margin-top: 30px; color: var(--fg-dim); font-size: 12.5px; text-align: center; }
+  footer a { color: var(--fg-sub); }
+  .note { color: var(--fg-dim); font-size: 11.5px; margin-top: 14px; max-width: 520px; text-align: center; }
+  @media (max-width: 440px) { .plat { grid-template-columns: 1fr; } h1 { font-size: 28px; } }
+</style>
+</head>
+<body>
+  <div class="mark" role="img" aria-label="Schutz"></div>
+  <h1>Schutz</h1>
+  <p class="tagline">An AI-native IDE. <span class="de">Die KI schreibt. Du entscheidest.</span></p>
+  <p class="tagline">The AI writes. You decide.</p>
+
+  <main class="card" id="card">
+    <a class="primary" id="primary" href="https://github.com/SchutzScript/Schutz/releases/latest" rel="noopener">
+      <span id="primary-label">Loading latest release…</span>
+    </a>
+    <div class="meta" id="meta">Fetching the newest version…</div>
+
+    <div class="others">
+      <div class="others-title">All platforms</div>
+      <div class="plat" id="plat"></div>
+    </div>
+  </main>
+
+  <p class="note">The other files on the release page (<code>.blockmap</code>, <code>latest-*.yml</code>) are used by the app's built-in auto-updater — you don't need to download them.</p>
+
+  <footer>
+    <a href="https://github.com/SchutzScript/Schutz" rel="noopener">Source on GitHub</a>
+    &nbsp;·&nbsp;
+    <a id="notes-link" href="https://github.com/SchutzScript/Schutz/releases/latest" rel="noopener">Release notes</a>
+  </footer>
+
+<script>
+(function () {
+  var REPO = "SchutzScript/Schutz";
+  var RELEASES = "https://github.com/" + REPO + "/releases/latest";
+
+  function osIcon(kind) {
+    // simple monochrome glyphs, inherit currentColor
+    var p = {
+      windows: '<path d="M3 4.5 10.5 3.3V11H3V4.5Zm0 15L10.5 20.7V13H3v6.5ZM11.5 3.15 21 1.8V11h-9.5V3.15Zm0 17.7L21 22.2V13h-9.5v7.85Z"/>',
+      apple: '<path d="M16.3 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.9-.8-3-.8-1.6 0-3 .9-3.8 2.3-1.6 2.8-.4 6.9 1.2 9.2.8 1.1 1.7 2.4 2.9 2.3 1.2-.05 1.6-.75 3-.75 1.4 0 1.8.75 3 .73 1.2-.02 2-1.12 2.8-2.23.9-1.3 1.2-2.5 1.3-2.6-.1-.05-2.5-.95-2.5-3.7Zm-2.3-6.8c.6-.8 1.1-1.9.95-3-1 .05-2.2.7-2.9 1.5-.6.7-1.15 1.85-1 2.9 1.1.1 2.25-.6 2.95-1.4Z"/>',
+      linux: '<path d="M12 2c-2 0-3.2 1.8-3.2 3.9 0 1.3.4 2 .4 3 0 .9-.9 1.6-1.7 3-.9 1.5-1.9 3.2-1.9 4.9 0 .8.3 1.4.9 1.7-.1.5.1 1 .5 1.3.6.4 1.5.3 2.3.3.6 0 1 .2 1.6.2.6 0 1-.2 1.6-.2.8 0 1.7.1 2.3-.3.4-.3.6-.8.5-1.3.6-.3.9-.9.9-1.7 0-1.7-1-3.4-1.9-4.9-.8-1.4-1.7-2.1-1.7-3 0-1 .4-1.7.4-3C15.2 3.8 14 2 12 2Zm-1.4 4.2c.35 0 .6.35.6.8s-.25.8-.6.8-.6-.35-.6-.8.25-.8.6-.8Zm2.8 0c.35 0 .6.35.6.8s-.25.8-.6.8-.6-.35-.6-.8.25-.8.6-.8Z"/>'
+    };
+    return '<svg class="os-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' + (p[kind] || '') + '</svg>';
+  }
+
+  function fmtSize(bytes) {
+    if (!bytes) return "";
+    var mb = bytes / (1024 * 1024);
+    return mb.toFixed(0) + " MB";
+  }
+
+  function pick(assets, test) {
+    for (var i = 0; i < assets.length; i++) { if (test(assets[i].name)) return assets[i]; }
+    return null;
+  }
+
+  function detectOS() {
+    var ua = navigator.userAgent || "";
+    if (/Windows/i.test(ua)) return "windows";
+    if (/Mac|iPhone|iPad|iPod/i.test(ua)) return "mac";
+    if (/Linux|X11/i.test(ua) && !/Android/i.test(ua)) return "linux";
+    return "other";
+  }
+
+  function detectMacArm() {
+    // best-effort; many browsers hide arch. Default to Apple Silicon for modern Macs.
+    try {
+      var uad = navigator.userAgentData;
+      if (uad && uad.getHighEntropyValues) {
+        return uad.getHighEntropyValues(["architecture"]).then(function (v) {
+          return /arm/i.test(v.architecture || "");
+        });
+      }
+    } catch (e) {}
+    return Promise.resolve(true);
+  }
+
+  function render(rel) {
+    var assets = (rel && rel.assets) || [];
+    var version = rel && rel.tag_name ? rel.tag_name : "latest";
+    var htmlUrl = rel && rel.html_url ? rel.html_url : RELEASES;
+    document.getElementById("notes-link").href = htmlUrl;
+
+    var win = pick(assets, function (n) { return /\.exe$/i.test(n); });
+    var macArm = pick(assets, function (n) { return /arm64.*\.dmg$/i.test(n); });
+    var macIntel = pick(assets, function (n) { return /\.dmg$/i.test(n) && !/arm64/i.test(n); });
+    var appimage = pick(assets, function (n) { return /\.AppImage$/i.test(n); });
+    var deb = pick(assets, function (n) { return /\.deb$/i.test(n); });
+
+    var all = [
+      { key: "windows", label: "Windows", icon: "windows", asset: win },
+      { key: "mac-arm", label: "macOS · Apple Silicon", icon: "apple", asset: macArm },
+      { key: "mac-intel", label: "macOS · Intel", icon: "apple", asset: macIntel },
+      { key: "linux-appimage", label: "Linux · AppImage", icon: "linux", asset: appimage },
+      { key: "linux-deb", label: "Linux · .deb", icon: "linux", asset: deb }
+    ].filter(function (x) { return x.asset; });
+
+    var os = detectOS();
+
+    function setPrimary(item, sublabel) {
+      var a = document.getElementById("primary");
+      var lab = document.getElementById("primary-label");
+      if (!item || !item.asset) {
+        a.href = htmlUrl;
+        lab.textContent = "Download Schutz " + version;
+        document.getElementById("meta").innerHTML = 'Choose your platform on the <a href="' + htmlUrl + '" rel="noopener">release page</a>.';
+        return;
+      }
+      a.href = item.asset.browser_download_url;
+      a.setAttribute("download", "");
+      a.innerHTML = osIcon(item.icon) + "<span>Download for " + sublabel + "</span>";
+      document.getElementById("meta").innerHTML =
+        version + " &nbsp;·&nbsp; " + fmtSize(item.asset.size) +
+        ' &nbsp;·&nbsp; <a href="' + htmlUrl + '" rel="noopener">other platforms</a>';
+    }
+
+    function paintOthers(highlightKey) {
+      var wrap = document.getElementById("plat");
+      wrap.innerHTML = "";
+      all.forEach(function (item) {
+        if (item.key === highlightKey) return; // already the primary
+        var a = document.createElement("a");
+        a.href = item.asset.browser_download_url;
+        a.setAttribute("download", "");
+        a.rel = "noopener";
+        a.innerHTML = item.label + "<small>" + fmtSize(item.asset.size) + "</small>";
+        wrap.appendChild(a);
+      });
+    }
+
+    if (os === "mac") {
+      detectMacArm().then(function (isArm) {
+        var key = isArm ? "mac-arm" : "mac-intel";
+        var item = all.filter(function (x) { return x.key === key; })[0] || all.filter(function (x) { return /^mac/.test(x.key); })[0];
+        setPrimary(item, isArm ? "macOS (Apple Silicon)" : "macOS (Intel)");
+        paintOthers(item ? item.key : null);
+      });
+      return;
+    }
+
+    var map = { windows: "windows", linux: "linux-appimage" };
+    var key = map[os];
+    var item = key ? all.filter(function (x) { return x.key === key; })[0] : null;
+    if (item) {
+      setPrimary(item, os === "windows" ? "Windows" : "Linux");
+      paintOthers(item.key);
+    } else {
+      setPrimary(null);
+      paintOthers(null);
+    }
+  }
+
+  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { "Accept": "application/vnd.github+json" } })
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(render)
+    .catch(function () {
+      // network / rate-limit fallback — send people to the release page
+      var lab = document.getElementById("primary-label");
+      lab.textContent = "Download from GitHub";
+      document.getElementById("primary").href = RELEASES;
+      document.getElementById("meta").innerHTML = 'Pick the file for your system on the <a href="' + RELEASES + '" rel="noopener">latest release</a>.';
+    });
+})();
+</script>
+</body>
+</html>
