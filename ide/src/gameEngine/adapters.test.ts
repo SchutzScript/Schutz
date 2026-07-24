@@ -143,42 +143,19 @@ describe("ADAPTERS registry", () => {
   });
 });
 
-describe("Blender adapter", () => {
-  const blender = adapterForServer("blender")!;
-  it("is registered as a second engine, no project folder", () => {
-    expect(blender.id).toBe("blender");
-    expect(blender.projectEnv).toBeUndefined();
-    expect(blender.install).toBeUndefined();     // 파이썬(uv) 배포 — npm 설치 흐름 없음
-    expect(blender.preset).toEqual({ command: "uvx", args: ["blender-mcp"] });
-  });
-  it("gates arbitrary code / downloads / generation, reads are safe", () => {
-    expect(riskFor("blender", "execute_blender_code")).toBe("confirm");
-    expect(riskFor("blender", "download_polyhaven_asset")).toBe("confirm");
-    expect(riskFor("blender", "generate_hyper3d_model_via_text")).toBe("confirm");
-    expect(riskFor("blender", "set_texture")).toBe("confirm");
-    expect(riskFor("blender", "get_scene_info")).toBe("safe");
-    expect(riskFor("blender", "get_viewport_screenshot")).toBe("safe");
-    expect(riskFor("blender", "search_polyhaven_assets")).toBe("safe");
-  });
-  it("has no asset-id hang / play concepts", () => {
-    expect(assetImportId("blender", "download_polyhaven_asset", { assetId: "x" })).toBeNull();
-    expect(mutatesWhilePlaying("blender", "execute_blender_code")).toBe(false);
-    expect(harvestAssetIds("blender", "get_scene_info", "ovdrassetid://1")).toEqual([]);
-  });
-});
-
-describe("connectConfig — folderless engine (Blender)", () => {
-  const blender = adapterForServer("blender")!;
-  it("uses preset with no project env when nothing discovered and no folder", () => {
-    const cfg = connectConfig(blender, undefined, null);
+describe("connectConfig — folderless engine (generalized interface)", () => {
+  // 기본 어댑터는 OVERDARE 하나지만 인터페이스는 폴더 없는 엔진도 표현할 수 있어야 한다.
+  // 합성 어댑터(projectEnv 없음)로 그 경로를 검증한다.
+  const folderless = { ...overdare, projectEnv: undefined, preset: { command: "uvx", args: ["some-mcp"] }, install: undefined };
+  it("uses preset with no project env when nothing discovered and folder is null", () => {
+    const cfg = connectConfig(folderless, undefined, null);
     expect(cfg.command).toBe("uvx");
-    expect(cfg.args).toEqual(["blender-mcp"]);
+    expect(cfg.args).toEqual(["some-mcp"]);
     expect(cfg.env).toEqual({});
   });
-  it("reuses a discovered config verbatim (its env kept, no folder added)", () => {
-    const cfg = connectConfig(blender, { command: "cmd", args: ["/c", "uvx", "blender-mcp"], env: {} }, null);
+  it("reuses a discovered config verbatim, adding no folder env for a folderless engine", () => {
+    const cfg = connectConfig(folderless, { command: "cmd", args: ["/c", "uvx", "some-mcp"], env: {} }, null);
     expect(cfg.command).toBe("cmd");
-    expect(cfg.args).toEqual(["/c", "uvx", "blender-mcp"]);
     expect(cfg.env).toEqual({});
   });
 });

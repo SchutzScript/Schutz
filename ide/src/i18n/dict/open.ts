@@ -207,12 +207,6 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Wähle deinen OVERDARE-Studio-Projektordner, und die KI baut das Spiel darin — Bäume, Skripte, alles.",
     ja: "OVERDARE Studio のプロジェクトフォルダーを選ぶと、AI がその中でツリーやスクリプトを作ってゲームを組み立てます。",
   },
-  "open.engine.descBlender": {
-    ko: "Blender를 연결하면 AI가 씬을 읽고 파이썬으로 모델링·에셋 배치를 직접 합니다. (Blender에 애드온이 켜져 있어야 해요)",
-    en: "Connect Blender and the AI reads the scene and models with Python — placing assets and building the scene. (needs the Blender add-on running)",
-    de: "Verbinde Blender, und die KI liest die Szene und modelliert per Python — platziert Assets und baut die Szene. (Blender-Add-on muss laufen)",
-    ja: "Blender をつなぐと、AI がシーンを読み、Python でモデリングやアセット配置を行います。（Blender のアドオンが必要）",
-  },
   "open.engine.connect": { ko: "폴더 고르고 연결", en: "Pick folder & connect", de: "Ordner wählen & verbinden", ja: "フォルダーを選んで接続" },
   "open.engine.connectPlain": { ko: "연결", en: "Connect", de: "Verbinden", ja: "接続" },
   "open.engine.connecting": { ko: "연결 중…", en: "Connecting…", de: "Verbinden…", ja: "接続中…" },

@@ -130,45 +130,10 @@ const OVERDARE: EngineAdapter = {
   },
 };
 
-// ── Blender ──────────────────────────────────────────────────────────────────
-// 3D DCC. blender-mcp(Python, uvx 로 실행)가 Blender 애드온과 소켓으로 통신한다. OVERDARE 와
-// 달리 프로젝트 폴더도, 재생/정지도, asset id 행업도 없다 — 그 필드들은 전부 비운다. 위험한 건
-// execute_blender_code(Blender 안에서 임의 파이썬 실행)와 다운로드·생성·텍스처 적용이다.
-
-const BLENDER: EngineAdapter = {
-  id: "blender",
-  label: "Blender",
-  serverName: "blender",
-  transport: "stdio",
-  descKey: "open.engine.descBlender",
-  systemGuide:
-    "[Blender] 3D DCC 가 연결되어 있습니다. 수칙: " +
-    "① get_scene_info 로 씬을, get_object_info 로 개별 오브젝트를 먼저 읽는다. " +
-    "② 결과는 get_viewport_screenshot 으로 눈으로 확인한다. " +
-    "③ execute_blender_code 는 Blender 안에서 파이썬을 그대로 실행한다 — 되돌리기 어려우니 " +
-    "작은 단위로 신중히 부른다. ④ 에셋은 추측하지 말고 search/download(PolyHaven·Sketchfab) 나 " +
-    "generate(Hyper3D·Hunyuan)로 가져온다.",
-  // projectEnv 없음 · statusTool = 씬 조회로 도달성 확인 · 스크린샷 = 뷰포트
-  statusTool: "get_scene_info",
-  screenshotTool: "get_viewport_screenshot",
-  risk: {
-    confirm: [
-      "execute_blender_code",                          // 임의 파이썬 실행
-      "download_polyhaven_asset", "download_sketchfab_model",
-      "generate_hyper3d_model_via_text", "generate_hyper3d_model_via_images",
-      "generate_hunyuan3d_model",
-      "import_generated_asset", "import_generated_asset_hunyuan",
-      "set_texture",
-    ],
-    gated: [],   // Blender 는 OVERDARE 의 asset 행업 같은 영구 파손 케이스가 없다.
-  },
-  // uvx 로 실행 — 발견된 설정이 없을 때의 폴백(문서화된 실행 방식).
-  preset: { command: "uvx", args: ["blender-mcp"] },
-  // Blender MCP 는 파이썬(uv) 배포라 npm clone-build 설치 흐름(install)을 두지 않는다 —
-  // 발견되면 연결, 아니면 preset 으로 등록한다.
-};
-
-export const ADAPTERS: readonly EngineAdapter[] = [OVERDARE, BLENDER];
+// 기본 어댑터는 OVERDARE 하나. 인터페이스는 엔진-무관하게 일반화돼 있어(폴더 없는 엔진,
+// 재생/정지 없는 엔진, 설치 없는 엔진 모두 표현 가능) 두 번째 엔진은 여기 배열에 항목 하나를
+// 더하는 일이면 된다. (Blender 등은 준비되면 추가한다.)
+export const ADAPTERS: readonly EngineAdapter[] = [OVERDARE];
 
 /** MCP 서버 이름으로 엔진 어댑터를 찾는다. 엔진이 아니면 undefined. */
 export function adapterForServer(server: string): EngineAdapter | undefined {
