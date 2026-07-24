@@ -216,6 +216,8 @@ interface S {
   impBusy: string | null;
   /** 에이전트 모드 오른쪽 산출물 패널 폭(px). 드래그로 바뀌고 저장된다. */
   agentSideW: number;
+  /** 에이전트 모드 좌측 대화 목록 폭 — 대화 목록 ↔ 채팅 사이 경계를 끌어 조절한다. */
+  agentAsideW: number;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -469,7 +471,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agentsOpen: true, reviewOpen: true,
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
-    agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
@@ -667,6 +670,29 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   /** 좌·우 패널 드래그 리사이즈 */
+  /** 대화 목록 ↔ 채팅 폭. 오른쪽으로 끌면 목록이 넓어진다.
+   *  산출물 패널과 같은 방식이되, 이쪽은 목록이라 더 좁게까지 줄일 수 있다. */
+  private startAgentAsideResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = this.state.agentAsideW;
+    const onMove = (ev: MouseEvent) => {
+      // 채팅 쪽에도 최소 폭을 남긴다 — 목록을 끝까지 끌어 채팅을 0 으로 만들 수 있으면 안 된다.
+      const maxW = Math.max(150, Math.min(480, window.innerWidth - 420));
+      this.setState({ agentAsideW: Math.max(150, Math.min(maxW, startW + (ev.clientX - startX))) });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      try { localStorage.setItem("schutz.agentAsideW", String(this.state.agentAsideW)); } catch { /* ignore */ }
+      requestAnimationFrame(() => { for (const p of paneRegistry.panes.values()) { try { p.editor.layout(); } catch { /* */ } } });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+  }
+
   /** 대화 ↔ 산출물 패널 폭. 오른쪽으로 끌면 패널이 좁아진다(대화가 넓어진다). */
   private startAgentSideResize(e: React.MouseEvent) {
     e.preventDefault();
@@ -5617,9 +5643,13 @@ ${(r.output || "").slice(0, 2000)}`;
 
     return (
       <div data-tour="aside" className="vtAside" style={{
-        flex: "none", width: 216, display: ag2(s) ? "flex" : "none", flexDirection: "column",
+        flex: "none", width: s.agentAsideW, display: ag2(s) ? "flex" : "none", flexDirection: "column",
         borderRight: "1px solid var(--w06)", background: "var(--bg-panel)", padding: "10px 8px 8px",
+        position: "relative",
       }}>
+        {/* 목록 ↔ 채팅 경계. 테두리 위에 겹쳐 두어 폭을 차지하지 않는다. */}
+        <div onMouseDown={e => this.startAgentAsideResize(e)} title={t("aside.resize")}
+          style={{ position: "absolute", top: 0, right: 0, width: 6, height: "100%", cursor: "col-resize", zIndex: 5 }} />
         <button className="hv06" onClick={() => this.startNewConversation()}
           style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 34, padding: "0 11px",
             fontFamily: SUIT, fontSize: 12.5, fontWeight: 600, cursor: "pointer", borderRadius: 9,
