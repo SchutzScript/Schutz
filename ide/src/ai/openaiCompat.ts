@@ -44,6 +44,11 @@ export class OpenAICompatProvider implements AgentProvider {
         for (const r of m.results) {
           out.push({ role: "tool", tool_call_id: r.id, content: r.content });
         }
+      } else if (m.images && m.images.length) {
+        // 이미지가 붙은 턴은 content 를 배열로 — chat/completions 의 멀티모달 형식.
+        const content: any[] = m.images.map(im => ({ type: "image_url", image_url: { url: `data:${im.mime};base64,${im.data}` } }));
+        if (m.text) content.push({ type: "text", text: m.text });
+        out.push({ role: "user", content });
       } else {
         out.push({ role: "user", content: m.text ?? "" });
       }
@@ -81,7 +86,10 @@ export class OpenAICompatProvider implements AgentProvider {
       } else if (m.results && m.results.length) {
         for (const r of m.results) input.push({ type: "function_call_output", call_id: r.id, output: r.content });
       } else {
-        input.push({ type: "message", role: "user", content: [{ type: "input_text", text: m.text ?? "" }] });
+        // Responses API 는 이미지가 input_image 다(형식만 다르고 뜻은 같다).
+        const content: any[] = (m.images ?? []).map(im => ({ type: "input_image", image_url: `data:${im.mime};base64,${im.data}` }));
+        content.push({ type: "input_text", text: m.text ?? "" });
+        input.push({ type: "message", role: "user", content });
       }
     }
     const id = "oai" + Date.now() + Math.floor(Math.random() * 1e6);

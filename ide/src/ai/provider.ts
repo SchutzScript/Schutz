@@ -52,6 +52,10 @@ export interface NeutralMsg {
   text?: string;
   calls?: ToolCall[];
   results?: { id: string; content: string }[];
+  /** 사용자가 붙인 이미지(base64). 프로바이더마다 자기 형식의 이미지 블록으로 옮긴다.
+   *  대화 기록(history)에는 텍스트만 남기고 이미지는 그 턴에만 실어 보낸다 — 세션 파일이
+   *  수 MB 씩 불어나는 것을 막고, 모델이 옛 사진을 계속 다시 보지 않게 한다. */
+  images?: { mime: string; data: string }[];
 }
 
 export type AgentEvent =
