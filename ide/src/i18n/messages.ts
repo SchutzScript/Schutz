@@ -155,6 +155,7 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.ai.models": { ko: "모델 관리…", en: "Manage Models…", de: "Modelle verwalten…", ja: "モデル管理…" },
   "menu.ai.usage": { ko: "사용량 대시보드", en: "Usage Dashboard", de: "Nutzungs-Dashboard", ja: "使用量ダッシュボード" },
   "menu.ai.mcp": { ko: "MCP 서버…", en: "MCP Servers…", de: "MCP-Server…", ja: "MCPサーバー…" },
+  "menu.editorOnly": { ko: "{item}은(는) 에디터 모드에서만 됩니다. 오른쪽 위에서 에디터로 바꿔 보세요.", en: "{item} only works in editor mode. Switch at the top right.", de: "{item} funktioniert nur im Editor-Modus. Oben rechts umschalten.", ja: "{item} はエディタモードでのみ使えます。右上で切り替えてください。" },
   "menu.ai.plugins": { ko: "플러그인 창작마당…", en: "Plugin Marketplace…", de: "Plugin-Marktplatz…", ja: "プラグイン マーケット…" },
   "menu.ai.engine": { ko: "게임 엔진…", en: "Game Engine…", de: "Game-Engine…", ja: "ゲームエンジン…" },
   // 메뉴는 좁다 — 팔레트 쪽(imp.command)은 어느 도구인지까지 밝히지만 여기선 줄인다.
