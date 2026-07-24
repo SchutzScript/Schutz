@@ -137,13 +137,13 @@ interface SchutzApi {
   cliChatCounts(): Promise<{ counts: Record<string, number> }>;
   cliChatList(agent: string, headBytes: number): Promise<{ rows: { agent: string; file: string; head: string; bytes: number; updatedAt: number }[] }>;
   cliChatRead(agent: string, file: string, tailBytes: number): Promise<{ text?: string; bytes?: number; partial?: boolean; error?: string }>;
-  mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number }[]>;
+  mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number; remote?: boolean }[]>;
   mcpStart(name: string): Promise<{ ok: boolean; tools?: McpTool[]; reason?: string }>;
   mcpStop(name: string): Promise<{ ok: boolean }>;
   mcpTools(name: string): Promise<McpTool[]>;
   mcpAllTools(): Promise<(McpTool & { server: string })[]>;
   mcpCall(name: string, tool: string, args: any): Promise<{ ok: boolean; result?: any; error?: string }>;
-  mcpAdd(name: string, cfg: { command: string; args?: string[]; env?: Record<string, string>; cwd?: string }): Promise<{ ok: boolean; error?: string }>;
+  mcpAdd(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; url?: string; headers?: Record<string, string> }): Promise<{ ok: boolean; error?: string }>;
   mcpRemove(name: string): Promise<{ ok: boolean }>;
   mcpDiscover(root: string | null): Promise<{ name: string; source: string; command: string; args: string[]; env: Record<string, string>; url: string | null; added: boolean }[]>;
   cliHelp(cmd: string): Promise<{ ok: boolean; text?: string; error?: string }>;

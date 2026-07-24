@@ -7918,9 +7918,10 @@ ${(r.output || "").slice(0, 2000)}`;
   mcpStartServer(name: string) { void this.mcpAct(name, async () => { const r = await mcp.startServer(name); if (!r.ok) this.toast("error", t("sc5.mcpStartFail", { name, reason: r.reason || "" })); else this.toast("ok", t("sc5.mcpStarted", { name })); }); }
   mcpStopServer(name: string) { void this.mcpAct(name, () => mcp.stopServer(name)); }
   mcpRemoveServer(name: string) { void this.mcpAct(name, () => mcp.removeServer(name)); }
-  mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string> }) {
+  mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string>; url?: string | null }) {
     void this.mcpAct(d.name, async () => {
-      const r = await mcp.addServer(d.name, { command: d.command, args: d.args, env: d.env });
+      // 원격 커넥터(url)는 실행 파일이 아니라 주소로 등록한다.
+      const r = await mcp.addServer(d.name, d.url ? { url: d.url } : { command: d.command, args: d.args, env: d.env });
       if (!r.ok) { this.toast("error", t("sc5.mcpAddFail", { error: r.error || "" })); return; }
       const s = await mcp.startServer(d.name);
       this.toast(s.ok ? "ok" : "error", s.ok ? t("sc5.mcpImportedStarted", { name: d.name }) : t("sc5.mcpAddedStartFail", { name: d.name }));
