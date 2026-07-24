@@ -350,7 +350,16 @@ interface Command { id: string; label: string; hint?: string; run: () => void }
 interface ToastItem { id: string; kind: "info" | "error" | "ok"; text: string; leaving?: boolean }
 
 /** 채팅에 첨부하는 컨텍스트 참조 */
-interface AttachRef { kind: "file" | "selection"; rel: string; text?: string; label: string }
+/** 채팅에 붙이는 것.
+ *  file      = 워크스페이스 파일(경로만 들고, 보낼 때 읽는다)
+ *  selection = 에디터 선택 영역(텍스트를 그대로 들고 있다)
+ *  upload    = 사람이 고른 **실제 파일**(사진·문서). 워크스페이스 밖이어도 되고, 붙여넣기·
+ *              끌어다 놓기로도 들어온다. 이미지는 base64(data)로, 글자 파일은 text 로 담는다. */
+interface AttachRef {
+  kind: "file" | "selection" | "upload";
+  rel: string; text?: string; label: string;
+  mime?: string; data?: string; size?: number;
+}
 
 /** Git 변경 항목 */
 interface GitEntry { path: string; code: string }
@@ -1800,14 +1809,19 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     this.setState(s => ({ attach: s.attach.filter((_, idx) => idx !== i) }));
   }
   /** 첨부를 소비해 AI 컨텍스트 블록 + 표시용 요약을 만든다 */
-  private async consumeAttachments(): Promise<{ block: string; summary: string }> {
+  private async consumeAttachments(): Promise<{ block: string; summary: string; images: { mime: string; data: string }[] }> {
     const items = this.state.attach;
-    if (!items.length) return { block: "", summary: "" };
+    if (!items.length) return { block: "", summary: "", images: [] };
     const ws = this.state.workspace;
     const parts: string[] = [];
+    const images: { mime: string; data: string }[] = [];
     for (const a of items) {
       if (a.kind === "selection") {
         parts.push(`# 선택 영역 (${a.label})\n\`\`\`\n${(a.text ?? "").slice(0, 12_000)}\n\`\`\``);
+      } else if (a.kind === "upload") {
+        // 사진은 이미지 블록으로 따로 실어 보내고, 글자 파일은 본문에 붙인다.
+        if (a.data && a.mime) images.push({ mime: a.mime, data: a.data });
+        else if (a.text != null) parts.push(`# 첨부 파일 ${a.label}\n\`\`\`\n${a.text.slice(0, 20_000)}\n\`\`\``);
       } else if (ws && window.schutz) {
         try {
           const content = await window.schutz.readFile(ws.root, a.rel);
@@ -1815,10 +1829,57 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         } catch { /* 무시 */ }
       }
     }
-    const summary = items.map(a => (a.kind === "selection" ? "✂ " : "@") + a.label).join(", ");
+    const summary = items.map(a => (a.kind === "selection" ? "✂ " : a.kind === "upload" ? "🖼 " : "@") + a.label).join(", ");
     this.setState({ attach: [] });
-    return { block: parts.length ? "\n\n--- 첨부 컨텍스트 ---\n" + parts.join("\n\n") : "", summary };
+    return { block: parts.length ? "\n\n--- 첨부 컨텍스트 ---\n" + parts.join("\n\n") : "", summary, images };
   }
+
+  /** 사람이 고른/붙여넣은/끌어다 놓은 실제 파일을 첨부 목록에 넣는다.
+   *  Electron 렌더러에서도 File/FileReader 가 그대로 되므로 별도 IPC 를 두지 않는다 —
+   *  덕분에 워크스페이스 밖 사진도, 클립보드 스크린샷도 같은 길로 들어온다. */
+  private async addUploads(files: File[]) {
+    const MAX = 8 * 1024 * 1024;                 // 한 장 8MB — 그 이상은 모델도 잘 못 받는다
+    const next: AttachRef[] = [];
+    for (const f of files.slice(0, 6)) {
+      if (f.size > MAX) { this.toast("error", t2("chat.attachTooBig", { name: f.name })); continue; }
+      const isImage = f.type.startsWith("image/");
+      try {
+        if (isImage) {
+          const data = await new Promise<string>((res, rej) => {
+            const r = new FileReader();
+            r.onerror = () => rej(r.error);
+            // data:<mime>;base64,<...> 에서 뒤쪽만 쓴다(프로바이더가 원본 base64 를 원한다)
+            r.onload = () => res(String(r.result).split(",")[1] ?? "");
+            r.readAsDataURL(f);
+          });
+          next.push({ kind: "upload", rel: "", label: f.name, mime: f.type, data, size: f.size });
+        } else {
+          const text = await f.text();
+          next.push({ kind: "upload", rel: "", label: f.name, text, size: f.size });
+        }
+      } catch { this.toast("error", t2("chat.attachReadFail", { name: f.name })); }
+    }
+    if (next.length) this.setState(s => ({ attach: [...s.attach, ...next] }));
+  }
+
+  /** 컴포저에 붙여넣기 — 클립보드에 이미지가 있으면(스크린샷 등) 그대로 첨부한다. */
+  private onComposerPaste = (e: React.ClipboardEvent) => {
+    const files = [...(e.clipboardData?.items ?? [])]
+      .filter(it => it.kind === "file")
+      .map(it => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (!files.length) return;
+    e.preventDefault();                          // 파일이 있을 때만 기본 붙여넣기를 막는다
+    void this.addUploads(files);
+  };
+
+  /** 컴포저에 끌어다 놓기. */
+  private onComposerDrop = (e: React.DragEvent) => {
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    void this.addUploads(files);
+  };
 
   /** 슬롯에서 특정 탭 활성화 */
   selectTab(slot: number, rel: string) {
@@ -2180,10 +2241,10 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     // 데모 문자열은 웹 프리뷰 자동재생 전용.
     if (!rawIn && !hasAttach && window.schutz) return;
     const t = rawIn || (hasAttach ? "첨부한 컨텍스트를 참고해서 진행해줘." : "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘");
-    const { block, summary } = await this.consumeAttachments();
+    const { block, summary, images } = await this.consumeAttachments();
     const display = summary ? t + "\n📎 " + summary : t;
     // 1순위: 앱 내 연결된 계정(OAuth) 또는 API 키 — Schutz 통합 에이전트 루프
-    if (this.configuredAgents().length > 0) { void this.runReal(t + block, display); return; }
+    if (this.configuredAgents().length > 0) { void this.runReal(t + block, display, images); return; }
     // 2순위(폴백): 로컬에 설치된 구독 CLI
     if (window.schutz) {
       const ca = this.state.cliAgents;
@@ -3416,7 +3477,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   /** 실제 모델 턴 시작 — 관리자(Claude 우선, 없으면 연결된 첫 에이전트)가 진입점 */
-  async runReal(text: string, display: string = text) {
+  async runReal(text: string, display: string = text, images: { mime: string; data: string }[] = []) {
     if (this.state.running) return;
     const configured = this.configuredAgents();
     const pref = getManagerId();
@@ -3428,6 +3489,9 @@ ${(r.output || "").slice(0, 2000)}`;
       messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, agent: managerId, text: display }],
     }));
     const seed: NeutralMsg[] = this.history.map(m => ({ role: m.role as "user" | "assistant", text: m.content }));
+    // 이번에 붙인 사진은 방금 넣은 마지막 사용자 메시지에만 싣는다. history 는 글자만 들고
+    // 있으므로 다음 턴에는 따라가지 않는다 — 세션 파일이 붓지 않고 모델도 옛 사진을 다시 안 본다.
+    if (images.length && seed.length) seed[seed.length - 1] = { ...seed[seed.length - 1], images };
     await this.runAgentLoop(managerId, seed, { isManager: true });
   }
 
@@ -4971,6 +5035,8 @@ ${(r.output || "").slice(0, 2000)}`;
 
   // ── 입력창 ────────────────────────────────────────────────────────────────
   private _chatInput: HTMLTextAreaElement | null = null;
+  /** 숨은 파일 선택창 — 첨부 버튼이 이걸 대신 눌러 준다. */
+  private _uploadInput: HTMLInputElement | null = null;
   /** IME 조합 중 여부 — 한글/일본어에서 Enter 가 "확정"인지 "전송"인지 가른다 */
   private _composing = false;
   /** ↑/↓ 로 되돌려 보는 위치. -1 = 지금 쓰는 중(히스토리 밖) */
@@ -5657,9 +5723,18 @@ ${(r.output || "").slice(0, 2000)}`;
               <button className="hv05" title={t("chat.attachSelTitle")} onClick={() => this.attachSelection()}
                 style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachSelection")}</button>
             </>}
+            {/* 실제 파일·사진 붙이기 — 워크스페이스가 없어도 된다(밖의 사진도 되니까).
+                끌어다 놓기·붙여넣기로도 같은 자리로 들어온다. */}
+            <button className="hv05" title={t("chat.attachUploadTitle")} onClick={() => this._uploadInput?.click()}
+              style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub2)", background: "var(--w04)", border: "1px solid var(--w08)" }}>{t("chat.attachUpload")}</button>
+            <input ref={el => { this._uploadInput = el; }} type="file" multiple hidden
+              onChange={e => { const fs = [...(e.target.files ?? [])]; e.target.value = ""; void this.addUploads(fs); }} />
             {s.attach.map((a, i) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 4, height: 21, padding: "0 4px 0 8px", fontSize: 10.5, fontFamily: MONO, borderRadius: 6, color: "var(--accent-hi)", background: "var(--accent-soft)", border: "1px solid var(--w08)" }}>
-                {a.kind === "selection" ? "✂" : "@"} {a.label}
+                {a.kind === "upload" && a.data
+                  ? <img src={`data:${a.mime};base64,${a.data}`} alt="" style={{ width: 14, height: 14, objectFit: "cover", borderRadius: 3 }} />
+                  : <>{a.kind === "selection" ? "✂" : a.kind === "upload" ? "📄" : "@"}</>}
+                {a.label}
                 <button className="hvDim" onClick={() => this.removeAttach(i)} style={{ width: 15, height: 15, fontSize: 9, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
               </span>
             ))}
@@ -5720,6 +5795,9 @@ ${(r.output || "").slice(0, 2000)}`;
             })()}
             <textarea ref={el => { this._chatInput = el; }} value={s.input} rows={1}
               onChange={e => { const val = e.target.value; this.setState({ input: val, slashSel: 0 }); this.saveDraft(val); this.autoGrowInput(); if (/^\/model/.test(val)) this.ensureModelsFetched(); }}
+              onPaste={this.onComposerPaste}
+              onDrop={this.onComposerDrop}
+              onDragOver={e => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
               onCompositionStart={() => { this._composing = true; }}
               onCompositionEnd={() => { this._composing = false; }}
               onKeyDown={e => {

@@ -45,6 +45,15 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
           content: m.results.map(r => ({ type: "tool_result", tool_use_id: r.id, content: r.content })),
         };
       }
+      // 사진을 붙였으면 이미지 블록 + 텍스트로 보낸다. 이미지를 먼저 두는 편이 "이걸 보고
+      // 이렇게 해줘" 라는 읽는 순서와 맞는다.
+      if (m.images && m.images.length) {
+        const content: any[] = m.images.map(im => ({
+          type: "image", source: { type: "base64", media_type: im.mime, data: im.data },
+        }));
+        if (m.text) content.push({ type: "text", text: m.text });
+        return { role: "user", content };
+      }
       return { role: "user", content: m.text ?? "" };
     });
   }
