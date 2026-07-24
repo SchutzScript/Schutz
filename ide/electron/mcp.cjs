@@ -52,12 +52,61 @@ function makeLineParser(onMessage) {
   };
 }
 
+// ── 전송(transport) ─────────────────────────────────────────────────────────
+// stdio 는 프로세스를 띄워 표준입출력으로 줄 단위 JSON-RPC 를 주고받는다. 원격 커넥터는
+// 같은 JSON-RPC 를 HTTP POST 로 보낸다 — 한 번의 POST 가 곧 한 번의 요청/응답이라
+// pending 맵이 필요 없다. 응답은 JSON 이거나 SSE(text/event-stream) 로 오는데, 둘 다
+// 받아 우리 id 의 메시지를 꺼낸다.
+
+/** 본문이 JSON 이든 SSE 든 우리 id 의 RPC 메시지를 꺼낸다. */
+function pickRpc(text, id) {
+  const t = String(text || "").trim();
+  if (t.startsWith("{")) { try { return JSON.parse(t); } catch { return null; } }
+  for (const line of t.split(/\r?\n/)) {
+    const m = /^data:\s*(.+)$/.exec(line.trim());
+    if (!m) continue;
+    try { const j = JSON.parse(m[1]); if (j && (j.id === id || j.id == null)) return j; } catch { /* 다음 줄 */ }
+  }
+  return null;
+}
+function httpHeaders(s) {
+  const h = { "content-type": "application/json", accept: "application/json, text/event-stream", ...(s.headers || {}) };
+  if (s.sessionId) h["mcp-session-id"] = s.sessionId;   // 서버가 세션을 쥐면 따라간다
+  return h;
+}
+async function httpRequest(s, method, params, timeoutMs) {
+  const id = ++s.seq;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(s.url, {
+      method: "POST", headers: httpHeaders(s), signal: ctl.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    });
+    const sid = r.headers.get("mcp-session-id"); if (sid) s.sessionId = sid;
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const msg = pickRpc(await r.text(), id);
+    if (!msg) throw new Error(method + " 응답을 읽지 못했습니다");
+    if (msg.error) throw new Error(msg.error.message || "RPC 오류");
+    return msg.result;
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error(method + " 타임아웃");
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+async function httpNotify(s, method, params) {
+  try { await fetch(s.url, { method: "POST", headers: httpHeaders(s), body: JSON.stringify({ jsonrpc: "2.0", method, params }) }); }
+  catch { /* 알림은 실패해도 흐름을 막지 않는다 */ }
+}
+
 function sendRpc(s, method, params, isNotification) {
+  if (s.kind === "http") { if (isNotification) void httpNotify(s, method, params); return undefined; }
   const msg = isNotification ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id: ++s.seq, method, params };
   try { s.child.stdin.write(JSON.stringify(msg) + "\n"); } catch { /* 종료됨 */ }
   return msg.id;
 }
 function request(s, method, params, timeoutMs = 30000) {
+  if (s.kind === "http") return httpRequest(s, method, params, timeoutMs);
   return new Promise((resolve, reject) => {
     const id = sendRpc(s, method, params, false);
     const timer = setTimeout(() => { if (s.pending.has(id)) { s.pending.delete(id); reject(new Error(method + " 타임아웃")); } }, timeoutMs);
@@ -70,6 +119,7 @@ function killServer(name) {
   if (!s) return;
   servers.delete(name); // 먼저 맵에서 제거 → exit 핸들러의 정체성 검사가 재진입해도 no-op
   for (const [, p] of s.pending) { try { clearTimeout(p.timer); p.reject(new Error("서버 종료")); } catch { /* */ } }
+  if (!s.child) return;   // 원격 커넥터는 죽일 프로세스가 없다 — 맵에서 뺀 것으로 끝
   try {
     if (process.platform === "win32" && s.child.pid) {
       // shell:true 로 spawn 된 cmd.exe 래퍼의 자식(실제 서버)까지 트리 종료.
@@ -86,7 +136,31 @@ async function startServer(name) {
   if (servers.has(name)) { const s = servers.get(name); return { ok: true, tools: s.tools }; }
   let cfg;
   try { cfg = readCfg().mcpServers[name]; } catch { return { ok: false, reason: "설정 파일(mcp.json) 손상" }; }
-  if (!cfg || !cfg.command) return { ok: false, reason: "설정 없음" };
+  if (!cfg) return { ok: false, reason: "설정 없음" };
+
+  // 원격 커넥터(HTTP) — 띄울 프로세스가 없고, 주소로 바로 말을 건다.
+  if (cfg.url && (cfg.transport === "http" || cfg.type === "http" || !cfg.command)) {
+    let u;
+    try { u = new URL(cfg.url); } catch { return { ok: false, reason: "잘못된 URL" }; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "http(s) 주소만 지원합니다" };
+    const hs = { kind: "http", url: u.toString(), headers: cfg.headers || {}, tools: [], seq: 0, pending: new Map(), name };
+    servers.set(name, hs);
+    try {
+      await request(hs, "initialize", {
+        protocolVersion: "2024-11-05", capabilities: {},
+        clientInfo: { name: "Schutz", version: "0.0.6" },
+      }, 20000);
+      sendRpc(hs, "notifications/initialized", {}, true);
+      const listed = await request(hs, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
+      hs.tools = Array.isArray(listed && listed.tools) ? listed.tools : [];
+      return { ok: true, tools: hs.tools };
+    } catch (err) {
+      killServer(name);
+      return { ok: false, reason: String(err && err.message || err) };
+    }
+  }
+
+  if (!cfg.command) return { ok: false, reason: "설정 없음" };
   let child;
   try {
     child = spawn(cfg.command, Array.isArray(cfg.args) ? cfg.args : [], {
@@ -171,7 +245,12 @@ function init(ipcMain) {
     try { cfg = readCfg().mcpServers; } catch { return []; } // 손상 시 빈 목록(쓰기 없음 → 안전)
     return Object.entries(cfg).map(([name, c]) => {
       const s = servers.get(name);
-      return { name, command: c.command, args: c.args || [], running: !!s, tools: s ? s.tools.length : 0 };
+      // 원격 커넥터는 실행 파일이 없다 — 주소를 그 자리에 보여 준다.
+      const remote = !!c.url && (c.transport === "http" || c.type === "http" || !c.command);
+      return {
+        name, command: remote ? c.url : c.command, args: remote ? [] : (c.args || []),
+        running: !!s, tools: s ? s.tools.length : 0, remote,
+      };
     });
   });
   ipcMain.handle("schutz:mcpStart", (_e, name) => startServer(name));
@@ -193,13 +272,21 @@ function init(ipcMain) {
   ipcMain.handle("schutz:mcpAdd", (_e, name, cfg) => {
     // 첫 글자 영숫자 강제 → '.'·'..' 등 경로 탈출/특수 이름 차단
     if (!name || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return { ok: false, error: "잘못된 이름" };
-    if (!cfg || typeof cfg.command !== "string" || !cfg.command) return { ok: false, error: "command 필요" };
+    // 원격 커넥터는 command 대신 url 을 준다.
+    const wantsHttp = !!(cfg && cfg.url);
+    if (!cfg || (!wantsHttp && (typeof cfg.command !== "string" || !cfg.command))) return { ok: false, error: "command 또는 url 이 필요합니다" };
+    if (wantsHttp) {
+      let u; try { u = new URL(cfg.url); } catch { return { ok: false, error: "잘못된 URL" }; }
+      if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, error: "http(s) 주소만 지원합니다" };
+    }
     let c;
     try { c = readCfg(); } catch { return { ok: false, error: "설정 파일(mcp.json) 손상 — 덮어쓰기 중단. mcp.json.bak 참조" }; }
     // 동명 서버 조용한 덮어쓰기 방지(import/생성 slug 충돌 시 남의 config 유실). overwrite 명시해야 교체.
     if (c.mcpServers[name] && !cfg.overwrite) return { ok: false, exists: true, error: "이미 같은 이름의 서버가 있습니다" };
     if (c.mcpServers[name]) killServer(name); // 교체 시 실행 중 옛 인스턴스 종료 → 새 config/코드로 respawn(재생성 반영)
-    c.mcpServers[name] = { command: cfg.command, args: Array.isArray(cfg.args) ? cfg.args : [], env: cfg.env || {}, cwd: cfg.cwd || undefined, transport: "stdio" };
+    c.mcpServers[name] = wantsHttp
+      ? { type: "http", url: cfg.url, headers: cfg.headers || {}, transport: "http" }
+      : { command: cfg.command, args: Array.isArray(cfg.args) ? cfg.args : [], env: cfg.env || {}, cwd: cfg.cwd || undefined, transport: "stdio" };
     try { writeCfg(c); } catch (e) { return { ok: false, error: "설정 저장 실패: " + (e && e.message || e) }; }
     return { ok: true };
   });

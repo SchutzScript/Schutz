@@ -53,6 +53,13 @@ import { CLI_HEAD_BYTES, CLI_MSG_CAP, CLI_TAIL_BYTES, parseBody, parseHead, type
 
 /** 렌더 메서드 밖에서 모드를 묻는 자리 — render() 의 지역 변수 ag 를 쓸 수 없다. */
 const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
+
+/** 편집기가 있어야만 뜻이 있는 메뉴들. 에이전트 모드에는 편집기가 없어 눌러도 아무 일이
+ *  없었다 — 이제 그렇다고 말해 준다(모드 전환·터미널은 두 모드 모두에서 된다). */
+const EDITOR_ONLY_ACTIONS = new Set([
+  "view.split4", "view.split2", "view.splitReset",
+  "view.format", "view.wordWrap", "view.minimap", "view.problems",
+]);
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tour";
 import { TourFigure, type FigureRegion } from "./tourFigure";
@@ -216,6 +223,8 @@ interface S {
   impBusy: string | null;
   /** 에이전트 모드 오른쪽 산출물 패널 폭(px). 드래그로 바뀌고 저장된다. */
   agentSideW: number;
+  /** 에이전트 모드 좌측 대화 목록 폭 — 대화 목록 ↔ 채팅 사이 경계를 끌어 조절한다. */
+  agentAsideW: number;
   /** 열린 터미널 탭들 (멀티 터미널) */
   // 번호만 들고 있고 제목은 렌더에서 만든다. 예전엔 만들 때 t() 로 굳혀서, 언어를 바꿔도
   // 탭 이름만 옛말로 남았다 — 이 배열은 어디에도 저장되지 않으니 모양을 바꿔도 안전하다.
@@ -247,6 +256,14 @@ interface S {
   mcpBusy: string;               // 진행 중 작업 라벨 (서버명 등)
   /** 게임 엔진 접속 상태 — serverName → Studio 에 실제로 닿는지. 패널 열 때·연결 후에만 조회. */
   engineStatus: Record<string, { reachable: boolean; detail: string }>;
+  /** Claude Code 스킬 — 이름·설명만. 본문은 모델이 고를 때 읽는다. */
+  skills: SkillInfo[];
+  /** 플러그인 창작마당 */
+  pluginOpen: boolean;
+  plugins: PluginInfo[];
+  pluginQuery: string;
+  pluginCat: string;
+  pluginBusy: string;
   /** 엔진 뷰(전용 화면) 열림 */
   engineOpen: boolean;
   /** 엔진 뷰 — 뷰포트 스냅샷(data URL) · 씬 트리 텍스트 · 진행 중 동작 · 오류 */
@@ -467,11 +484,13 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agentsOpen: true, reviewOpen: true,
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
-    agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
+    agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, skills: [],
+    pluginOpen: false, plugins: [], pluginQuery: "", pluginCat: "", pluginBusy: "",
     engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
@@ -665,6 +684,29 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   /** 좌·우 패널 드래그 리사이즈 */
+  /** 대화 목록 ↔ 채팅 폭. 오른쪽으로 끌면 목록이 넓어진다.
+   *  산출물 패널과 같은 방식이되, 이쪽은 목록이라 더 좁게까지 줄일 수 있다. */
+  private startAgentAsideResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = this.state.agentAsideW;
+    const onMove = (ev: MouseEvent) => {
+      // 채팅 쪽에도 최소 폭을 남긴다 — 목록을 끝까지 끌어 채팅을 0 으로 만들 수 있으면 안 된다.
+      const maxW = Math.max(150, Math.min(480, window.innerWidth - 420));
+      this.setState({ agentAsideW: Math.max(150, Math.min(maxW, startW + (ev.clientX - startX))) });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      try { localStorage.setItem("schutz.agentAsideW", String(this.state.agentAsideW)); } catch { /* ignore */ }
+      requestAnimationFrame(() => { for (const p of paneRegistry.panes.values()) { try { p.editor.layout(); } catch { /* */ } } });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+  }
+
   /** 대화 ↔ 산출물 패널 폭. 오른쪽으로 끌면 패널이 좁아진다(대화가 넓어진다). */
   private startAgentSideResize(e: React.MouseEvent) {
     e.preventDefault();
@@ -2279,6 +2321,47 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }));
   }
 
+  // ── 스킬 (Claude Code 생태계) ───────────────────────────────────────────────
+  // SKILL.md 는 Claude API 기능이 아니라 **프롬프트 묶음**이다. 그래서 어느 모델이든 똑같이
+  // 쓸 수 있고, Claude 든 GPT 든 같은 도구 하나로 노출한다.
+  //
+  // 본문을 시스템 프롬프트에 다 넣지 않는다 — 스킬이 수십 개면 매 턴 수만 토큰이 샌다.
+  // 목록에는 이름·설명만 주고, 모델이 고른 것만 skill 도구로 읽어 가게 한다.
+
+  /** 스킬 목록을 다시 읽는다(부팅·워크스페이스 변경·플러그인 토글 후). */
+  async refreshSkills() {
+    if (!window.schutz?.skillsList) return;
+    try {
+      const r = await window.schutz.skillsList(this.state.workspace?.root ?? null);
+      if (r.ok) this.setState({ skills: r.skills });
+    } catch { /* 스킬이 없어도 앱은 그대로 돈다 */ }
+  }
+
+  /** 스킬이 하나라도 있으면 도구 하나를 준다. 이름은 목록에서 고르게 한다. */
+  private skillToolDefs(): ToolDef[] {
+    const list = this.state.skills;
+    if (!list.length) return [];
+    return [{
+      name: "skill",
+      description:
+        "사용할 수 있는 스킬(작업 지침 묶음)의 내용을 읽어 온다. 아래 목록에 있는 스킬이 지금 하려는 일과 맞으면, " +
+        "먼저 이 도구로 그 지침을 읽고 그대로 따른다. 이름은 목록에 적힌 것을 그대로 쓴다.",
+      input_schema: {
+        type: "object",
+        properties: { name: { type: "string", description: "읽을 스킬 이름", enum: list.map(s => s.id) } },
+        required: ["name"],
+      },
+    }];
+  }
+
+  /** 어떤 스킬이 있는지 시스템 프롬프트에 한 줄씩 알린다(이름 + 설명만). */
+  private skillSystemExtra(): string {
+    const list = this.state.skills;
+    if (!list.length) return "";
+    const lines = list.slice(0, 60).map(s => `- ${s.id}: ${s.description.slice(0, 200)}`);
+    return "\n\n사용할 수 있는 스킬(필요하면 skill 도구로 내용을 읽고 따르세요):\n" + lines.join("\n");
+  }
+
   /** 검증된 asset id — 카탈로그 도구가 실제로 돌려준 것만 담는다. 미지의 id 로 asset_import 를
    *  부르면 Studio 가 영구 행업하므로, 여기 없는 id 는 auto 모드에서도 승인을 강제한다. */
   private _validatedAssetIds = new Set<string>();
@@ -2314,6 +2397,28 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   /** runId 는 파일 락 소유자로 기록된다 — 낡은 실행이 새 실행의 락을 풀지 않게. */
   private async execTool(agentId: string, call: ToolCall, runId: string): Promise<string> {
+    // 스킬 읽기 — 워크스페이스와 무관. 지침을 돌려줄 뿐이라 승인 게이트가 없다.
+    if (call.name === "skill") {
+      const want = String(call.input?.name ?? "").trim();
+      const sk = this.state.skills.find(s => s.id === want) ?? this.state.skills.find(s => s.name === want);
+      const sid = "rt" + (this._uid++);
+      this.addTool(sid, agentId, t("skill.verb"), want);
+      if (!sk || !window.schutz?.skillRead) {
+        this.setTool(sid, { st: "done", note: t("sc2.noteError") });
+        return `오류: '${want}' 스킬을 찾을 수 없습니다. 목록에 있는 이름을 그대로 쓰세요.`;
+      }
+      try {
+        const r = await window.schutz.skillRead(sk.file);
+        if (!r.ok || !r.body) { this.setTool(sid, { st: "done", note: t("sc2.noteError") }); return "스킬을 읽지 못했습니다: " + (r.error || ""); }
+        this.setTool(sid, { st: "done", note: sk.name });
+        // 스킬이 도구를 제한해 두었으면 그대로 알려 준다(강제는 Schutz 의 승인·자율성 계층이 한다).
+        const limit = sk.allowedTools.length ? `\n\n(이 스킬이 권하는 도구: ${sk.allowedTools.join(", ")})` : "";
+        return `# 스킬: ${sk.name}\n\n${r.body}${limit}`;
+      } catch (e) {
+        this.setTool(sid, { st: "done", note: t("sc2.noteError") });
+        return "스킬 오류: " + (e instanceof Error ? e.message : String(e));
+      }
+    }
     // MCP 도구 — 워크스페이스와 무관하게 실행
     if (mcp.isMcpToolName(call.name)) {
       const r = mcp.resolveMcpTool(call.name);
@@ -2546,7 +2651,8 @@ ${(r.output || "").slice(0, 2000)}`;
     const wsTools = useWs
       ? [...(opts.isManager && others.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)]
       : [];
-    const tools = (useWs || hasMcp) ? [...wsTools, ...this.mcpToolDefs()] : undefined;
+    const skillDefs = this.skillToolDefs();
+    const tools = (useWs || hasMcp || skillDefs.length) ? [...wsTools, ...this.mcpToolDefs(), ...skillDefs] : undefined;
     const system =
       schutzSystemPrompt() +
       // 위임 안내는 delegate_task 를 실제로 줄 때만 붙인다 — 도구 조건(others.length)과
@@ -2555,7 +2661,7 @@ ${(r.output || "").slice(0, 2000)}`;
       // 정작 그 도구는 안 줬다. 앱이 환각을 만들어 놓고 아래 가드로 모델을 나무라던 셈.
       (opts.isManager && others.length ? MANAGER_SYSTEM_EXTRA + "\n연결된 에이전트: " + others.join(", ") : "") +
       (useWs ? "\n현재 워크스페이스: " + this.state.workspace!.name : "") +
-      this.engineSystemExtra();
+      this.engineSystemExtra() + this.skillSystemExtra();
 
     const transcript: NeutralMsg[] = [...seed];
     let finalText = "";
@@ -3576,6 +3682,9 @@ ${(r.output || "").slice(0, 2000)}`;
       // MCP 서버 시작 (Schutz 호스트) → 도구를 에이전트 루프에 노출
       mcp.setMcpChangeHandler(() => this.forceUpdate());
       void mcp.startAll();
+      // Claude Code 스킬 — 있으면 모델에게 노출한다(없으면 아무 일도 없다)
+      void this.refreshSkills();
+      this.startEngineWatch();
       // 모델 목록 미리 조회 → /model 팔레트가 즉시 실시간 목록을 보여줌
       setTimeout(() => this.ensureModelsFetched(), 1500);
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
@@ -3617,6 +3726,7 @@ ${(r.output || "").slice(0, 2000)}`;
     }
   }
   componentWillUnmount() {
+    if (this._engineWatch) { clearTimeout(this._engineWatch); this._engineWatch = 0; }
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
     if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
@@ -4268,6 +4378,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderCommands()}
         {this.renderMcp()}
         {this.renderEngine()}
+        {this.renderPlugins()}
         {this.renderTour()}
         {/* 첫 실행 오프닝 — App 위 오버레이. 뒤에 진짜 UI 가 이미 떠 있어서
             세팅이 끝나면 오버레이만 걷고 그 UI 를 데모가 직접 움직인다. */}
@@ -4417,6 +4528,13 @@ ${(r.output || "").slice(0, 2000)}`;
                         : (
                           <div key={"i" + i} className="hvMenuItem"
                             onClick={() => {
+                              // 에이전트 모드엔 편집기가 없다. 눌렀는데 아무 일도 안 일어나면
+                              // 고장으로 읽히므로, 왜 안 되는지 말하고 넘어가는 길을 준다.
+                              if (ag2(s) && EDITOR_ONLY_ACTIONS.has(it[0])) {
+                                this.setState({ openMenu: null });
+                                this.toast("info", t("menu.editorOnly", { item: t("menu." + it[0]) }));
+                                return;
+                              }
                               switch (it[0]) {
                                 case "file.openProject": void this.openProject(); return;
                                 case "file.settings": this.openO({ openMenu: null, settingsOpen: true }); return;
@@ -4428,6 +4546,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
                                 case "ai.engine": this.setState({ openMenu: null }); this.openEngine(); return;
+                                case "ai.plugins": this.setState({ openMenu: null }); this.openPlugins(); return;
                                 case "ai.import": this.setState({ openMenu: null }); this.openImport(); return;
                                 case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
@@ -4464,7 +4583,7 @@ ${(r.output || "").slice(0, 2000)}`;
                               }
                             }}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-                            <span style={{ color: "var(--fg-code)" }}>{t("menu." + it[0])}</span>
+                            <span style={{ color: ag2(s) && EDITOR_ONLY_ACTIONS.has(it[0]) ? "var(--fg-dim)" : "var(--fg-code)" }}>{t("menu." + it[0])}</span>
                             <div style={{ flex: 1 }} />
                             <span style={{ color: "var(--fg-dim)", fontSize: 10.5, fontFamily: MONO }}>{accel(it[1])}</span>
                           </div>
@@ -5549,9 +5668,13 @@ ${(r.output || "").slice(0, 2000)}`;
 
     return (
       <div data-tour="aside" className="vtAside" style={{
-        flex: "none", width: 216, display: ag2(s) ? "flex" : "none", flexDirection: "column",
+        flex: "none", width: s.agentAsideW, display: ag2(s) ? "flex" : "none", flexDirection: "column",
         borderRight: "1px solid var(--w06)", background: "var(--bg-panel)", padding: "10px 8px 8px",
+        position: "relative",
       }}>
+        {/* 목록 ↔ 채팅 경계. 테두리 위에 겹쳐 두어 폭을 차지하지 않는다. */}
+        <div onMouseDown={e => this.startAgentAsideResize(e)} title={t("aside.resize")}
+          style={{ position: "absolute", top: 0, right: 0, width: 6, height: "100%", cursor: "col-resize", zIndex: 5 }} />
         <button className="hv06" onClick={() => this.startNewConversation()}
           style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 34, padding: "0 11px",
             fontFamily: SUIT, fontSize: 12.5, fontWeight: 600, cursor: "pointer", borderRadius: 9,
@@ -6878,7 +7001,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
   private static OVERLAY_KEY: Record<string, string> = {
     aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
-    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
+    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", pluginOpen: "plugins", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
     extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
   };
   /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
@@ -7491,6 +7614,41 @@ ${(r.output || "").slice(0, 2000)}`;
     this.setState({ mcpServers: servers, mcpDiscovered: discovered });
   }
 
+  /** 엔진 도달성 감시 타이머. 사용자가 Studio 를 켜면 알아서 알아채라고 둔다. */
+  private _engineWatch = 0;
+
+  /** Studio 를 켜면 "연결됐다" 고 알려 준다.
+   *
+   *  예전엔 MCP 패널을 열거나 [상태 확인] 을 눌러야 알 수 있었다. 그런데 순서는 대개 반대다 —
+   *  Schutz 를 띄워 두고 나서 Studio 를 켠다. 그래서 배경에서 지켜보다가 **닿지 않던 것이
+   *  닿는 순간**에만 한 번 알린다.
+   *
+   *  status 호출은 Studio 를 두드리므로 자주 하면 안 된다. 아직 못 닿을 때만 20초마다 보고,
+   *  닿은 뒤에는 60초로 늦춘다(끊긴 것도 알아야 하지만 급하지 않다). */
+  private startEngineWatch() {
+    if (this._engineWatch) return;
+    const tick = async () => {
+      const running = new Set(mcp.getMcpTools().map(t => t.server));
+      const active = engines.ADAPTERS.filter(a => running.has(a.serverName) && a.statusTool);
+      let anyReachable = false;
+      for (const a of active) {
+        const was = this.state.engineStatus[a.serverName]?.reachable;
+        try {
+          const out = await mcp.callTool(a.serverName, a.statusTool!, {});
+          const now = !/cannot reach|unreachable|not reachable|timed out|timeout|refused|econnrefused|⚠️/i.test(out);
+          if (now) anyReachable = true;
+          if (now !== was) {
+            this.setState(st => ({ engineStatus: { ...st.engineStatus, [a.serverName]: { reachable: now, detail: "" } } }));
+            // 알림은 "이제 닿는다" 일 때만. 꺼진 것까지 매번 띄우면 잔소리가 된다.
+            if (now) this.toast("ok", t("eng.autoConnected", { engine: a.label }));
+          }
+        } catch { /* 못 물어봤으면 다음 차례에 다시 */ }
+      }
+      this._engineWatch = window.setTimeout(tick, active.length === 0 ? 60_000 : anyReachable ? 60_000 : 20_000);
+    };
+    this._engineWatch = window.setTimeout(tick, 4_000);   // 부팅 직후 붐빌 때는 비켜 준다
+  }
+
   /** 게임 엔진 접속 상태 조회 — 돌고 있는 엔진 서버마다 status 도구를 불러 Studio 도달성을 본다.
    *  status 호출은 Studio 를 두드려 응답이 몇 초 걸릴 수 있으므로 패널 열 때·연결 후에만 부른다. */
   async refreshEngineStatus() {
@@ -7507,6 +7665,136 @@ ${(r.output || "").slice(0, 2000)}`;
         set(reachable, out.split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 120) ?? "");
       } catch (e) { set(false, e instanceof Error ? e.message : String(e)); }
     }));
+  }
+
+  // ── 플러그인 창작마당 ────────────────────────────────────────────────────────
+  // Claude Code 플러그인 하나가 스킬·명령·MCP 서버를 함께 들고 온다. 그래서 "MCP 를 손으로
+  // 등록하는 것"(비공식)과 달리, 여기서 켜는 것은 공식 카탈로그에서 고른 묶음이다.
+  // 화면은 VS Code 확장 패널과 같은 어법으로 — 검색 · 분류 · 카드 · 켬/끔.
+
+  async refreshPlugins() {
+    if (!window.schutz?.pluginList) return;
+    try {
+      const r = await window.schutz.pluginList();
+      if (r.ok) this.setState({ plugins: r.plugins });
+    } catch { /* 마켓플레이스가 없어도 앱은 그대로 돈다 */ }
+  }
+
+  openPlugins() {
+    this.cancelClose("plugins");
+    this.setState({ pluginOpen: true, pluginQuery: "", pluginCat: "" });
+    void this.refreshPlugins();
+  }
+
+  /** 카탈로그에서 직접 받는다. 받자마자 켜 준다 — 창작마당에서 "설치" 는 곧 "쓰겠다" 다. */
+  private async installPlugin(name: string) {
+    if (!window.schutz?.pluginInstall || this.state.pluginBusy) return;
+    this.setState({ pluginBusy: name });
+    try {
+      const r = await window.schutz.pluginInstall(name);
+      if (!r.ok) { this.toast("error", r.error || t("plug.installFail")); return; }
+      await window.schutz.pluginSetEnabled?.(name, true);
+      await this.refreshPlugins();
+      await this.refreshSkills();
+      this.toast("ok", t("plug.installed", { name }));
+    } catch (e) { this.toast("error", e instanceof Error ? e.message : String(e)); }
+    finally { this.setState({ pluginBusy: "" }); }
+  }
+
+  /** 켜면 그 플러그인의 스킬이 곧바로 모델 목록에 들어온다. */
+  private async togglePlugin(name: string, on: boolean) {
+    if (!window.schutz?.pluginSetEnabled) return;
+    this.setState({ pluginBusy: name });
+    try {
+      const r = await window.schutz.pluginSetEnabled(name, on);
+      if (!r.ok) { this.toast("error", r.error || ""); return; }
+      await this.refreshPlugins();
+      await this.refreshSkills();          // 스킬 목록이 바로 바뀐다
+      this.toast("ok", t(on ? "plug.enabled" : "plug.disabled", { name }));
+    } catch (e) { this.toast("error", e instanceof Error ? e.message : String(e)); }
+    finally { this.setState({ pluginBusy: "" }); }
+  }
+
+  /** 창작마당 — 검색·분류·카드. 설치돼 있는 것만 켤 수 있다. */
+  renderPlugins() {
+    if (!this.state.pluginOpen && !this.isClosing("plugins")) return null;
+    const s = this.state;
+    const close = () => this.closeOverlay("plugins", { pluginOpen: false });
+    const q = s.pluginQuery.trim().toLowerCase();
+    const cats = [...new Set(s.plugins.map(p => p.category).filter((c): c is string => !!c))].sort();
+    const list = s.plugins
+      .filter(p => !s.pluginCat || p.category === s.pluginCat)
+      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q) || (p.author || "").toLowerCase().includes(q))
+      // 설치된 것 먼저 — 지금 쓸 수 있는 게 위로 온다
+      .sort((a, b) => (Number(b.installed) - Number(a.installed)) || a.name.localeCompare(b.name));
+    const shown = list.slice(0, 80);
+    const chip = (label: string, on: boolean, onClick: () => void) => (
+      <button key={label} className="hv08" onClick={onClick}
+        style={{ padding: "3px 10px", fontSize: 10.5, fontFamily: SUIT, cursor: "pointer", borderRadius: 12,
+          border: `1px solid ${on ? "transparent" : "var(--w10)"}`, background: on ? "var(--accent)" : "transparent",
+          color: on ? "var(--on-accent)" : "var(--fg-sub2)", whiteSpace: "nowrap" }}>{label}</button>
+    );
+    const badge = (text: string) => (
+      <span style={{ fontSize: 9.5, color: "var(--fg-dim)", border: "1px solid var(--w10)", borderRadius: 4, padding: "0 5px", lineHeight: "14px" }}>{text}</span>
+    );
+
+    const body = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.5 }}>{t("plug.intro")}</div>
+        <input value={s.pluginQuery} onChange={e => this.setState({ pluginQuery: e.target.value })}
+          placeholder={t("plug.searchPlaceholder")}
+          style={{ width: "100%", height: 32, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8,
+            padding: "0 11px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none" }} />
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          {chip(t("plug.catAll"), !s.pluginCat, () => this.setState({ pluginCat: "" }))}
+          {cats.map(c => chip(c, s.pluginCat === c, () => this.setState({ pluginCat: s.pluginCat === c ? "" : c })))}
+        </div>
+        <div style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>
+          {t("plug.count", { shown: shown.length, total: list.length, installed: s.plugins.filter(p => p.installed).length })}
+        </div>
+        <div style={{ display: "grid", gap: 7, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
+          {shown.map(p => (
+            <div key={p.marketplace + "/" + p.name} className="sz-in" style={{ display: "flex", alignItems: "flex-start", gap: 10,
+              padding: "9px 11px", borderRadius: 9, background: "var(--bg-card)", border: "1px solid var(--w06)" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.name}</span>
+                  {p.author && <span style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>{p.author}</span>}
+                  {p.category && badge(p.category)}
+                  {p.installed && p.skills > 0 && badge(t("plug.nSkills", { n: p.skills }))}
+                  {p.installed && p.commands > 0 && badge(t("plug.nCommands", { n: p.commands }))}
+                  {p.installed && p.mcp && badge("MCP")}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--fg-dim)", marginTop: 3, lineHeight: 1.5,
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.description}</div>
+              </div>
+              <div style={{ flex: "none" }}>
+                {p.installed ? (
+                  <button className="hv08" disabled={s.pluginBusy === p.name} onClick={() => void this.togglePlugin(p.name, !p.enabled)}
+                    style={{ padding: "4px 12px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 7,
+                      border: `1px solid ${p.enabled ? "transparent" : "var(--w10)"}`,
+                      background: p.enabled ? "var(--accent)" : "transparent",
+                      color: p.enabled ? "var(--on-accent)" : "var(--accent-hi)" }}>
+                    {s.pluginBusy === p.name ? "…" : t(p.enabled ? "plug.on" : "plug.off")}
+                  </button>
+                ) : p.canInstall ? (
+                  <button className="hv08" disabled={!!s.pluginBusy} onClick={() => void this.installPlugin(p.name)}
+                    style={{ padding: "4px 12px", fontSize: 11, fontFamily: SUIT, cursor: s.pluginBusy ? "default" : "pointer",
+                      borderRadius: 7, border: "none", background: "var(--accent)", color: "var(--on-accent)", opacity: s.pluginBusy ? 0.6 : 1 }}>
+                    {s.pluginBusy === p.name ? t("plug.installing") : t("plug.install")}
+                  </button>
+                ) : (
+                  // 받을 곳이 적혀 있지 않은 것(마켓플레이스 저장소 안에 있는 것)은 그대로 알린다.
+                  <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("plug.notFetched")}</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {shown.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "8px 2px" }}>{t("plug.none")}</div>}
+        </div>
+      </div>
+    );
+    return this.modalShell("plugins", t("plug.title"), close, body, 720);
   }
 
   // ── 엔진 뷰 (Stage 3) ───────────────────────────────────────────────────────
@@ -7665,9 +7953,10 @@ ${(r.output || "").slice(0, 2000)}`;
   mcpStartServer(name: string) { void this.mcpAct(name, async () => { const r = await mcp.startServer(name); if (!r.ok) this.toast("error", t("sc5.mcpStartFail", { name, reason: r.reason || "" })); else this.toast("ok", t("sc5.mcpStarted", { name })); }); }
   mcpStopServer(name: string) { void this.mcpAct(name, () => mcp.stopServer(name)); }
   mcpRemoveServer(name: string) { void this.mcpAct(name, () => mcp.removeServer(name)); }
-  mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string> }) {
+  mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string>; url?: string | null }) {
     void this.mcpAct(d.name, async () => {
-      const r = await mcp.addServer(d.name, { command: d.command, args: d.args, env: d.env });
+      // 원격 커넥터(url)는 실행 파일이 아니라 주소로 등록한다.
+      const r = await mcp.addServer(d.name, d.url ? { url: d.url } : { command: d.command, args: d.args, env: d.env });
       if (!r.ok) { this.toast("error", t("sc5.mcpAddFail", { error: r.error || "" })); return; }
       const s = await mcp.startServer(d.name);
       this.toast(s.ok ? "ok" : "error", s.ok ? t("sc5.mcpImportedStarted", { name: d.name }) : t("sc5.mcpAddedStartFail", { name: d.name }));

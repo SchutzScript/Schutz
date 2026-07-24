@@ -32,13 +32,14 @@ import { dict as d_sc3 } from "./dict/sc3";
 import { dict as d_sc4 } from "./dict/sc4";
 import { dict as d_sc5 } from "./dict/sc5";
 import { dict as d_eng } from "./dict/eng";
+import { dict as d_plug } from "./dict/plug";
 
 export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_ob, ...d_reg,
   ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
-  ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng,
+  ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng, ...d_plug,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
   "common.prev": { ko: "이전", en: "Back", de: "Zurück", ja: "戻る" },
@@ -154,6 +155,8 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.ai.models": { ko: "모델 관리…", en: "Manage Models…", de: "Modelle verwalten…", ja: "モデル管理…" },
   "menu.ai.usage": { ko: "사용량 대시보드", en: "Usage Dashboard", de: "Nutzungs-Dashboard", ja: "使用量ダッシュボード" },
   "menu.ai.mcp": { ko: "MCP 서버…", en: "MCP Servers…", de: "MCP-Server…", ja: "MCPサーバー…" },
+  "menu.editorOnly": { ko: "{item}은(는) 에디터 모드에서만 됩니다. 오른쪽 위에서 에디터로 바꿔 보세요.", en: "{item} only works in editor mode. Switch at the top right.", de: "{item} funktioniert nur im Editor-Modus. Oben rechts umschalten.", ja: "{item} はエディタモードでのみ使えます。右上で切り替えてください。" },
+  "menu.ai.plugins": { ko: "플러그인 창작마당…", en: "Plugin Marketplace…", de: "Plugin-Marktplatz…", ja: "プラグイン マーケット…" },
   "menu.ai.engine": { ko: "게임 엔진…", en: "Game Engine…", de: "Game-Engine…", ja: "ゲームエンジン…" },
   // 메뉴는 좁다 — 팔레트 쪽(imp.command)은 어느 도구인지까지 밝히지만 여기선 줄인다.
   "menu.ai.import": { ko: "지난 대화 가져오기…", en: "Import Past Chats…", de: "Frühere Unterhaltungen holen…", ja: "過去の会話を取り込む…" },
