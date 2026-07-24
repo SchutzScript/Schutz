@@ -7,6 +7,37 @@ interface QuotaInfo {
   at: number;
 }
 
+/** Claude Code 스킬 — SKILL.md 의 머리말. 본문은 필요할 때 skillRead 로 읽는다.
+ *  프롬프트 묶음이라 모델을 가리지 않는다(Claude·GPT 동일). */
+interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  userInvocable: boolean;
+  allowedTools: string[];
+  source: "user" | "project" | "plugin";
+  owner: string | null;
+  file: string;
+}
+
+/** 플러그인 — 창작마당 카탈로그 항목(설치 여부·무엇을 들고 오는지 포함) */
+interface PluginInfo {
+  name: string;
+  description: string;
+  author?: string;
+  category?: string;
+  homepage?: string;
+  marketplace?: string;
+  marketplaceOwner?: string;
+  version?: string;
+  dir?: string;
+  installed: boolean;
+  enabled: boolean;
+  skills: number;
+  commands: number;
+  mcp: boolean;
+}
+
 /** MCP 서버가 노출하는 도구 (tools/list 결과) */
 interface McpTool {
   name: string;
@@ -118,6 +149,13 @@ interface SchutzApi {
   cliHelp(cmd: string): Promise<{ ok: boolean; text?: string; error?: string }>;
   mcpFetchSpec(url: string): Promise<{ ok: boolean; text?: string; status?: number; error?: string }>;
   mcpWriteServer(name: string, code: string): Promise<{ ok: boolean; path?: string; error?: string }>;
+  /** Claude Code 스킬(SKILL.md) 목록 — 사용자·프로젝트·켜둔 플러그인. 본문은 뺀다. */
+  skillsList(root: string | null): Promise<{ ok: boolean; error?: string; skills: SkillInfo[] }>;
+  /** 스킬 본문 — 모델이 고른 것만 이때 읽는다(프롬프트 비대화 방지). */
+  skillRead(file: string): Promise<{ ok: boolean; error?: string; name?: string; body?: string }>;
+  /** 플러그인 창작마당 — 카탈로그 + 설치·활성 상태 */
+  pluginList(): Promise<{ ok: boolean; error?: string; plugins: PluginInfo[] }>;
+  pluginSetEnabled(name: string, on: boolean): Promise<{ ok: boolean; error?: string }>;
   /** 게임 엔진 MCP 를 GitHub 에서 clone → build 하여 설치한다. entryPath 를 mcpAdd 로 등록한다. */
   engineInstall(spec: { id: string; repo: string; build: string[]; entry: string }): Promise<{ ok: boolean; entryPath?: string; cached?: boolean; error?: string }>;
   /** 이미 설치돼 있으면 진입 파일 절대경로, 아니면 null. */

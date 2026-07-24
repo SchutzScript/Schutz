@@ -88,6 +88,12 @@ contextBridge.exposeInMainWorld("schutz", {
   cliHelp: (cmd) => ipcRenderer.invoke("schutz:cliHelp", cmd),
   mcpFetchSpec: (url) => ipcRenderer.invoke("schutz:mcpFetchSpec", url),
   mcpWriteServer: (name, code) => ipcRenderer.invoke("schutz:mcpWriteServer", name, code),
+  /** Claude Code 스킬 — 목록은 이름·설명만, 본문은 고른 것만 읽는다 */
+  skillsList: (root) => ipcRenderer.invoke("schutz:skillsList", root),
+  skillRead: (file) => ipcRenderer.invoke("schutz:skillRead", file),
+  /** 플러그인 창작마당 — 카탈로그 + 설치·활성 상태 */
+  pluginList: () => ipcRenderer.invoke("schutz:pluginList"),
+  pluginSetEnabled: (name, on) => ipcRenderer.invoke("schutz:pluginSetEnabled", name, on),
   /** 게임 엔진 MCP 를 GitHub 에서 설치(clone→build) — 처음 쓰는 사용자용 */
   engineInstall: (spec) => ipcRenderer.invoke("schutz:engineInstall", spec),
   engineInstalledPath: (spec) => ipcRenderer.invoke("schutz:engineInstalledPath", spec),

@@ -18,6 +18,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   // 도구 행 배지
   "eng.notePlaying": { ko: "재생 중 차단", en: "Blocked (playing)", de: "Blockiert (läuft)", ja: "再生中のためブロック" },
 
+  // 스킬(Claude Code 생태계) — 도구 행에 뜨는 동사
+  "skill.verb": { ko: "스킬", en: "Skill", de: "Skill", ja: "スキル" },
+
   // 엔진 뷰(전용 화면)
   "eng.viewTitle": { ko: "게임 엔진", en: "Game engine", de: "Game-Engine", ja: "ゲームエンジン" },
   "eng.viewNone": {
