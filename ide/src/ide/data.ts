@@ -212,7 +212,7 @@ export const MENUS: [string, ([string, string] | null)[]][] = [
   ["view", [["view.mode", "⇧⌘M"], null, ["view.splitReset", "⌥⌘1"], ["view.split2", "⌥⌘2"], ["view.split4", "⌥⌘4"], null, ["view.format", "⇧⌥F"], ["view.wordWrap", ""], ["view.minimap", ""], null, ["view.problems", ""], ["view.terminal", "⌘`"]]],
   ["nav", [["nav.quickOpen", "⌘P"], ["nav.commandPalette", "⇧⌘P"], ["nav.symbol", "⇧⌘O"]]],
   // 앞 셋은 AI 를 **설정**하는 것이고 가져오기는 **데이터를 들여오는** 것이라 줄로 가른다.
-  ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""], null, ["ai.import", ""]]],
+  ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""], ["ai.engine", ""], null, ["ai.import", ""]]],
   ["help", [["help.replayOpening", ""], ["help.replayTutorial", ""], ["help.keys", ""], ["help.about", ""]]],
 ];
 

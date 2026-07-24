@@ -17,4 +17,26 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
 
   // 도구 행 배지
   "eng.notePlaying": { ko: "재생 중 차단", en: "Blocked (playing)", de: "Blockiert (läuft)", ja: "再生中のためブロック" },
+
+  // 엔진 뷰(전용 화면)
+  "eng.viewTitle": { ko: "게임 엔진", en: "Game engine", de: "Game-Engine", ja: "ゲームエンジン" },
+  "eng.viewNone": {
+    ko: "연결된 게임 엔진이 없습니다. MCP 패널에서 엔진을 연결하면 여기서 화면과 씬을 볼 수 있어요.",
+    en: "No game engine is connected. Connect one from the MCP panel and its viewport and scene will show up here.",
+    de: "Keine Game-Engine verbunden. Verbinde eine im MCP-Panel, dann erscheinen Viewport und Szene hier.",
+    ja: "接続中のゲームエンジンがありません。MCP パネルから接続すると、ここにビューポートとシーンが表示されます。",
+  },
+  "eng.viewConnect": { ko: "MCP 패널 열기", en: "Open MCP panel", de: "MCP-Panel öffnen", ja: "MCP パネルを開く" },
+  "eng.viewport": { ko: "뷰포트", en: "Viewport", de: "Viewport", ja: "ビューポート" },
+  "eng.viewportEmpty": {
+    ko: "아직 화면을 못 가져왔습니다. Studio가 켜져 있는지 확인하고 새로고침하세요. (3D 화면만 찍히고 엔진 UI는 안 나옵니다)",
+    en: "No frame yet. Check that Studio is running, then refresh. (Only the 3D view is captured — engine UI does not appear.)",
+    de: "Noch kein Bild. Prüfe, ob Studio läuft, und aktualisiere. (Nur die 3D-Ansicht wird erfasst — die Engine-UI nicht.)",
+    ja: "まだ画面を取得できていません。Studio が起動しているか確認して更新してください。（3D ビューのみで、エンジンの UI は写りません）",
+  },
+  "eng.tree": { ko: "씬 트리", en: "Scene tree", de: "Szenenbaum", ja: "シーンツリー" },
+  "eng.treeEmpty": { ko: "새로고침을 눌러 씬을 읽어 오세요.", en: "Press refresh to read the scene.", de: "Zum Laden der Szene aktualisieren.", ja: "更新を押してシーンを読み込んでください。" },
+  "eng.play": { ko: "재생", en: "Play", de: "Start", ja: "再生" },
+  "eng.stop": { ko: "정지", en: "Stop", de: "Stopp", ja: "停止" },
+  "eng.save": { ko: "저장", en: "Save", de: "Speichern", ja: "保存" },
 };

@@ -154,6 +154,7 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.ai.models": { ko: "모델 관리…", en: "Manage Models…", de: "Modelle verwalten…", ja: "モデル管理…" },
   "menu.ai.usage": { ko: "사용량 대시보드", en: "Usage Dashboard", de: "Nutzungs-Dashboard", ja: "使用量ダッシュボード" },
   "menu.ai.mcp": { ko: "MCP 서버…", en: "MCP Servers…", de: "MCP-Server…", ja: "MCPサーバー…" },
+  "menu.ai.engine": { ko: "게임 엔진…", en: "Game Engine…", de: "Game-Engine…", ja: "ゲームエンジン…" },
   // 메뉴는 좁다 — 팔레트 쪽(imp.command)은 어느 도구인지까지 밝히지만 여기선 줄인다.
   "menu.ai.import": { ko: "지난 대화 가져오기…", en: "Import Past Chats…", de: "Frühere Unterhaltungen holen…", ja: "過去の会話を取り込む…" },
   "menu.help.keys": { ko: "단축키 목록", en: "Keyboard Shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
