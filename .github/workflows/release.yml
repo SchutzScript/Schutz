@@ -80,13 +80,30 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
-      # ── macOS / Linux: electron-builder가 빌드 + 릴리스 업로드 ──
-      - name: Build & publish (mac/linux)
+      # ── macOS / Linux: 빌드만 하고(--publish never) 설치본만 골라 올린다 ──
+      # 예전엔 --publish always 라 electron-builder 가 자동 업데이트용 부산물까지 전부
+      # 올렸다(latest-*.yml · *-mac.zip · *.blockmap). 그래서 릴리스 페이지에 파일이 15개나
+      # 쌓여 정작 받아야 할 설치본을 찾기 어려웠다. 자동 업데이트를 쓰지 않으므로
+      # 그 부산물은 올리지 않고, 사용자가 실제로 받는 설치본만 남긴다.
+      - name: Build (mac/linux)
         if: matrix.os != 'windows-latest'
-        run: npx electron-builder --publish always
+        run: npx electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers to release (mac/linux)
+        if: matrix.os != 'windows-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          shopt -s nullglob
+          files=(release/*.dmg release/*.AppImage release/*.deb)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::설치본이 빌드되지 않았습니다 (release/ 에 dmg·AppImage·deb 없음)"
+            exit 1
+          fi
+          printf '올릴 파일: %s\n' "${files[@]}"
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
 
       # ── Windows: Inno Setup 설치본 (VS Code식 모던 위저드) ──
       - name: Package app directory (win)

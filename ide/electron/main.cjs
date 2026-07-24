@@ -1306,13 +1306,6 @@ app.on("web-contents-created", (_e, wc) => {
 
 app.whenReady().then(() => {
   createWindow();
-  // 자동 업데이트 (패키징된 앱 + GitHub 릴리스 접근 가능할 때만 동작; 실패는 무시)
-  if (!isDev) {
-    try {
-      const { autoUpdater } = require("electron-updater");
-      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    } catch { /* electron-updater 미설치/실패 시 무시 */ }
-  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
