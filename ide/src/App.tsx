@@ -251,6 +251,12 @@ interface S {
   engineStatus: Record<string, { reachable: boolean; detail: string }>;
   /** Claude Code 스킬 — 이름·설명만. 본문은 모델이 고를 때 읽는다. */
   skills: SkillInfo[];
+  /** 플러그인 창작마당 */
+  pluginOpen: boolean;
+  plugins: PluginInfo[];
+  pluginQuery: string;
+  pluginCat: string;
+  pluginBusy: string;
   /** 엔진 뷰(전용 화면) 열림 */
   engineOpen: boolean;
   /** 엔진 뷰 — 뷰포트 스냅샷(data URL) · 씬 트리 텍스트 · 진행 중 동작 · 오류 */
@@ -477,6 +483,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
     termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, skills: [],
+    pluginOpen: false, plugins: [], pluginQuery: "", pluginCat: "", pluginBusy: "",
     engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
@@ -3670,6 +3677,7 @@ ${(r.output || "").slice(0, 2000)}`;
       void mcp.startAll();
       // Claude Code 스킬 — 있으면 모델에게 노출한다(없으면 아무 일도 없다)
       void this.refreshSkills();
+      this.startEngineWatch();
       // 모델 목록 미리 조회 → /model 팔레트가 즉시 실시간 목록을 보여줌
       setTimeout(() => this.ensureModelsFetched(), 1500);
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
@@ -3711,6 +3719,7 @@ ${(r.output || "").slice(0, 2000)}`;
     }
   }
   componentWillUnmount() {
+    if (this._engineWatch) { clearTimeout(this._engineWatch); this._engineWatch = 0; }
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
     if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
@@ -4362,6 +4371,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderCommands()}
         {this.renderMcp()}
         {this.renderEngine()}
+        {this.renderPlugins()}
         {this.renderTour()}
         {/* 첫 실행 오프닝 — App 위 오버레이. 뒤에 진짜 UI 가 이미 떠 있어서
             세팅이 끝나면 오버레이만 걷고 그 UI 를 데모가 직접 움직인다. */}
@@ -4522,6 +4532,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
                                 case "ai.engine": this.setState({ openMenu: null }); this.openEngine(); return;
+                                case "ai.plugins": this.setState({ openMenu: null }); this.openPlugins(); return;
                                 case "ai.import": this.setState({ openMenu: null }); this.openImport(); return;
                                 case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
@@ -6976,7 +6987,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
   private static OVERLAY_KEY: Record<string, string> = {
     aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
-    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
+    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", pluginOpen: "plugins", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
     extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
   };
   /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
@@ -7589,6 +7600,41 @@ ${(r.output || "").slice(0, 2000)}`;
     this.setState({ mcpServers: servers, mcpDiscovered: discovered });
   }
 
+  /** 엔진 도달성 감시 타이머. 사용자가 Studio 를 켜면 알아서 알아채라고 둔다. */
+  private _engineWatch = 0;
+
+  /** Studio 를 켜면 "연결됐다" 고 알려 준다.
+   *
+   *  예전엔 MCP 패널을 열거나 [상태 확인] 을 눌러야 알 수 있었다. 그런데 순서는 대개 반대다 —
+   *  Schutz 를 띄워 두고 나서 Studio 를 켠다. 그래서 배경에서 지켜보다가 **닿지 않던 것이
+   *  닿는 순간**에만 한 번 알린다.
+   *
+   *  status 호출은 Studio 를 두드리므로 자주 하면 안 된다. 아직 못 닿을 때만 20초마다 보고,
+   *  닿은 뒤에는 60초로 늦춘다(끊긴 것도 알아야 하지만 급하지 않다). */
+  private startEngineWatch() {
+    if (this._engineWatch) return;
+    const tick = async () => {
+      const running = new Set(mcp.getMcpTools().map(t => t.server));
+      const active = engines.ADAPTERS.filter(a => running.has(a.serverName) && a.statusTool);
+      let anyReachable = false;
+      for (const a of active) {
+        const was = this.state.engineStatus[a.serverName]?.reachable;
+        try {
+          const out = await mcp.callTool(a.serverName, a.statusTool!, {});
+          const now = !/cannot reach|unreachable|not reachable|timed out|timeout|refused|econnrefused|⚠️/i.test(out);
+          if (now) anyReachable = true;
+          if (now !== was) {
+            this.setState(st => ({ engineStatus: { ...st.engineStatus, [a.serverName]: { reachable: now, detail: "" } } }));
+            // 알림은 "이제 닿는다" 일 때만. 꺼진 것까지 매번 띄우면 잔소리가 된다.
+            if (now) this.toast("ok", t("eng.autoConnected", { engine: a.label }));
+          }
+        } catch { /* 못 물어봤으면 다음 차례에 다시 */ }
+      }
+      this._engineWatch = window.setTimeout(tick, active.length === 0 ? 60_000 : anyReachable ? 60_000 : 20_000);
+    };
+    this._engineWatch = window.setTimeout(tick, 4_000);   // 부팅 직후 붐빌 때는 비켜 준다
+  }
+
   /** 게임 엔진 접속 상태 조회 — 돌고 있는 엔진 서버마다 status 도구를 불러 Studio 도달성을 본다.
    *  status 호출은 Studio 를 두드려 응답이 몇 초 걸릴 수 있으므로 패널 열 때·연결 후에만 부른다. */
   async refreshEngineStatus() {
@@ -7605,6 +7651,115 @@ ${(r.output || "").slice(0, 2000)}`;
         set(reachable, out.split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 120) ?? "");
       } catch (e) { set(false, e instanceof Error ? e.message : String(e)); }
     }));
+  }
+
+  // ── 플러그인 창작마당 ────────────────────────────────────────────────────────
+  // Claude Code 플러그인 하나가 스킬·명령·MCP 서버를 함께 들고 온다. 그래서 "MCP 를 손으로
+  // 등록하는 것"(비공식)과 달리, 여기서 켜는 것은 공식 카탈로그에서 고른 묶음이다.
+  // 화면은 VS Code 확장 패널과 같은 어법으로 — 검색 · 분류 · 카드 · 켬/끔.
+
+  async refreshPlugins() {
+    if (!window.schutz?.pluginList) return;
+    try {
+      const r = await window.schutz.pluginList();
+      if (r.ok) this.setState({ plugins: r.plugins });
+    } catch { /* 마켓플레이스가 없어도 앱은 그대로 돈다 */ }
+  }
+
+  openPlugins() {
+    this.cancelClose("plugins");
+    this.setState({ pluginOpen: true, pluginQuery: "", pluginCat: "" });
+    void this.refreshPlugins();
+  }
+
+  /** 켜면 그 플러그인의 스킬이 곧바로 모델 목록에 들어온다. */
+  private async togglePlugin(name: string, on: boolean) {
+    if (!window.schutz?.pluginSetEnabled) return;
+    this.setState({ pluginBusy: name });
+    try {
+      const r = await window.schutz.pluginSetEnabled(name, on);
+      if (!r.ok) { this.toast("error", r.error || ""); return; }
+      await this.refreshPlugins();
+      await this.refreshSkills();          // 스킬 목록이 바로 바뀐다
+      this.toast("ok", t(on ? "plug.enabled" : "plug.disabled", { name }));
+    } catch (e) { this.toast("error", e instanceof Error ? e.message : String(e)); }
+    finally { this.setState({ pluginBusy: "" }); }
+  }
+
+  /** 창작마당 — 검색·분류·카드. 설치돼 있는 것만 켤 수 있다. */
+  renderPlugins() {
+    if (!this.state.pluginOpen && !this.isClosing("plugins")) return null;
+    const s = this.state;
+    const close = () => this.closeOverlay("plugins", { pluginOpen: false });
+    const q = s.pluginQuery.trim().toLowerCase();
+    const cats = [...new Set(s.plugins.map(p => p.category).filter((c): c is string => !!c))].sort();
+    const list = s.plugins
+      .filter(p => !s.pluginCat || p.category === s.pluginCat)
+      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q) || (p.author || "").toLowerCase().includes(q))
+      // 설치된 것 먼저 — 지금 쓸 수 있는 게 위로 온다
+      .sort((a, b) => (Number(b.installed) - Number(a.installed)) || a.name.localeCompare(b.name));
+    const shown = list.slice(0, 80);
+    const chip = (label: string, on: boolean, onClick: () => void) => (
+      <button key={label} className="hv08" onClick={onClick}
+        style={{ padding: "3px 10px", fontSize: 10.5, fontFamily: SUIT, cursor: "pointer", borderRadius: 12,
+          border: `1px solid ${on ? "transparent" : "var(--w10)"}`, background: on ? "var(--accent)" : "transparent",
+          color: on ? "var(--on-accent)" : "var(--fg-sub2)", whiteSpace: "nowrap" }}>{label}</button>
+    );
+    const badge = (text: string) => (
+      <span style={{ fontSize: 9.5, color: "var(--fg-dim)", border: "1px solid var(--w10)", borderRadius: 4, padding: "0 5px", lineHeight: "14px" }}>{text}</span>
+    );
+
+    const body = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.5 }}>{t("plug.intro")}</div>
+        <input value={s.pluginQuery} onChange={e => this.setState({ pluginQuery: e.target.value })}
+          placeholder={t("plug.searchPlaceholder")}
+          style={{ width: "100%", height: 32, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8,
+            padding: "0 11px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none" }} />
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          {chip(t("plug.catAll"), !s.pluginCat, () => this.setState({ pluginCat: "" }))}
+          {cats.map(c => chip(c, s.pluginCat === c, () => this.setState({ pluginCat: s.pluginCat === c ? "" : c })))}
+        </div>
+        <div style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>
+          {t("plug.count", { shown: shown.length, total: list.length, installed: s.plugins.filter(p => p.installed).length })}
+        </div>
+        <div style={{ display: "grid", gap: 7, maxHeight: "46vh", overflowY: "auto", paddingRight: 2 }}>
+          {shown.map(p => (
+            <div key={p.marketplace + "/" + p.name} className="sz-in" style={{ display: "flex", alignItems: "flex-start", gap: 10,
+              padding: "9px 11px", borderRadius: 9, background: "var(--bg-card)", border: "1px solid var(--w06)" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.name}</span>
+                  {p.author && <span style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>{p.author}</span>}
+                  {p.category && badge(p.category)}
+                  {p.installed && p.skills > 0 && badge(t("plug.nSkills", { n: p.skills }))}
+                  {p.installed && p.commands > 0 && badge(t("plug.nCommands", { n: p.commands }))}
+                  {p.installed && p.mcp && badge("MCP")}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--fg-dim)", marginTop: 3, lineHeight: 1.5,
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.description}</div>
+              </div>
+              <div style={{ flex: "none" }}>
+                {p.installed ? (
+                  <button className="hv08" disabled={s.pluginBusy === p.name} onClick={() => void this.togglePlugin(p.name, !p.enabled)}
+                    style={{ padding: "4px 12px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 7,
+                      border: `1px solid ${p.enabled ? "transparent" : "var(--w10)"}`,
+                      background: p.enabled ? "var(--accent)" : "transparent",
+                      color: p.enabled ? "var(--on-accent)" : "var(--accent-hi)" }}>
+                    {s.pluginBusy === p.name ? "…" : t(p.enabled ? "plug.on" : "plug.off")}
+                  </button>
+                ) : (
+                  // 아직 안 받아진 것은 켤 수 없다 — 있는 척하지 않고 그대로 알린다.
+                  <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("plug.notFetched")}</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {shown.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "8px 2px" }}>{t("plug.none")}</div>}
+        </div>
+      </div>
+    );
+    return this.modalShell("plugins", t("plug.title"), close, body, 720);
   }
 
   // ── 엔진 뷰 (Stage 3) ───────────────────────────────────────────────────────

@@ -21,6 +21,8 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   // 스킬(Claude Code 생태계) — 도구 행에 뜨는 동사
   "skill.verb": { ko: "스킬", en: "Skill", de: "Skill", ja: "スキル" },
 
+  "eng.autoConnected": { ko: "{engine}에 연결됐습니다", en: "Connected to {engine}", de: "Mit {engine} verbunden", ja: "{engine} に接続しました" },
+
   // 엔진 뷰(전용 화면)
   "eng.viewTitle": { ko: "게임 엔진", en: "Game engine", de: "Game-Engine", ja: "ゲームエンジン" },
   "eng.viewNone": {
