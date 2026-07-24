@@ -53,6 +53,13 @@ import { CLI_HEAD_BYTES, CLI_MSG_CAP, CLI_TAIL_BYTES, parseBody, parseHead, type
 
 /** 렌더 메서드 밖에서 모드를 묻는 자리 — render() 의 지역 변수 ag 를 쓸 수 없다. */
 const ag2 = (s: { uiMode: UiMode }) => s.uiMode === "agent";
+
+/** 편집기가 있어야만 뜻이 있는 메뉴들. 에이전트 모드에는 편집기가 없어 눌러도 아무 일이
+ *  없었다 — 이제 그렇다고 말해 준다(모드 전환·터미널은 두 모드 모두에서 된다). */
+const EDITOR_ONLY_ACTIONS = new Set([
+  "view.split4", "view.split2", "view.splitReset",
+  "view.format", "view.wordWrap", "view.minimap", "view.problems",
+]);
 import { getUiMode, setUiMode, applyUiMode, switchUiMode, UI_MODES, type UiMode } from "./uiMode";
 import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tour";
 import { TourFigure, type FigureRegion } from "./tourFigure";
@@ -4521,6 +4528,13 @@ ${(r.output || "").slice(0, 2000)}`;
                         : (
                           <div key={"i" + i} className="hvMenuItem"
                             onClick={() => {
+                              // 에이전트 모드엔 편집기가 없다. 눌렀는데 아무 일도 안 일어나면
+                              // 고장으로 읽히므로, 왜 안 되는지 말하고 넘어가는 길을 준다.
+                              if (ag2(s) && EDITOR_ONLY_ACTIONS.has(it[0])) {
+                                this.setState({ openMenu: null });
+                                this.toast("info", t("menu.editorOnly", { item: t("menu." + it[0]) }));
+                                return;
+                              }
                               switch (it[0]) {
                                 case "file.openProject": void this.openProject(); return;
                                 case "file.settings": this.openO({ openMenu: null, settingsOpen: true }); return;
@@ -4569,7 +4583,7 @@ ${(r.output || "").slice(0, 2000)}`;
                               }
                             }}
                             style={{ display: "flex", alignItems: "center", gap: 18, padding: "5px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-                            <span style={{ color: "var(--fg-code)" }}>{t("menu." + it[0])}</span>
+                            <span style={{ color: ag2(s) && EDITOR_ONLY_ACTIONS.has(it[0]) ? "var(--fg-dim)" : "var(--fg-code)" }}>{t("menu." + it[0])}</span>
                             <div style={{ flex: 1 }} />
                             <span style={{ color: "var(--fg-dim)", fontSize: 10.5, fontFamily: MONO }}>{accel(it[1])}</span>
                           </div>
