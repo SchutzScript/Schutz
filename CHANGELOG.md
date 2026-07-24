@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.0.6] — Schutz reaches into the engine
+
+Schutz can now drive a creative engine, not just a codebase. OVERDARE Studio is the first one it speaks to, and you can watch what it builds instead of reading about it. Chat learned to take a picture.
+
+### Game engine
+
+- **Schutz connects to OVERDARE Studio and works inside it.** It reads the DataModel tree, writes Luau, places instances, imports assets and runs a playtest — through the MCP host Schutz already runs, so connecting is one click from the MCP panel or from the first-run setup.
+- **A dedicated engine view.** Status, a live 3D viewport, the scene tree and play/stop/save in one panel, so you can see what was built rather than infer it from tool output. The titlebar button only appears once an engine is attached.
+- **Dangerous calls ask first.** Publishing, deleting and arbitrary execution now go through the same approval bar shell commands use. An asset import whose id did not come from the catalog is blocked even under full autonomy, because a wrong id permanently freezes Studio — and writing while a playtest is running is blocked for the same reason.
+- **Engine tools reach the model without a code project open.** Tools used to be attached only when a workspace was open, so anyone who wanted to build a game and nothing else found the engine invisible.
+- **First-run setup offers the engine.** Pick your project folder and it connects; if the connector is missing it is fetched from the creator's GitHub repository, with the creator credited on the install screen.
+
+### Chat
+
+- **Attach real files and images.** Show a screenshot and say "make it like this". The button, `Ctrl+V` and drag-and-drop all work, including pictures from outside the project and straight from the clipboard. Images go to the model as images; text files are inlined as before.
+
+### Downloads
+
+- **A download page.** [schutzscript.github.io/Schutz](https://schutzscript.github.io/Schutz/) detects your system and offers the one installer you need.
+- **Releases carry only installers now.** A release used to ship fifteen files because the auto-update by-products rode along, burying the installers. Auto-update is off and a release is five files: one per platform.
+
 ## [0.0.5] — A first run that shows, not tells
 
 A pass over the first-run experience and a few things that were rough in daily use. Every setting page now demonstrates the choice with the app's real behavior, the window keeps running in the tray, and streaming no longer stutters.
