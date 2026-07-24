@@ -1,6 +1,7 @@
 // chat2 도메인 번역 사전
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
   "chat.busyHint": { ko: "아직 작업 중입니다. 끝나길 기다리거나 중지를 눌러주세요.", en: "Still working. Wait for it to finish, or press stop.", de: "Noch beschäftigt. Warte auf den Abschluss oder drücke Stopp.", ja: "まだ作業中です。完了を待つか、停止を押してください。" },
+  "aside.resize": { ko: "목록 너비 조절 — 좌우로 끄세요", en: "Resize the list — drag sideways", de: "Listenbreite ziehen", ja: "一覧の幅を調整 — 左右にドラッグ" },
   // 실제 파일·사진 첨부 (붙여넣기·끌어다 놓기도 같은 길)
   "chat.attachUpload": { ko: "＋ 파일", en: "+ File", de: "+ Datei", ja: "＋ ファイル" },
   "chat.attachUploadTitle": {
