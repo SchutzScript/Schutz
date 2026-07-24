@@ -36,6 +36,10 @@ interface PluginInfo {
   skills: number;
   commands: number;
   mcp: boolean;
+  /** Schutz 가 직접 받은 것 — 지울 수 있다 */
+  own?: boolean;
+  /** 아직 없지만 카탈로그에서 받아올 수 있다 */
+  canInstall?: boolean;
 }
 
 /** MCP 서버가 노출하는 도구 (tools/list 결과) */
@@ -156,6 +160,9 @@ interface SchutzApi {
   /** 플러그인 창작마당 — 카탈로그 + 설치·활성 상태 */
   pluginList(): Promise<{ ok: boolean; error?: string; plugins: PluginInfo[] }>;
   pluginSetEnabled(name: string, on: boolean): Promise<{ ok: boolean; error?: string }>;
+  /** 카탈로그에서 직접 받아 설치한다(git clone). Schutz 몫의 디렉터리에 둔다. */
+  pluginInstall(name: string): Promise<{ ok: boolean; error?: string; dir?: string; already?: boolean }>;
+  pluginUninstall(name: string): Promise<{ ok: boolean; error?: string }>;
   /** 게임 엔진 MCP 를 GitHub 에서 clone → build 하여 설치한다. entryPath 를 mcpAdd 로 등록한다. */
   engineInstall(spec: { id: string; repo: string; build: string[]; entry: string }): Promise<{ ok: boolean; entryPath?: string; cached?: boolean; error?: string }>;
   /** 이미 설치돼 있으면 진입 파일 절대경로, 아니면 null. */

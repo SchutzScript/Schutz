@@ -7672,6 +7672,21 @@ ${(r.output || "").slice(0, 2000)}`;
     void this.refreshPlugins();
   }
 
+  /** 카탈로그에서 직접 받는다. 받자마자 켜 준다 — 창작마당에서 "설치" 는 곧 "쓰겠다" 다. */
+  private async installPlugin(name: string) {
+    if (!window.schutz?.pluginInstall || this.state.pluginBusy) return;
+    this.setState({ pluginBusy: name });
+    try {
+      const r = await window.schutz.pluginInstall(name);
+      if (!r.ok) { this.toast("error", r.error || t("plug.installFail")); return; }
+      await window.schutz.pluginSetEnabled?.(name, true);
+      await this.refreshPlugins();
+      await this.refreshSkills();
+      this.toast("ok", t("plug.installed", { name }));
+    } catch (e) { this.toast("error", e instanceof Error ? e.message : String(e)); }
+    finally { this.setState({ pluginBusy: "" }); }
+  }
+
   /** 켜면 그 플러그인의 스킬이 곧바로 모델 목록에 들어온다. */
   private async togglePlugin(name: string, on: boolean) {
     if (!window.schutz?.pluginSetEnabled) return;
@@ -7748,8 +7763,14 @@ ${(r.output || "").slice(0, 2000)}`;
                       color: p.enabled ? "var(--on-accent)" : "var(--accent-hi)" }}>
                     {s.pluginBusy === p.name ? "…" : t(p.enabled ? "plug.on" : "plug.off")}
                   </button>
+                ) : p.canInstall ? (
+                  <button className="hv08" disabled={!!s.pluginBusy} onClick={() => void this.installPlugin(p.name)}
+                    style={{ padding: "4px 12px", fontSize: 11, fontFamily: SUIT, cursor: s.pluginBusy ? "default" : "pointer",
+                      borderRadius: 7, border: "none", background: "var(--accent)", color: "var(--on-accent)", opacity: s.pluginBusy ? 0.6 : 1 }}>
+                    {s.pluginBusy === p.name ? t("plug.installing") : t("plug.install")}
+                  </button>
                 ) : (
-                  // 아직 안 받아진 것은 켤 수 없다 — 있는 척하지 않고 그대로 알린다.
+                  // 받을 곳이 적혀 있지 않은 것(마켓플레이스 저장소 안에 있는 것)은 그대로 알린다.
                   <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{t("plug.notFetched")}</span>
                 )}
               </div>
