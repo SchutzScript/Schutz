@@ -247,6 +247,13 @@ interface S {
   mcpBusy: string;               // 진행 중 작업 라벨 (서버명 등)
   /** 게임 엔진 접속 상태 — serverName → Studio 에 실제로 닿는지. 패널 열 때·연결 후에만 조회. */
   engineStatus: Record<string, { reachable: boolean; detail: string }>;
+  /** 엔진 뷰(전용 화면) 열림 */
+  engineOpen: boolean;
+  /** 엔진 뷰 — 뷰포트 스냅샷(data URL) · 씬 트리 텍스트 · 진행 중 동작 · 오류 */
+  engineShot: string | null;
+  engineTree: string;
+  engineViewBusy: string;
+  engineViewErr: string;
   mcpJson: string;               // JSON 붙여넣기 추가
   mcpGen: null | { mode: "cli" | "project" | "openapi" | "generic"; input: string; status: string; };
   /** 사용법 스포트라이트 투어 */
@@ -455,7 +462,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], paneVer: {},
-    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
+    termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {},
+    engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
@@ -4195,6 +4203,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderAbout()}
         {this.renderCommands()}
         {this.renderMcp()}
+        {this.renderEngine()}
         {this.renderTour()}
         {/* 첫 실행 오프닝 — App 위 오버레이. 뒤에 진짜 UI 가 이미 떠 있어서
             세팅이 끝나면 오버레이만 걷고 그 UI 를 데모가 직접 움직인다. */}
@@ -4354,6 +4363,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.models": this.openO({ openMenu: null, settingsOpen: true }); return;
                                 case "ai.usage": this.openO({ openMenu: null, usageOpen: true }); return;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
+                                case "ai.engine": this.setState({ openMenu: null }); this.openEngine(); return;
                                 case "ai.import": this.setState({ openMenu: null }); this.openImport(); return;
                                 case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
@@ -4434,6 +4444,16 @@ ${(r.output || "").slice(0, 2000)}`;
               {mcpRunning > 0 && (
                 <span style={{ position: "absolute", top: -2, right: -2, minWidth: 13, height: 13, padding: "0 3px", borderRadius: 7, background: "var(--accent)", color: "var(--on-accent)", fontSize: 8.5, fontWeight: 800, lineHeight: "13px", textAlign: "center" }}>{mcpRunning}</span>
               )}
+            </button>
+          ); })()}
+          {/* 엔진 뷰 — 엔진이 실제로 붙어 있을 때만 띄운다. 안 쓰는 사람에게는 없는 버튼이다. */}
+          {(() => { const ea = this.activeEngine(); if (!ea) return null; return (
+            <button className="hv07" title={ea.label} onClick={() => this.openEngine()} style={{ ...iconBtn }}>
+              {/* 정육면체 — 3D·게임 엔진을 한 글자로 */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" strokeWidth="1.7" strokeLinejoin="round">
+                <path d="M12 2.6 21 7.3v9.4L12 21.4 3 16.7V7.3z" />
+                <path d="M3 7.3 12 12l9-4.7M12 12v9.4" />
+              </svg>
             </button>
           ); })()}
           <button className="hv07" title={t("title.goToFile")} onClick={() => this.openO({ quickOpen: true, quickQuery: "", quickSel: 0 })} style={iconBtn}><SearchIcon /></button>
@@ -6780,7 +6800,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
   private static OVERLAY_KEY: Record<string, string> = {
     aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
-    settingsOpen: "settings", mcpOpen: "mcp", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
+    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
     extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
   };
   /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
@@ -7409,6 +7429,144 @@ ${(r.output || "").slice(0, 2000)}`;
         set(reachable, out.split("\n").map(l => l.trim()).find(Boolean)?.slice(0, 120) ?? "");
       } catch (e) { set(false, e instanceof Error ? e.message : String(e)); }
     }));
+  }
+
+  // ── 엔진 뷰 (Stage 3) ───────────────────────────────────────────────────────
+  // 에이전트가 엔진을 조종하는 동안 사람은 결과를 눈으로 봐야 한다. 3D 뷰포트는 스크린샷,
+  // 구조는 트리, 확인은 재생/정지 — 전용 모달 하나로 묶는다. 세 번째 uiMode 를 만들지 않고
+  // 기존 modalShell 을 재사용한다(모드 전환 배관·양 모드 CSS 비용이 얻는 것보다 크다).
+
+  /** 지금 도구가 올라와 있는(= 실제로 쓸 수 있는) 첫 엔진 어댑터. 없으면 null. */
+  private activeEngine(): engines.EngineAdapter | null {
+    const running = new Set(mcp.getMcpTools().map(t => t.server));
+    return engines.ADAPTERS.find(a => running.has(a.serverName)) ?? null;
+  }
+
+  openEngine() {
+    this.cancelClose("engine");
+    this.setState({ engineOpen: true, engineViewErr: "" });
+    void this.refreshEngineStatus();
+    const a = this.activeEngine();
+    if (a) { void this.engineShotRefresh(a); void this.engineTreeRefresh(a); }
+  }
+
+  /** 뷰포트 스냅샷 — 이미지 content 를 보존해야 하므로 callToolRaw 를 쓴다. */
+  private async engineShotRefresh(a: engines.EngineAdapter) {
+    if (!a.screenshotTool) return;
+    this.setState({ engineViewBusy: "shot", engineViewErr: "" });
+    try {
+      const r = await mcp.callToolRaw(a.serverName, a.screenshotTool, {});
+      if (!r.ok) { this.setState({ engineViewErr: r.error || "" }); return; }
+      const img = r.content.find((c: any) => c?.type === "image" && c?.data);
+      if (img) this.setState({ engineShot: `data:${img.mimeType || "image/png"};base64,${img.data}` });
+      else {
+        // 이미지가 없으면 텍스트라도 이유를 보여준다(대개 "Studio 에 닿지 않음").
+        const txt = r.content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n").trim();
+        this.setState({ engineShot: null, engineViewErr: txt.slice(0, 300) });
+      }
+    } catch (e) { this.setState({ engineViewErr: e instanceof Error ? e.message : String(e) }); }
+    finally { this.setState({ engineViewBusy: "" }); }
+  }
+
+  /** 씬/DataModel 트리 — 텍스트 그대로 보여준다(모델이 읽는 것과 같은 내용). */
+  private async engineTreeRefresh(a: engines.EngineAdapter) {
+    if (!a.browseTool) return;
+    this.setState({ engineViewBusy: "tree", engineViewErr: "" });
+    try {
+      const out = await mcp.callTool(a.serverName, a.browseTool, {});
+      this.setState({ engineTree: out.slice(0, 20000) });
+    } catch (e) { this.setState({ engineViewErr: e instanceof Error ? e.message : String(e) }); }
+    finally { this.setState({ engineViewBusy: "" }); }
+  }
+
+  /** 재생·정지·저장 — 사용자가 직접 누른 것이라 승인 게이트를 태우지 않는다(게이트는
+   *  에이전트가 스스로 부를 때를 위한 것이다). 대신 재생 상태는 에이전트 가드와 공유한다. */
+  private async engineAction(a: engines.EngineAdapter, tool: string, key: string) {
+    this.setState({ engineViewBusy: key, engineViewErr: "" });
+    try {
+      const out = await mcp.callTool(a.serverName, tool, {});
+      if (tool === a.playTool) this._enginePlaying.set(a.serverName, true);
+      else if (tool === a.stopTool) this._enginePlaying.set(a.serverName, false);
+      if (/⚠️|error|실패/i.test(out)) this.setState({ engineViewErr: out.slice(0, 300) });
+      // 재생/정지 뒤엔 화면이 달라졌을 테니 뷰포트를 다시 찍는다.
+      if (tool === a.playTool || tool === a.stopTool) { this.setState({ engineViewBusy: "" }); await this.engineShotRefresh(a); return; }
+    } catch (e) { this.setState({ engineViewErr: e instanceof Error ? e.message : String(e) }); }
+    finally { this.setState({ engineViewBusy: "" }); }
+  }
+
+  /** 엔진 뷰 — 상태 · 뷰포트 · 트리 · 재생/정지/저장 */
+  renderEngine() {
+    if (!this.state.engineOpen && !this.isClosing("engine")) return null;
+    const s = this.state;
+    const a = this.activeEngine();
+    const close = () => this.closeOverlay("engine", { engineOpen: false });
+    const est = a ? s.engineStatus[a.serverName] : undefined;
+    const busy = (k: string) => s.engineViewBusy === k;
+    const btn = (label: string, on: boolean, onClick: () => void, disabled?: boolean): React.ReactNode => (
+      <button className="hv08" disabled={disabled} onClick={onClick}
+        style={{ padding: "5px 12px", fontSize: 11.5, fontFamily: SUIT, cursor: disabled ? "default" : "pointer",
+          borderRadius: 7, border: `1px solid ${on ? "transparent" : "var(--w10)"}`,
+          background: on ? "var(--accent)" : "transparent", color: on ? "var(--on-accent)" : "var(--fg-sub)", opacity: disabled ? 0.55 : 1 }}>
+        {label}
+      </button>
+    );
+
+    const body = !a ? (
+      <div style={{ display: "grid", gap: 12, justifyItems: "start" }}>
+        <div style={{ fontSize: 12.5, color: "var(--fg-sub2)", lineHeight: 1.6 }}>{t("eng.viewNone")}</div>
+        <button className="hvAccent" onClick={() => { close(); this.openMcp(); }}
+          style={{ height: 30, padding: "0 14px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            borderRadius: 8, border: "none", background: "var(--accent)", color: "var(--on-accent)" }}>{t("eng.viewConnect")}</button>
+      </div>
+    ) : (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* 상태 + 조작 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+          <span style={{ width: 8, height: 8, borderRadius: 4, flex: "none",
+            background: est?.reachable ? "var(--ok)" : "#C9A227" }} />
+          <span style={{ fontSize: 12, color: "var(--fg-sub)" }}>
+            {est ? (est.reachable ? t("eng.reachable") : t("eng.unreachable")) : t("eng.checking")}
+          </span>
+          <div style={{ flex: 1 }} />
+          {a.playTool && btn(t("eng.play"), false, () => void this.engineAction(a, a.playTool!, "play"), !!s.engineViewBusy)}
+          {a.stopTool && btn(t("eng.stop"), false, () => void this.engineAction(a, a.stopTool!, "stop"), !!s.engineViewBusy)}
+          {a.saveTool && btn(t("eng.save"), true, () => void this.engineAction(a, a.saveTool!, "save"), !!s.engineViewBusy)}
+        </div>
+
+        {s.engineViewErr && (
+          <div style={{ fontSize: 11, color: "#CE9A9A", whiteSpace: "pre-wrap", maxHeight: 72, overflow: "auto",
+            background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 8, padding: "7px 10px" }}>{s.engineViewErr}</div>
+        )}
+
+        {/* 뷰포트 — 3D 화면만 찍힌다(엔진 UI 는 안 나온다) */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <span style={sectHdr}>{t("eng.viewport")}</span><div style={{ flex: 1 }} />
+            {btn(busy("shot") ? "…" : t("common.refresh"), false, () => void this.engineShotRefresh(a), !!s.engineViewBusy)}
+          </div>
+          <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid var(--w06)", background: "var(--bg-root)",
+            minHeight: 190, display: "grid", placeItems: "center" }}>
+            {s.engineShot
+              ? <img src={s.engineShot} alt={t("eng.viewport")} style={{ display: "block", width: "100%", height: "auto" }} />
+              : <span style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: 24 }}>{t("eng.viewportEmpty")}</span>}
+          </div>
+        </div>
+
+        {/* 트리 */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <span style={sectHdr}>{t("eng.tree")}</span><div style={{ flex: 1 }} />
+            {btn(busy("tree") ? "…" : t("common.refresh"), false, () => void this.engineTreeRefresh(a), !!s.engineViewBusy)}
+          </div>
+          <pre style={{ margin: 0, maxHeight: 230, overflow: "auto", background: "var(--bg-root)",
+            border: "1px solid var(--w06)", borderRadius: 10, padding: "10px 12px",
+            fontSize: 11, fontFamily: MONO, color: "var(--fg-sub)", whiteSpace: "pre-wrap" }}>
+            {s.engineTree || t("eng.treeEmpty")}
+          </pre>
+        </div>
+      </div>
+    );
+    return this.modalShell("engine", a ? a.label : t("eng.viewTitle"), close, body, 720);
   }
 
   /** 게임 엔진 원클릭 연결 — 발견된 MCP 설정을 그대로 등록·시작한다(mcpImport 와 같은 경로).

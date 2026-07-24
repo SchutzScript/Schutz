@@ -37,8 +37,12 @@ export interface EngineAdapter {
   projectEnv?: string;
   /** 상태·도달성을 확인할 도구(있으면 연결 후 한 번 불러 reachable 판정). 없으면 running=연결로 본다. */
   statusTool?: string;
-  /** 뷰포트 스냅샷 도구(Stage 3 UI 용). */
+  /** 뷰포트 스냅샷 도구 — 엔진 뷰가 그림으로 보여준다. */
   screenshotTool?: string;
+  /** 씬/트리 조회 도구 — 엔진 뷰가 구조를 보여준다. */
+  browseTool?: string;
+  /** 저장 도구 — 엔진 뷰의 저장 버튼. */
+  saveTool?: string;
 
   /** 위험도 분류. 목록에 없으면 safe. */
   risk: { confirm: string[]; gated: string[] };
@@ -94,6 +98,8 @@ const OVERDARE: EngineAdapter = {
   projectEnv: "OVERDARE_PROJECT_DIR",
   statusTool: "overdare_status",
   screenshotTool: "overdare_screenshot",
+  browseTool: "overdare_browse",
+  saveTool: "overdare_save",
   risk: {
     confirm: [
       // 쓰기·삭제 (되돌리기 어려움)
