@@ -213,7 +213,7 @@ export const MENUS: [string, ([string, string] | null)[]][] = [
   ["nav", [["nav.quickOpen", "⌘P"], ["nav.commandPalette", "⇧⌘P"], ["nav.symbol", "⇧⌘O"]]],
   // 앞 셋은 AI 를 **설정**하는 것이고 가져오기는 **데이터를 들여오는** 것이라 줄로 가른다.
   ["ai", [["ai.models", ""], ["ai.usage", ""], ["ai.mcp", ""], ["ai.plugins", ""], ["ai.engine", ""], ["ai.cloud", ""], null, ["ai.import", ""]]],
-  ["help", [["help.replayOpening", ""], ["help.replayTutorial", ""], ["help.keys", ""], ["help.about", ""]]],
+  ["help", [["help.replayOpening", ""], ["help.replayTutorial", ""], ["help.keys", ""], null, ["help.update", ""], ["help.about", ""]]],
 ];
 
 export const PROJECTS = [

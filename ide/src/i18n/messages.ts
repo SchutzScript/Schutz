@@ -240,6 +240,14 @@ export const MESSAGES: Record<string, Msg> = {
   "status.agentsActive": { ko: "에이전트 {active}/{total} 활성", en: "{active}/{total} agents active", de: "{active}/{total} Agenten aktiv", ja: "エージェント {active}/{total} 稼働" },
   "status.terminal": { ko: "터미널", en: "Terminal", de: "Terminal", ja: "ターミナル" },
   "status.langPick": { ko: "언어 모드 선택", en: "Select language mode", de: "Sprachmodus wählen", ja: "言語モードを選択" },
+  // 새 버전 알림 — 자동으로 받지 않는다. 있다는 사실만 알리고 받는 것은 사용자가 정한다.
+  "menu.help.update": { ko: "업데이트 확인", en: "Check for Updates", de: "Nach Updates suchen", ja: "更新を確認" },
+  "update.badge": { ko: "{version} 있음", en: "{version} available", de: "{version} verfügbar", ja: "{version} あり" },
+  "update.availableTitle": { ko: "새 버전 {version} — 눌러서 받으러 가기", en: "Version {version} is available — click to get it", de: "Version {version} ist verfügbar — zum Laden klicken", ja: "バージョン {version} が利用できます — クリックで入手" },
+  "update.available": { ko: "새 버전 {version} 이 나왔습니다", en: "Version {version} is available", de: "Version {version} ist verfügbar", ja: "バージョン {version} が公開されました" },
+  "update.upToDate": { ko: "최신 버전입니다 ({version})", en: "You are up to date ({version})", de: "Sie sind auf dem neuesten Stand ({version})", ja: "最新版です（{version}）" },
+  "update.checkFailed": { ko: "업데이트를 확인하지 못했습니다", en: "Could not check for updates", de: "Update-Prüfung fehlgeschlagen", ja: "更新を確認できませんでした" },
+  "update.skip": { ko: "이 버전은 넘기기", en: "Skip this version", de: "Diese Version überspringen", ja: "このバージョンをスキップ" },
 
   // ── 채팅 ────────────────────────────────────────────────
   "chat.title": { ko: "대화", en: "Chat", de: "Chat", ja: "チャット" },

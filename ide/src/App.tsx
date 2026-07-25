@@ -122,6 +122,20 @@ const SUIT = "var(--font-ui,'SUIT Variable','Yu Gothic UI','Meiryo','Segoe UI Sy
 // typeof 가드는 undeclared 식별자에도 던지지 않으므로, 빌드에선 치환된 버전을, dev 에선 "dev" 를 쓴다.
 declare const __APP_VERSION__: string | undefined;
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
+
+/** "v0.0.7" · "0.0.7" → [0,0,7]. 숫자가 아닌 꼬리(-beta 등)는 버린다. */
+function parseVer(v: string): number[] {
+  return String(v).replace(/^v/, "").split(".").map(p => parseInt(p, 10) || 0);
+}
+/** a 가 b 보다 새 버전이면 true. 자리 수가 달라도(0.1 vs 0.0.9) 맞게 비교한다. */
+function isNewerVer(a: string, b: string): boolean {
+  const x = parseVer(a), y = parseVer(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
 // 좌측 컬럼 세로 분할의 하한. 대화는 제목·탭·입력창만 130px 가량 먹어서
 // 이보다 낮추면 메시지가 한 줄도 안 남는다.
 const CHAT_MIN_H = 180;
@@ -371,6 +385,8 @@ interface S {
   ctxMenu: { x: number; y: number; rel: string; isDir: boolean } | null;
   /** 트리 인라인 편집 — 새 파일/폴더(rel=부모 dir, ""=루트) 또는 이름변경(rel=대상) */
   treeEdit: { kind: "newFile" | "newFolder" | "rename"; rel: string; value: string } | null;
+  /** 새 버전 알림 — 최신 릴리스가 지금 버전보다 위일 때만 채워진다 */
+  update: { version: string; url: string } | null;
   /** 구독 CLI 에이전트 감지 결과 (claude/codex) */
   cliAgents: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliBusy: boolean;
@@ -543,7 +559,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     mdPreview: {}, replaceOpen: false, replaceVal: "",
     searchOpts: { regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "" },
     mruOpen: false, mruSel: 0,
-    collapsed: {}, statusInfo: null, langPickOpen: false, ctxMenu: null, treeEdit: null,
+    collapsed: {}, statusInfo: null, langPickOpen: false, ctxMenu: null, treeEdit: null, update: null,
   };
 
   /** 새 파일이 열릴 슬롯 (포커스 추종) */
@@ -3843,6 +3859,8 @@ ${(r.output || "").slice(0, 2000)}`;
       this.startEngineWatch();
       // 모델 목록 미리 조회 → /model 팔레트가 즉시 실시간 목록을 보여줌
       setTimeout(() => this.ensureModelsFetched(), 1500);
+      // 새 버전 확인 — 부팅 경쟁을 피해 한 박자 늦게, 하루 한 번만.
+      this._updateTimer = setTimeout(() => void this.checkForUpdate(), 6000);
       // 온보딩 완료 후(또는 튜토리얼 미완료 시) 사용법 스포트라이트 투어 자동 시작 — 1회만.
       // this.qt 사용(언마운트 시 clearTimers 로 취소) — 고아 타이머가 죽은 인스턴스에서 startTour 호출하는 것 방지
       try {
@@ -3883,6 +3901,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
   componentWillUnmount() {
     if (this._engineWatch) { clearTimeout(this._engineWatch); this._engineWatch = 0; }
+    if (this._updateTimer) { clearTimeout(this._updateTimer); this._updateTimer = null; }
     this.stopCloudPoll();
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
@@ -4787,6 +4806,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                   return;
                                 case "help.replayTutorial": this.setState({ openMenu: null }); this.startTour(); return;
                                 case "help.keys": this.openO({ openMenu: null, keysOpen: true }); return;
+                                case "help.update": this.setState({ openMenu: null }); void this.checkForUpdate(true); return;
                                 case "help.about": this.openO({ openMenu: null, aboutOpen: true }); return;
                                 default: this.setState({ openMenu: null });
                               }
@@ -4995,6 +5015,18 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* Ln:Col 은 포커스된 편집기가 있어야 뜻이 있다 — 시트를 열었을 때만 남긴다 */}
           {(!ag || sheet) && s.statusInfo && (
             <span style={{ fontFamily: MONO }}>Ln {s.statusInfo.line}:{s.statusInfo.col}</span>
+          )}
+          {/* 새 버전 — 있을 때만 뜬다. 자동으로 받지 않고 받으러 갈 곳만 알려준다. */}
+          {s.update && (
+            <>
+              <button className="hv08" title={t("update.availableTitle", { version: s.update.version })} onClick={() => this.openUpdate()}
+                style={{ height: 19, padding: "0 9px", display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--on-accent)", opacity: .8 }} />
+                {t("update.badge", { version: s.update.version })}
+              </button>
+              <button className="hvDim" title={t("update.skip")} onClick={() => this.skipUpdate()}
+                style={{ width: 18, height: 18, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none" }}>✕</button>
+            </>
           )}
           <span style={{ width: 1, height: 13, background: "var(--w07)" }} />
           <button className="hv08" onClick={() => this.toggleTerm()}
@@ -8085,6 +8117,57 @@ ${(r.output || "").slice(0, 2000)}`;
     this.cancelClose("plugins");
     this.setState({ pluginOpen: true, pluginQuery: "", pluginCat: "" });
     void this.refreshPlugins();
+  }
+
+  // ── 새 버전 알림 ────────────────────────────────────────────────────────────
+  // 자동 업데이트는 의도적으로 쓰지 않는다(릴리스는 설치본만 올린다). 대신 최신 릴리스를
+  // 조용히 확인해 "새 버전이 있다"고만 알리고, 받는 것은 사용자가 정한다.
+  private _updateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 하루에 한 번만 물어본다 — 켤 때마다 두드리면 GitHub 한도만 축낸다. */
+  private updateCheckDue(): boolean {
+    try {
+      const last = +(localStorage.getItem("schutz.updateCheckedAt") || 0);
+      return !last || Date.now() - last > 24 * 60 * 60 * 1000;
+    } catch { return true; }
+  }
+
+  async checkForUpdate(manual = false) {
+    if (!window.schutz?.httpGet) return;
+    if (APP_VERSION === "dev" && !manual) return;      // dev 빌드는 알림 대상이 아니다
+    if (!manual && !this.updateCheckDue()) return;
+    try {
+      const r = await window.schutz.httpGet("https://api.github.com/repos/SchutzScript/Schutz/releases/latest", { Accept: "application/vnd.github+json" });
+      try { localStorage.setItem("schutz.updateCheckedAt", String(Date.now())); } catch { /* */ }
+      if (!r.ok || !r.json) { if (manual) this.toast("info", t("update.checkFailed")); return; }
+      const tag = String(r.json.tag_name || "");
+      const url = String(r.json.html_url || "https://github.com/SchutzScript/Schutz/releases/latest");
+      if (!tag) { if (manual) this.toast("info", t("update.checkFailed")); return; }
+      const latest = tag.replace(/^v/, "");
+      if (!isNewerVer(latest, APP_VERSION)) {
+        if (manual) this.toast("ok", t("update.upToDate", { version: APP_VERSION }));
+        return;
+      }
+      // 이미 "나중에" 로 넘긴 버전이면 배지만 남기고 토스트는 띄우지 않는다.
+      let skipped = "";
+      try { skipped = localStorage.getItem("schutz.updateSkipped") || ""; } catch { /* */ }
+      this.setState({ update: { version: latest, url } });
+      if (manual || skipped !== latest) this.toast("info", t("update.available", { version: latest }));
+    } catch {
+      if (manual) this.toast("info", t("update.checkFailed"));
+    }
+  }
+
+  /** 받으러 가기 — 다운로드 페이지를 연다(설치본을 직접 내려받지 않는다). */
+  openUpdate() {
+    const u = this.state.update;
+    void window.schutz?.openExternal(u ? u.url : "https://schutzscript.github.io/Schutz/");
+  }
+  /** 이번 버전은 넘긴다 — 다음 버전이 나오면 다시 알린다. */
+  skipUpdate() {
+    const v = this.state.update?.version;
+    if (v) { try { localStorage.setItem("schutz.updateSkipped", v); } catch { /* */ } }
+    this.setState({ update: null });
   }
 
   // ── 클라우드 위임(Codex Cloud) ──────────────────────────────────────────────

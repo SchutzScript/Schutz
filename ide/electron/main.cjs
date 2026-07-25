@@ -1624,7 +1624,7 @@ ipcMain.on("schutz:anthropicStop", (_e, id) => {
 });
 
 // GET 프록시(렌더러 CORS 우회) — 신뢰된 모델 제공자 호스트로만 제한 (SSRF/자격증명 유출 방지)
-const HTTPGET_HOSTS = new Set(["api.anthropic.com", "api.openai.com", "api.x.ai", "open.bigmodel.cn", "api.z.ai"]);
+const HTTPGET_HOSTS = new Set(["api.anthropic.com", "api.openai.com", "api.x.ai", "open.bigmodel.cn", "api.z.ai", "api.github.com"]);
 ipcMain.handle("schutz:httpGet", async (_e, url, headers) => {
   let u;
   try { u = new URL(url); } catch { return { ok: false, status: 0, error: "잘못된 URL" }; }
