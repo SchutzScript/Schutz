@@ -104,7 +104,9 @@ function localPluginDirs() {
   // Schutz 가 받은 것 먼저 — 같은 이름이면 이쪽을 쓴다(우리가 버전을 안다).
   try {
     for (const d of fs.readdirSync(ownPluginsDir(), { withFileTypes: true })) {
-      if (d.isDirectory()) roots.push({ marketplace: "schutz", name: d.name, dir: path.join(ownPluginsDir(), d.name) });
+      // 받다 만 것(.<이름>.tmp)은 건너뛴다 — 설치가 중간에 깨지면 남는데, 그걸 플러그인으로
+      // 세면 목록에 ".xxx.tmp" 가 그대로 뜬다.
+      if (d.isDirectory() && !d.name.startsWith(".")) roots.push({ marketplace: "schutz", name: d.name, dir: path.join(ownPluginsDir(), d.name) });
     }
   } catch { /* 아직 하나도 안 받았으면 없다 */ }
   const mkts = path.join(CLAUDE_DIR, "plugins", "marketplaces");
@@ -137,6 +139,10 @@ function readPlugin(p) {
     // (42crunch-api-security-testing 이 안에서는 api-security-testing 인 식). 그걸 쓰면
     // 카탈로그와 설치본이 서로를 못 알아본다.
     name: p.name,
+    // 카탈로그에 없는(로컬에만 있는) 것도 이름·로고를 갖도록 매니페스트에서 뽑아 둔다.
+    displayName: manifest.displayName || "",
+    iconUrl: githubAvatar({ homepage: manifest.homepage
+      || (typeof manifest.repository === "string" ? manifest.repository : (manifest.repository && manifest.repository.url) || "") }),
     description: manifest.description || "",
     version: manifest.version || "",
     keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
@@ -148,6 +154,21 @@ function readPlugin(p) {
     installed: true,
     own: p.marketplace === "schutz",   // Schutz 가 받은 것만 지울 수 있다
   };
+}
+
+/** 카탈로그 항목에서 GitHub 소유자를 뽑아 아바타 주소를 만든다.
+ *  카탈로그에 아이콘 필드가 없어서, 그 플러그인이 사는 저장소의 주인을 로고로 삼는다. */
+function githubAvatar(p) {
+  const cand = [
+    p.source && typeof p.source === "object" ? p.source.url : null,
+    p.source && typeof p.source === "object" && p.source.repo ? "https://github.com/" + p.source.repo : null,
+    p.homepage,
+  ].filter(Boolean);
+  for (const c of cand) {
+    const m = /github\.com[/:]([A-Za-z0-9][A-Za-z0-9-]*)/.exec(String(c));
+    if (m) return "https://github.com/" + m[1] + ".png?size=80";
+  }
+  return "";
 }
 
 /** 마켓플레이스 카탈로그(설치 안 된 것 포함) — .claude-plugin/marketplace.json */
@@ -162,6 +183,11 @@ function readCatalog() {
     for (const p of j.plugins || []) {
       out.push({
         name: p.name,
+        // 카탈로그에는 슬러그(name)와 사람이 읽는 이름(displayName)이 따로 있다. 있으면 그쪽을 보인다.
+        displayName: p.displayName || "",
+        // 아이콘 필드는 카탈로그에 없다. 대신 소스·홈페이지에서 GitHub 소유자를 뽑아
+        // 그 조직/사용자 아바타를 쓴다(243개 중 226개가 뽑힌다). 못 뽑으면 화면에서 모노그램.
+        iconUrl: githubAvatar(p),
         description: p.description || "",
         author: (p.author && p.author.name) || "",
         category: p.category || "",
@@ -311,7 +337,7 @@ function init(ipcMain) {
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   });
 
-  // 설치된 플러그인 + 카탈로그(창작마당) + 켜짐 상태
+  // 설치된 플러그인 + 카탈로그(마켓플레이스) + 켜짐 상태
   ipcMain.handle("schutz:pluginList", () => {
     try {
       const enabled = new Set(readEnabled());
