@@ -1,14 +1,18 @@
-// 플러그인 창작마당 — Claude Code 플러그인 카탈로그를 고르고 켜는 화면.
+// 커넥터 — 스킬·명령·MCP 서버 묶음을 골라 켜는 화면.
+//
+// 이름은 Claude 데스크톱이 쓰는 말(Connectors)을 따른다. 읽어 오는 실체는 Claude Code 의
+// 플러그인 카탈로그(.claude-plugin/marketplace.json)지만, 쓰는 사람 눈에는 "바깥 것을 붙이는 자리"
+// 하나이므로 두 이름을 나란히 두지 않는다.
 //
 // "MCP 를 손으로 등록하는 것"과 여기서 켜는 것의 차이를 문장으로도 분명히 한다:
-// 플러그인 하나가 스킬·명령·MCP 서버를 함께 들고 오는, 카탈로그에 실린 묶음이다.
+// 커넥터 하나가 스킬·명령·MCP 서버를 함께 들고 오는, 카탈로그에 실린 묶음이다.
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
-  "plug.title": { ko: "플러그인 창작마당", en: "Plugin marketplace", de: "Plugin-Marktplatz", ja: "プラグイン マーケット" },
+  "plug.title": { ko: "커넥터", en: "Connectors", de: "Connectors", ja: "コネクタ" },
   "plug.intro": {
-    ko: "플러그인 하나가 스킬·명령·MCP 서버를 함께 들고 옵니다. 켜면 그 스킬이 바로 AI에게 보이고, Claude와 GPT 모두에서 똑같이 동작합니다.",
-    en: "A plugin brings its skills, commands and MCP server together. Turn one on and its skills are immediately visible to the AI — the same for both Claude and GPT.",
-    de: "Ein Plugin bringt Skills, Befehle und MCP-Server zusammen. Aktiviere eines, und seine Skills stehen der KI sofort zur Verfügung — gleich für Claude und GPT.",
-    ja: "プラグイン一つがスキル・コマンド・MCP サーバーをまとめて持ってきます。有効にするとそのスキルがすぐ AI に見え、Claude でも GPT でも同じように動きます。",
+    ko: "커넥터 하나가 스킬·명령·MCP 서버를 함께 들고 옵니다. 켜면 그 스킬이 바로 AI에게 보이고, Claude와 GPT 모두에서 똑같이 동작합니다.",
+    en: "A connector brings its skills, commands and MCP server together. Turn one on and its skills are immediately visible to the AI — the same for both Claude and GPT.",
+    de: "Ein Connector bringt Skills, Befehle und MCP-Server zusammen. Aktiviere einen, und seine Skills stehen der KI sofort zur Verfügung — gleich für Claude und GPT.",
+    ja: "コネクタ一つがスキル・コマンド・MCP サーバーをまとめて持ってきます。有効にするとそのスキルがすぐ AI に見え、Claude でも GPT でも同じように動きます。",
   },
   "plug.searchPlaceholder": { ko: "이름·설명·제작자로 검색", en: "Search by name, description or author", de: "Nach Name, Beschreibung oder Autor suchen", ja: "名前・説明・作者で検索" },
   "plug.catAll": { ko: "전체", en: "All", de: "Alle", ja: "すべて" },
@@ -22,7 +26,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "plug.notFetched": { ko: "아직 안 받음", en: "not fetched", de: "nicht geladen", ja: "未取得" },
   "plug.nSkills": { ko: "스킬 {n}", en: "{n} skills", de: "{n} Skills", ja: "スキル {n}" },
   "plug.nCommands": { ko: "명령 {n}", en: "{n} commands", de: "{n} Befehle", ja: "コマンド {n}" },
-  "plug.none": { ko: "조건에 맞는 플러그인이 없습니다.", en: "No plugins match.", de: "Keine passenden Plugins.", ja: "条件に合うプラグインがありません。" },
+  "plug.none": { ko: "조건에 맞는 커넥터가 없습니다.", en: "No connectors match.", de: "Keine passenden Connectors.", ja: "条件に合うコネクタがありません。" },
   "plug.enabled": { ko: "{name} 켰습니다", en: "{name} turned on", de: "{name} aktiviert", ja: "{name} をオンにしました" },
   "plug.disabled": { ko: "{name} 껐습니다", en: "{name} turned off", de: "{name} deaktiviert", ja: "{name} をオフにしました" },
 };
