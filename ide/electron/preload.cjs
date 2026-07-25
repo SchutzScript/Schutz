@@ -75,6 +75,10 @@ contextBridge.exposeInMainWorld("schutz", {
   /** 열기 — 파일 끝 tailBytes 만 */
   cliChatRead: (agent, file, tailBytes) => ipcRenderer.invoke("schutz:cliChatRead", agent, file, tailBytes),
 
+  /** 외부 브라우저로 URL 열기(http/https 만) */
+  openExternal: (url) => ipcRenderer.invoke("schutz:openExternal", url),
+  /** Codex Cloud 위임 — 로컬 codex CLI 로 원격 태스크 다루기 */
+  codexCloud: (action, payload) => ipcRenderer.invoke("schutz:codexCloud", action, payload),
   /** MCP 호스트 — Schutz가 직접 stdio MCP 서버를 실행/사용 */
   mcpList: () => ipcRenderer.invoke("schutz:mcpList"),
   mcpStart: (name) => ipcRenderer.invoke("schutz:mcpStart", name),
@@ -91,7 +95,7 @@ contextBridge.exposeInMainWorld("schutz", {
   /** Claude Code 스킬 — 목록은 이름·설명만, 본문은 고른 것만 읽는다 */
   skillsList: (root) => ipcRenderer.invoke("schutz:skillsList", root),
   skillRead: (file) => ipcRenderer.invoke("schutz:skillRead", file),
-  /** 플러그인 창작마당 — 카탈로그 + 설치·활성 상태 */
+  /** 커넥터 목록 — 카탈로그 + 설치·활성 상태 */
   pluginList: () => ipcRenderer.invoke("schutz:pluginList"),
   pluginSetEnabled: (name, on) => ipcRenderer.invoke("schutz:pluginSetEnabled", name, on),
   pluginInstall: (name) => ipcRenderer.invoke("schutz:pluginInstall", name),
