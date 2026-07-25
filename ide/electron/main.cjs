@@ -8,6 +8,7 @@ try { require("./dap.cjs").init(ipcMain); } catch (e) { console.error("DAP init 
 try { require("./extensions.cjs").init(ipcMain); } catch (e) { console.error("EXT init failed:", e && e.message); }
 try { require("./mcp.cjs").init(ipcMain); } catch (e) { console.error("MCP init failed:", e && e.message); }
 try { require("./plugins.cjs").init(ipcMain); } catch (e) { console.error("PLUGINS init failed:", e && e.message); }
+try { require("./codexCloud.cjs").init(ipcMain); } catch (e) { console.error("CODEXCLOUD init failed:", e && e.message); }
 
 const DEV_URL = process.env.SCHUTZ_DEV_URL || "http://localhost:4322";
 const isDev = !app.isPackaged;
@@ -435,6 +436,17 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
       }
       return { ok: true, added, removed };
     }
+    if (action === "diff") {
+      // 리뷰어에 먹일 통합 패치 전문. diffLines 는 라인 범위만 주므로 이건 따로 둔다.
+      const staged = payload && payload.staged ? ["--cached"] : [];
+      const only = payload && payload.path ? ["--", payload.path] : [];
+      const r = await git(root, ["diff", ...staged, ...only]);
+      let patch = r.stdout || "";
+      let truncated = false;
+      const CAP = 200 * 1024;                         // 모델 컨텍스트 보호용 상한
+      if (patch.length > CAP) { patch = patch.slice(0, CAP); truncated = true; }
+      return { ok: r.ok, patch, truncated, error: r.ok ? "" : r.stderr };
+    }
     if (action === "stage") { const r = await git(root, ["add", "--", payload.path]); return { ok: r.ok, error: r.stderr }; }
     if (action === "stageAll") { const r = await git(root, ["add", "-A"]); return { ok: r.ok, error: r.stderr }; }
     if (action === "unstage") { const r = await git(root, ["reset", "-q", "HEAD", "--", payload.path]); return { ok: r.ok, error: r.stderr }; }
@@ -651,6 +663,15 @@ ipcMain.handle("schutz:mkdir", async (_e, root, rel) => {
 // 탐색기(파일 매니저)에서 보기
 ipcMain.handle("schutz:reveal", async (_e, root, rel) => {
   try { shell.showItemInFolder(safeJoin(root, rel)); return true; } catch { return false; }
+});
+// 외부 브라우저로 URL 열기 — http/https 만. 렌더러가 준 값이라 스킴을 반드시 검증한다.
+ipcMain.handle("schutz:openExternal", async (_e, url) => {
+  try {
+    const u = new URL(String(url));
+    if (u.protocol !== "http:" && u.protocol !== "https:") return { ok: false };
+    await shell.openExternal(u.toString());
+    return { ok: true };
+  } catch { return { ok: false }; }
 });
 
 // 파일 전체에서 찾아 바꾸기 → 치환된 개수·파일 수 (정규식/대소문자/단어/글롭 지원)
