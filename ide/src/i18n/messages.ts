@@ -33,13 +33,15 @@ import { dict as d_sc4 } from "./dict/sc4";
 import { dict as d_sc5 } from "./dict/sc5";
 import { dict as d_eng } from "./dict/eng";
 import { dict as d_plug } from "./dict/plug";
+import { dict as d_review } from "./dict/review";
+import { dict as d_cloud } from "./dict/cloud";
 
 export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_ob, ...d_reg,
   ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
-  ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng, ...d_plug,
+  ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng, ...d_plug, ...d_review, ...d_cloud,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
   "common.prev": { ko: "이전", en: "Back", de: "Zurück", ja: "戻る" },
@@ -73,6 +75,9 @@ export const MESSAGES: Record<string, Msg> = {
   "editor.preview": { ko: "미리보기", en: "Preview", de: "Vorschau", ja: "プレビュー" },
   "editor.code": { ko: "코드", en: "Code", de: "Code", ja: "コード" },
   "editor.previewTitle": { ko: "마크다운 미리보기 전환", en: "Toggle Markdown preview", de: "Markdown-Vorschau umschalten", ja: "Markdownプレビュー切替" },
+  "editor.split": { ko: "편집기 분할 — 옆에 나란히", en: "Split editor — side by side", de: "Editor teilen — nebeneinander", ja: "エディタ分割 — 横に並べる" },
+  "editor.split4": { ko: "편집기 분할 — 네 칸으로", en: "Split editor — four panes", de: "Editor teilen — vier Bereiche", ja: "エディタ分割 — 4分割に" },
+  "editor.splitReset": { ko: "분할 해제 — 한 칸으로", en: "Unsplit — single pane", de: "Teilung aufheben — ein Bereich", ja: "分割解除 — 1画面に" },
   "topstatus.idle": { ko: "대기 중", en: "Idle", de: "Bereit", ja: "待機中" },
   "topstatus.thinking": { ko: "계획 수립 중…", en: "Planning…", de: "Plant…", ja: "計画中…" },
   "topstatus.tool": { ko: "동시 작업 중…", en: "Working…", de: "Arbeitet…", ja: "作業中…" },
@@ -156,8 +161,9 @@ export const MESSAGES: Record<string, Msg> = {
   "menu.ai.usage": { ko: "사용량 대시보드", en: "Usage Dashboard", de: "Nutzungs-Dashboard", ja: "使用量ダッシュボード" },
   "menu.ai.mcp": { ko: "MCP 서버…", en: "MCP Servers…", de: "MCP-Server…", ja: "MCPサーバー…" },
   "menu.editorOnly": { ko: "{item}은(는) 에디터 모드에서만 됩니다. 오른쪽 위에서 에디터로 바꿔 보세요.", en: "{item} only works in editor mode. Switch at the top right.", de: "{item} funktioniert nur im Editor-Modus. Oben rechts umschalten.", ja: "{item} はエディタモードでのみ使えます。右上で切り替えてください。" },
-  "menu.ai.plugins": { ko: "플러그인 창작마당…", en: "Plugin Marketplace…", de: "Plugin-Marktplatz…", ja: "プラグイン マーケット…" },
+  "menu.ai.plugins": { ko: "커넥터…", en: "Connectors…", de: "Connectors…", ja: "コネクタ…" },
   "menu.ai.engine": { ko: "게임 엔진…", en: "Game Engine…", de: "Game-Engine…", ja: "ゲームエンジン…" },
+  "menu.ai.cloud": { ko: "클라우드 위임…", en: "Cloud Delegation…", de: "Cloud-Delegation…", ja: "クラウド委任…" },
   // 메뉴는 좁다 — 팔레트 쪽(imp.command)은 어느 도구인지까지 밝히지만 여기선 줄인다.
   "menu.ai.import": { ko: "지난 대화 가져오기…", en: "Import Past Chats…", de: "Frühere Unterhaltungen holen…", ja: "過去の会話を取り込む…" },
   "menu.help.keys": { ko: "단축키 목록", en: "Keyboard Shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
@@ -233,6 +239,7 @@ export const MESSAGES: Record<string, Msg> = {
   "status.noChanges": { ko: "변경 없음", en: "No changes", de: "Keine Änderungen", ja: "変更なし" },
   "status.agentsActive": { ko: "에이전트 {active}/{total} 활성", en: "{active}/{total} agents active", de: "{active}/{total} Agenten aktiv", ja: "エージェント {active}/{total} 稼働" },
   "status.terminal": { ko: "터미널", en: "Terminal", de: "Terminal", ja: "ターミナル" },
+  "status.langPick": { ko: "언어 모드 선택", en: "Select language mode", de: "Sprachmodus wählen", ja: "言語モードを選択" },
 
   // ── 채팅 ────────────────────────────────────────────────
   "chat.title": { ko: "대화", en: "Chat", de: "Chat", ja: "チャット" },

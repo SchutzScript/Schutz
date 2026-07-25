@@ -7,4 +7,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "flowtree.noProject": { ko: "아직 열린 프로젝트가 없습니다.", en: "No project is open yet.", de: "Noch kein Projekt geöffnet.", ja: "まだ開いているプロジェクトはありません。" },
   "flowtree.openProject": { ko: "프로젝트 열기…", en: "Open project…", de: "Projekt öffnen…", ja: "プロジェクトを開く…" },
   "flowtree.truncated": { ko: "… 항목이 많아 일부만 표시합니다", en: "… too many items, showing only some", de: "… zu viele Einträge, es wird nur ein Teil angezeigt", ja: "… 項目が多いため一部のみ表示しています" },
+  // 트리 인라인 새 파일/폴더
+  "tree.newFile": { ko: "새 파일", en: "New file", de: "Neue Datei", ja: "新しいファイル" },
+  "tree.newFolder": { ko: "새 폴더", en: "New folder", de: "Neuer Ordner", ja: "新しいフォルダ" },
+  "tree.newFilePh": { ko: "파일 이름…", en: "File name…", de: "Dateiname…", ja: "ファイル名…" },
+  "tree.newFolderPh": { ko: "폴더 이름…", en: "Folder name…", de: "Ordnername…", ja: "フォルダ名…" },
 };
