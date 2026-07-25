@@ -31,6 +31,14 @@ a:hover { color: var(--accent-hi); }
 @keyframes szPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes szFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes szScaleIn { from { opacity: 0; transform: translateY(6px) scale(.975); } to { opacity: 1; transform: translateY(0) scale(1); } }
+/* 상태바 언어 이름 교체 — 아래에서 살짝 떠오르며 페이드. 파일 바꿀 때 자연스럽게 넘어간다. */
+@keyframes szLangIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+/* 트리 행 hover 액션(새 파일·폴더 아이콘) — 평소엔 숨고 그 행에 마우스 올릴 때만 뜬다(VS Code 처럼) */
+.treeAct { opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
+.treeRow:hover .treeAct, .treeHdr:hover .treeAct { opacity: 1; }
+.treeActAlways { opacity: .55; transition: opacity var(--dur-fast) var(--ease); }
+.treeActAlways:hover { opacity: 1; }
 @keyframes szDropIn { from { opacity: 0; transform: translateY(-8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes szFadeOut { from { opacity: 1; } to { opacity: 0; transform: translateY(4px); } }
 @keyframes szBackdropOut { from { opacity: 1; } to { opacity: 0; } }

@@ -23,7 +23,7 @@ import { createEngine, DEFAULT_POLICY } from "./engine";
 import type { DelegationOutcome, RejectReason, RunRecord, StopCause } from "./engine";
 import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
-import monaco from "./editor/monacoSetup";
+import monaco, { languageOf } from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
 import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
@@ -36,6 +36,7 @@ import * as textmate from "./ext/textmate";
 import * as mcp from "./mcp/mcpClient";
 import * as mcpGen from "./mcp/generator";
 import * as engines from "./gameEngine/adapters";
+import { buildReviewSystemPrompt, buildReviewUserPrompt, parseFindings, severityRank, Finding } from "./review/reviewer";
 import { registerLspProviders } from "./editor/lspProviders";
 import { setThemeId, THEME_TOKENS, monacoThemeOf } from "./theme";
 import { applyTheme, getThemeId } from "./theme";
@@ -97,6 +98,16 @@ interface Proposal {
   auto?: boolean;
   /** 인라인 편집(Ctrl+K) 선택 범위 — 있으면 텍스트 검색 대신 이 정확 범위로 적용(non-unique 선택 대응) */
   range?: InlineRange;
+}
+
+/** Codex Cloud 로 위임한 태스크 하나(로컬 추적본). 원격이 진실이고 이건 UI 표시·재시작 복원용. */
+interface CloudTask {
+  id: string;
+  prompt: string;
+  env?: string | null;
+  status: string;         // running | done | failed | applied | stopped
+  createdAt: number;
+  raw?: string;
 }
 
 // 설정 폰트가 전 UI에 전파되도록 CSS 변수를 참조(applyUiFont가 --font-ui/--font-code 설정).
@@ -235,6 +246,10 @@ interface S {
   paneDirty: Record<string, boolean>;
   /** Claude의 실파일 편집 제안 */
   proposals: Proposal[];
+  /** 독립 리뷰 패스가 짚은 것 — 조언이라 닫을 수만 있고 편집 패치가 없다(제안과 분리). */
+  reviewFindings: Finding[];
+  /** 리뷰 패스 진행 중 */
+  reviewBusy: boolean;
   /** 수락 후 Monaco 페인 강제 리로드용 버전 */
   paneVer: Record<string, number>;
   /** 간이 터미널 출력 (Electron) */
@@ -258,12 +273,17 @@ interface S {
   engineStatus: Record<string, { reachable: boolean; detail: string }>;
   /** Claude Code 스킬 — 이름·설명만. 본문은 모델이 고를 때 읽는다. */
   skills: SkillInfo[];
-  /** 플러그인 창작마당 */
+  /** 커넥터 — 화면 이름만 커넥터고, 읽는 실체는 플러그인 카탈로그다 */
   pluginOpen: boolean;
   plugins: PluginInfo[];
   pluginQuery: string;
   pluginCat: string;
   pluginBusy: string;
+  /** 클라우드 위임(Codex Cloud) 패널 */
+  cloudOpen: boolean;
+  cloudTasks: CloudTask[];
+  cloudPrompt: string;
+  cloudBusy: string;   // "dispatch" | task id(적용/확인 중) | ""
   /** 엔진 뷰(전용 화면) 열림 */
   engineOpen: boolean;
   /** 엔진 뷰 — 뷰포트 스냅샷(data URL) · 씬 트리 텍스트 · 진행 중 동작 · 오류 */
@@ -345,8 +365,12 @@ interface S {
   collapsed: Record<string, boolean>;
   /** 상태바 실정보 (포커스된 에디터) */
   statusInfo: { rel: string; lang: string; line: number; col: number } | null;
+  /** 상태바 언어 선택 팝오버 열림 */
+  langPickOpen: boolean;
   /** 트리 우클릭 메뉴 */
   ctxMenu: { x: number; y: number; rel: string; isDir: boolean } | null;
+  /** 트리 인라인 편집 — 새 파일/폴더(rel=부모 dir, ""=루트) 또는 이름변경(rel=대상) */
+  treeEdit: { kind: "newFile" | "newFolder" | "rename"; rel: string; value: string } | null;
   /** 구독 CLI 에이전트 감지 결과 (claude/codex) */
   cliAgents: Record<string, { ok: boolean; version: string; hasConfig: boolean }>;
   cliBusy: boolean;
@@ -465,6 +489,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
    * 실행을 정리해 버렸다(락 해제·상태 덮어쓰기). 이제 실행마다 고유 키를 갖는다.
    */
   private abortCtls = new Map<string, AbortController>();
+  /** 진행 중인 리뷰 패스의 중단자 — 한 번에 하나만 돈다. */
+  private _reviewAbort: AbortController | null = null;
   /**
    * 파일 락: rel → 잡고 있는 **runId**.
    * agentId 로 잡으면 낡은 실행의 정리가 같은 에이전트의 새 실행 락을 풀어 버린다.
@@ -488,9 +514,10 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }],
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
-    proposals: [], paneVer: {},
+    proposals: [], reviewFindings: [], reviewBusy: false, paneVer: {},
     termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, skills: [],
     pluginOpen: false, plugins: [], pluginQuery: "", pluginCat: "", pluginBusy: "",
+    cloudOpen: false, cloudTasks: [], cloudPrompt: "", cloudBusy: "",
     engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
@@ -516,7 +543,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     mdPreview: {}, replaceOpen: false, replaceVal: "",
     searchOpts: { regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "" },
     mruOpen: false, mruSel: 0,
-    collapsed: {}, statusInfo: null, ctxMenu: null,
+    collapsed: {}, statusInfo: null, langPickOpen: false, ctxMenu: null, treeEdit: null,
   };
 
   /** 새 파일이 열릴 슬롯 (포커스 추종) */
@@ -650,11 +677,36 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }, 300));
   }
 
-  async newFileAt(dirRel: string) {
+  // 새 파일/폴더·이름변경 — Electron 은 window.prompt 를 지원하지 않아(그냥 null 반환)
+  // 예전엔 아무 일도 안 일어났다. 트리에 인라인 입력칸을 띄우는 방식으로 바꾼다(VS Code 처럼).
+  newFileAt(dirRel: string) { this.beginTreeEdit("newFile", dirRel); }
+  newFolderAt(dirRel: string) { this.beginTreeEdit("newFolder", dirRel); }
+
+  /** 트리 인라인 편집 시작. 새로 만들 땐 부모 폴더를 펼쳐 입력칸이 보이게 한다. */
+  beginTreeEdit(kind: "newFile" | "newFolder" | "rename", rel: string) {
+    if (!this.state.workspace || !window.schutz) return;
+    const value = kind === "rename" ? (rel.split("/").pop() || "") : "";
+    this.setState(s => ({
+      treeEdit: { kind, rel, value },
+      collapsed: kind === "rename" || !rel ? s.collapsed : { ...s.collapsed, [rel]: false },
+      ctxMenu: null,
+    }));
+  }
+  cancelTreeEdit() { this.setState({ treeEdit: null }); }
+  async commitTreeEdit() {
+    const te = this.state.treeEdit;
+    if (!te) return;
+    const name = te.value.trim();
+    this.setState({ treeEdit: null });
+    if (!name) return;
+    if (te.kind === "rename") await this._doRename(te.rel, name);
+    else if (te.kind === "newFolder") await this._doNewFolder(te.rel, name);
+    else await this._doNewFile(te.rel, name);
+  }
+
+  private async _doNewFile(dirRel: string, name: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    const name = window.prompt(t("sc1.new_file_name"), "untitled.md");
-    if (!name) return;
     const rel = dirRel ? dirRel + "/" + name : name;
     try {
       await window.schutz.writeFile(ws.root, rel, "");
@@ -664,11 +716,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     } catch (e) { this.toast("error", t("sc1.create_failed") + (e instanceof Error ? e.message : String(e))); }
   }
 
-  async newFolderAt(dirRel: string) {
+  private async _doNewFolder(dirRel: string, name: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    const name = window.prompt(t("sc1.new_folder_name"), "new-folder");
-    if (!name) return;
     const rel = dirRel ? dirRel + "/" + name : name;
     try {
       await window.schutz.mkdir(ws.root, rel);
@@ -783,13 +833,14 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     return Math.round(Math.max(CHAT_MIN_H, Math.min(hi, h)));
   }
 
-  async renameAt(rel: string) {
+  renameAt(rel: string) { this.beginTreeEdit("rename", rel); }
+
+  private async _doRename(rel: string, nn: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
     const parts = rel.split("/");
     const base = parts.pop()!;
-    const nn = window.prompt(t("sc1.new_name"), base);
-    if (!nn || nn === base) return;
+    if (nn === base) return;
     const relTo = [...parts, nn].join("/");
     try {
       await window.schutz.renameEntry(ws.root, rel, relTo);
@@ -1018,6 +1069,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       cmds.push({ id: "openProject", label: t("sc1.cmd_open_project"), hint: "Ctrl+O", run: () => void this.openProject() });
       cmds.push({ id: "gitPanel", label: t("sc1.cmd_open_scm"), run: () => { this.setState({ leftTab: "git" }); void this.loadGit(); } });
       cmds.push({ id: "gitRefresh", label: t("sc1.cmd_git_refresh"), run: () => void this.loadGit() });
+      cmds.push({ id: "gitReview", label: t("review.button"), run: () => void this.reviewChanges() });
       cmds.push({ id: "debugStart", label: t("sc1.cmd_debug_start"), run: () => void this.startDebug() });
       cmds.push({ id: "debugStop", label: t("sc1.cmd_debug_stop"), run: () => void this.stopDebug() });
       cmds.push({ id: "debugView", label: t("sc1.cmd_debug_panel"), run: () => this.setState({ leftTab: "debug" }) });
@@ -1935,11 +1987,12 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   private _leftCol: HTMLDivElement | null = null;
   private _dragTab: { slot: number; rel: string } | null = null;
-  /** 탭 드래그 재정렬 (같은 슬롯 내) */
+  /** 탭 드래그 — 같은 슬롯이면 재정렬, 다른 슬롯이면 그 분할로 옮긴다. targetRel 이 있으면 그 앞에 꽂는다. */
   reorderTab(slot: number, targetRel: string) {
     const d = this._dragTab;
     this._dragTab = null;
-    if (!d || d.slot !== slot || d.rel === targetRel) return;
+    if (!d || d.rel === targetRel) return;
+    if (d.slot !== slot) { this.moveTab(d.slot, d.rel, slot, targetRel); return; }
     this.setState(s => {
       const arr = [...(s.tabs[slot] ?? [])];
       const from = arr.indexOf(d.rel);
@@ -1950,6 +2003,50 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       if (to < 0) return null;
       arr.splice(to, 0, d.rel);
       return { tabs: s.tabs.map((t, i) => (i === slot ? arr : t)) } as any;
+    });
+  }
+
+  /** 탭을 다른 분할(슬롯)로 옮긴다. targetRel 있으면 그 앞, 없으면 끝에. */
+  moveTab(fromSlot: number, rel: string, toSlot: number, targetRel?: string) {
+    if (fromSlot === toSlot) return;
+    this.setState(s => {
+      const tabs = s.tabs.map(t => [...t]);
+      if (!tabs[toSlot]) return null;
+      const fi = (tabs[fromSlot] ?? []).indexOf(rel);
+      if (fi < 0) return null;
+      tabs[fromSlot].splice(fi, 1);
+      if (!tabs[toSlot].includes(rel)) {
+        const to = targetRel ? tabs[toSlot].indexOf(targetRel) : -1;
+        if (to < 0) tabs[toSlot].push(rel); else tabs[toSlot].splice(to, 0, rel);
+      }
+      const active = s.active.map((a, i) => {
+        if (i === toSlot) return rel;                              // 옮겨온 슬롯은 그 파일을 활성
+        if (i === fromSlot && a === rel) return tabs[fromSlot][Math.min(fi, tabs[fromSlot].length - 1)] ?? ""; // 빠진 자리 이웃으로
+        return a;
+      });
+      return { tabs, active } as any;
+    }, () => { this._focusSlot = toSlot; try { paneRegistry.panes.get(rel)?.editor.focus(); } catch { /* */ } });
+  }
+
+  /** 현재 편집기를 옆 분할로 — VS Code 의 "편집기 분할". 누를 때마다 1→2→4 로 늘리고,
+   *  빈 분할이 있으면 거기에, 없으면 다음 슬롯에 같은 파일을 연다. */
+  splitActiveEditor(fromSlot: number) {
+    const rel = this.state.active[fromSlot];
+    if (!rel) return;
+    this.setState(s => {
+      const layout = s.layout === 1 ? 2 : s.layout === 2 ? 4 : 4;   // 1→2→4, 4에서 더는 안 늘림
+      const norm = this.normSlots(s.tabs, s.active, layout);
+      const tabs = norm.tabs.map(t => [...t]);
+      const active = [...norm.active];
+      // 빈 분할을 먼저 채운다(2→4 로 늘리면 새 슬롯 2~3 이 비어 있다). 없으면 다음 슬롯.
+      let toSlot = -1;
+      for (let i = 0; i < layout; i++) { const j = (fromSlot + 1 + i) % layout; if ((tabs[j] ?? []).length === 0) { toSlot = j; break; } }
+      if (toSlot < 0) toSlot = (fromSlot + 1) % layout;
+      if (!tabs[toSlot]) tabs[toSlot] = [];
+      if (!tabs[toSlot].includes(rel)) tabs[toSlot].push(rel);
+      active[toSlot] = rel;
+      this._focusSlot = toSlot;
+      return { layout, tabs, active, openMenu: null } as any;
     });
   }
 
@@ -3494,8 +3591,38 @@ ${(r.output || "").slice(0, 2000)}`;
     const msg = this.state.gitMsg.trim();
     if (!msg) { this.setState({ gitError: t("sc3.enterCommitMsg") }); return; }
     if (!(this.state.git?.staged.length)) { this.setState({ gitError: t("sc3.noStagedChanges") }); return; }
+    // 커밋 전 자동 리뷰 — 켰을 때만. 짚은 게 있으면 승인 바로 진행/취소를 묻는다.
+    if (getAutonomy().reviewOnCommit && !(await this.reviewGateBeforeCommit())) return;
     const ok = await this.gitDo("commit", { message: msg });
     if (ok) { this.setState({ gitMsg: "" }); void this.refreshWorkspace(); }
+  }
+
+  /** 커밋 전 리뷰 게이트. 계속해도 되면 true.
+   *  실패(리뷰어 오류 등)는 조용히 막지도 커밋하지도 않는다 — 경고 후 사용자에게 맡긴다(fail-open). */
+  private async reviewGateBeforeCommit(): Promise<boolean> {
+    const root = this.state.workspace?.root;
+    if (!root || !window.schutz) return true;
+    this.setState({ reviewBusy: true });
+    let findings: Finding[] = [];
+    try {
+      const d = await window.schutz.git(root, "diff", { staged: true }) as any;
+      const patch = d && d.ok ? String(d.patch || "") : "";
+      if (!patch.trim()) return true;                   // 볼 게 없으면 통과
+      findings = await this.runReviewPass(patch);
+    } catch {
+      this.toast("info", t("review.parseFailed"));      // fail-open
+      return true;
+    } finally {
+      this.setState({ reviewBusy: false });
+    }
+    this.setState({ reviewFindings: findings });
+    if (findings.length === 0) return true;             // 짚은 게 없으면 그대로 커밋
+    const managerId = getManagerId();
+    const top = [...findings].sort((a, b) => severityRank(a.severity) - severityRank(b.severity)).slice(0, 3)
+      .map(f => "· [" + t("review.sev" + (f.severity === "high" ? "High" : f.severity === "med" ? "Med" : "Low")) + "] " + f.summary).join("\n");
+    const proceed = await this.askRunApproval(t("review.gateTitle", { n: findings.length }), top, managerId);
+    if (!proceed) this.toast("info", t("review.commitBlocked"));
+    return proceed;
   }
 
   /** diff 뷰 열기 — 합성 rel `git-diff:<s|w>:<path>` 를 탭으로 */
@@ -3654,6 +3781,35 @@ ${(r.output || "").slice(0, 2000)}`;
     void this.saveSession();
   }
 
+  /** 독립 리뷰 패스 — diff 만 든 새 transcript 로 프로바이더를 단발 호출한다.
+   *  매니저 history·도구·프로젝트 지침을 절대 넘기지 않는다(격리). 실패해도 던지지 않고
+   *  빈 배열을 돌려준다 — 리뷰 실패가 커밋을 조용히 막지 않도록(fail-open). */
+  private async runReviewPass(diff: string): Promise<Finding[]> {
+    if (!diff.trim()) return [];
+    const configured = this.configuredAgents();
+    const pref = getManagerId();
+    const managerId = configured.includes(pref) ? pref : (configured.includes("claude") ? "claude" : configured[0]);
+    const provider = managerId ? this.providers[managerId] : undefined;
+    if (!provider) return [];
+    const system = buildReviewSystemPrompt();
+    const transcript: NeutralMsg[] = [{ role: "user", text: buildReviewUserPrompt(diff) }];
+    const abort = new AbortController();
+    this._reviewAbort = abort;
+    let out = "";
+    try {
+      for await (const ev of provider.streamAgentTurn({ transcript, system, tools: undefined, signal: abort.signal })) {
+        if (ev.type === "text") out += ev.delta;
+        else if (ev.type === "usage") this.bumpAgent(managerId, ev.inputTokens, ev.outputTokens);
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return [];
+      return [];                                        // 네트워크 등 실패 → fail-open
+    } finally {
+      if (this._reviewAbort === abort) this._reviewAbort = null;
+    }
+    return parseFindings(out);
+  }
+
   componentDidMount() {
     window.addEventListener("resize", this._clampChatOnResize);
     applyTheme(getThemeId());
@@ -3727,6 +3883,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
   componentWillUnmount() {
     if (this._engineWatch) { clearTimeout(this._engineWatch); this._engineWatch = 0; }
+    this.stopCloudPoll();
     this.clearTimers();
     // 디바운스 타이머들(clearTimers 관리 밖) — 언마운트 후 setState 방지
     if (this._fsTimer) { clearTimeout(this._fsTimer); this._fsTimer = null; }
@@ -3816,6 +3973,13 @@ ${(r.output || "").slice(0, 2000)}`;
     if (e.key === "F5" && e.shiftKey && this.state.debug) { e.preventDefault(); void this.stopDebug(); return; }
     if (!mod) return; // Escape 는 위에서 처리됨
     const k = e.key.toLowerCase();
+    // 에디터 분할 — Ctrl+Alt+1/2/4 (메뉴 힌트는 있었으나 핸들러가 빠져 있어 안 먹던 것).
+    // e.code 로 본다 — Alt 를 누르면 레이아웃에 따라 e.key 가 숫자가 아닌 문자로 바뀔 수 있다.
+    if (e.altKey && (e.code === "Digit1" || e.code === "Digit2" || e.code === "Digit4")) {
+      e.preventDefault();
+      this.setLayout(e.code === "Digit1" ? 1 : e.code === "Digit2" ? 2 : 4);
+      return;
+    }
     if (k === "p" && e.shiftKey) { e.preventDefault(); this.cancelClose("cmd"); this.setState(s => ({ cmdOpen: !s.cmdOpen, cmdQuery: "", cmdSel: 0 })); }
     else if (k === "p" && !e.shiftKey) { e.preventDefault(); this.cancelClose("quick"); this.setState(s => ({ quickOpen: !s.quickOpen, quickQuery: "", quickSel: 0 })); }
     else if (k === "t" && !e.shiftKey) { e.preventDefault(); this.cancelClose("sym"); this.openSymbolPalette(); }
@@ -4033,6 +4197,43 @@ ${(r.output || "").slice(0, 2000)}`;
   // MonacoPane 콜백 — 안정 참조(arrow property)로 두어 React.memo 가 불필요한 리렌더를 차단하게 한다
   private handleDirtyChange = (rel: string, d: boolean) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }));
   private handleStatus = (info: any) => this.setState({ statusInfo: info });
+
+  /** 상태바에서 고른 언어로 현재(포커스된) 편집기 모델의 언어를 바꾼다.
+   *  VS Code 의 언어 모드 전환과 같다 — 파일 내용은 그대로, 문법·색칠만 바뀐다.
+   *  세션 단위(다시 열면 확장자 기준으로 돌아온다)라 디스크엔 손대지 않는다. */
+  private setEditorLanguage(id: string) {
+    const pane = paneRegistry.focused;
+    const model = pane?.editor.getModel();
+    if (model) monaco.editor.setModelLanguage(model, id);
+    this.setState(s => ({ langPickOpen: false, statusInfo: s.statusInfo ? { ...s.statusInfo, lang: id } : s.statusInfo }));
+  }
+
+  /** 언어 선택 팝오버 — 상태바 위로 뜬다. Monaco 에 등록된 언어를 골라 바꾼다. */
+  private renderLangPicker(cur?: string) {
+    // 자주 쓰는 것 먼저, 그다음 나머지를 알파벳순으로.
+    const COMMON = ["typescript", "javascript", "json", "markdown", "html", "css", "scss", "python", "rust", "go", "java", "cpp", "c", "csharp", "shell", "yaml", "sql", "xml", "plaintext"];
+    const all = monaco.languages.getLanguages().map(l => l.id);
+    const seen = new Set<string>();
+    const ordered = [...COMMON.filter(id => all.includes(id)), ...all.sort()].filter(id => (seen.has(id) ? false : (seen.add(id), true)));
+    return (
+      <>
+        {/* 바깥 클릭으로 닫기 */}
+        <div onClick={() => this.setState({ langPickOpen: false })} style={{ position: "fixed", inset: 0, zIndex: 199 }} />
+        <div className="sz-drop" style={{ position: "absolute", bottom: 26, left: 0, zIndex: 200, minWidth: 190, maxHeight: 320, overflowY: "auto",
+          background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 10, boxShadow: "var(--shadow-pop)", padding: 5 }}>
+          <div style={{ fontSize: 9.5, color: "var(--fg-dim)", padding: "3px 9px 5px", letterSpacing: 0.5 }}>{t("status.langPick")}</div>
+          {ordered.map(id => (
+            <div key={id} className="hvMenuItem" onClick={() => this.setEditorLanguage(id)}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 9px", borderRadius: 6, cursor: "pointer",
+                fontSize: 12, fontFamily: MONO, color: id === cur ? "var(--accent-hi)" : "var(--fg-sub)" }}>
+              <span style={{ flex: "none", width: 6, textAlign: "center", color: "var(--accent)" }}>{id === cur ? "✓" : ""}</span>
+              {id}
+            </div>
+          ))}
+        </div>
+      </>
+    );
+  }
   private handleInlineEdit = (rel: string, selection: string, instruction: string, range?: InlineRange) => void this.inlineEdit(rel, selection, instruction, range);
 
   /** 현재 활성 파일(.py)을 디버그 실행 */
@@ -4359,6 +4560,12 @@ ${(r.output || "").slice(0, 2000)}`;
     // 다음 단계의 변신에서 같은 이름이 두 번 잡히는 문제도 같이 없어진다.
     const ag = s.uiMode === "agent";
     const gone = ag ? { display: "none" as const } : null;
+    // 상태바 언어는 **활성 파일에서 바로** 읽는다 — 포커스 이벤트를 안 기다리고, 탭만 바꿔도
+    // 자동으로 맞는다. 모델이 있으면 실제 언어(수동 변경분 포함), 없으면 확장자로 추정.
+    const activeRel = paneRegistry.focused?.rel || s.active[this._focusSlot] || s.active.find(Boolean) || null;
+    const activeLang = activeRel && !activeRel.startsWith("git-diff:") && !activeRel.startsWith("preview:")
+      ? (paneRegistry.panes.get(activeRel)?.editor.getModel()?.getLanguageId() || languageOf(activeRel))
+      : null;
     // 시트: 에이전트 모드에서 코드를 잠깐 띄운 상태. 에디터 그리드를 새로 만들지 않고
     // 이미 마운트된 그것을 트랜스크립트 위로 덮는다 — 그래서 그 안의 기능이 전부 살아 있다.
     const sheet = ag && s.sheetOpen;
@@ -4379,6 +4586,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderMcp()}
         {this.renderEngine()}
         {this.renderPlugins()}
+        {this.renderCloud()}
         {this.renderTour()}
         {/* 첫 실행 오프닝 — App 위 오버레이. 뒤에 진짜 UI 가 이미 떠 있어서
             세팅이 끝나면 오버레이만 걷고 그 UI 를 데모가 직접 움직인다. */}
@@ -4547,6 +4755,7 @@ ${(r.output || "").slice(0, 2000)}`;
                                 case "ai.mcp": this.setState({ openMenu: null }); this.openMcp(); return;
                                 case "ai.engine": this.setState({ openMenu: null }); this.openEngine(); return;
                                 case "ai.plugins": this.setState({ openMenu: null }); this.openPlugins(); return;
+                                case "ai.cloud": this.setState({ openMenu: null }); this.openCloud(); return;
                                 case "ai.import": this.setState({ openMenu: null }); this.openImport(); return;
                                 case "view.mode": this.setState({ openMenu: null }); this.toggleUiMode(this.state.uiMode === "agent" ? "editor" : "agent"); return;
                                 case "view.terminal": this.setState({ openMenu: null }); this.toggleTerm(); return;
@@ -4767,12 +4976,25 @@ ${(r.output || "").slice(0, 2000)}`;
           {ag && s.cliModel && (
             <span style={{ fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.cliModel}</span>
           )}
+          {/* 언어 모드 — 활성 파일에서 자동으로 읽어 늘 맞게 보인다(포커스 불필요). 클릭하면 바꾼다. */}
+          {(!ag || sheet) && activeLang && (
+            <div style={{ position: "relative" }}>
+              {/* 폭을 글자 수(monospace 라 ch=글자폭)에 딱 맞춘다 → 빈칸이 안 남는다.
+                  대신 그 폭을 transition 으로 바꿔, css↔javascript 처럼 길이가 달라져도 오른쪽
+                  Ln:Col 이 툭 튀지 않고 스르륵 밀린다. 너무 짧은 이름은 최소 4자폭 확보. */}
+              <button className="hv08" title={t("status.langPick")}
+                onClick={() => this.setState(st => ({ langPickOpen: !st.langPickOpen }))}
+                style={{ height: 19, width: `calc(${Math.max(activeLang.length, 4)}ch + 14px)`, padding: "0 7px", textAlign: "center", fontFamily: MONO, fontSize: 10.5, cursor: "pointer", borderRadius: 5, color: s.langPickOpen ? "var(--accent-hi)" : "inherit", background: s.langPickOpen ? "rgba(143,168,147,.14)" : "transparent", border: "none", transition: "width var(--dur) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease)" }}>
+                {/* key 를 언어값으로 줘 값이 바뀔 때만 다시 마운트 → 새 이름이 툭 나타나지 않고
+                    부드럽게 떠오른다. 같은 파일 안에서 리렌더될 땐 그대로라 깜빡이지 않는다. */}
+                <span key={activeLang} style={{ display: "inline-block", animation: "szLangIn var(--dur) var(--ease)" }}>{activeLang}</span>
+              </button>
+              {s.langPickOpen && this.renderLangPicker(activeLang)}
+            </div>
+          )}
           {/* Ln:Col 은 포커스된 편집기가 있어야 뜻이 있다 — 시트를 열었을 때만 남긴다 */}
           {(!ag || sheet) && s.statusInfo && (
-            <>
-              <span style={{ fontFamily: MONO }}>{s.statusInfo.lang}</span>
-              <span style={{ fontFamily: MONO }}>Ln {s.statusInfo.line}:{s.statusInfo.col}</span>
-            </>
+            <span style={{ fontFamily: MONO }}>Ln {s.statusInfo.line}:{s.statusInfo.col}</span>
           )}
           <span style={{ width: 1, height: 13, background: "var(--w07)" }} />
           <button className="hv08" onClick={() => this.toggleTerm()}
@@ -5027,6 +5249,51 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── 좌 패널: 파일 트리 ──
+  /** 새 파일 아이콘 버튼 — 문서+플러스. dirRel="" 은 루트. */
+  private newFileIconBtn(dirRel: string) {
+    return (
+      <button className="hv08" title={t("tree.newFile")} onClick={e => { e.stopPropagation(); this.beginTreeEdit("newFile", dirRel); }}
+        style={{ flex: "none", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", borderRadius: 4, color: "var(--fg-sub2)", background: "transparent", border: "none" }}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M4 2h5l3 3v6.5" /><path d="M9 2v3h3" /><path d="M4 2v12h4.5" /><path d="M11.5 10v4M9.5 12h4" />
+        </svg>
+      </button>
+    );
+  }
+  /** 새 폴더 아이콘 버튼 — 폴더+플러스. */
+  private newFolderIconBtn(dirRel: string) {
+    return (
+      <button className="hv08" title={t("tree.newFolder")} onClick={e => { e.stopPropagation(); this.beginTreeEdit("newFolder", dirRel); }}
+        style={{ flex: "none", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", borderRadius: 4, color: "var(--fg-sub2)", background: "transparent", border: "none" }}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M2 4.5h4l1.3 1.5h5.2V12H2z" /><path d="M8 8.2v3.4M6.3 9.9h3.4" />
+        </svg>
+      </button>
+    );
+  }
+  /** 트리 인라인 입력 한 줄 — 새 파일/폴더 이름, 또는 이름변경. Enter 확정·Esc 취소·blur 확정. */
+  private renderTreeInput(depth: number, isFolder: boolean) {
+    const te = this.state.treeEdit;
+    if (!te) return null;
+    const pad = 16 + depth * 14;
+    return (
+      <div key="__treeEdit" className="sz-row-in" style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: `0 8px 0 ${pad}px` }}>
+        {isFolder
+          ? <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}>▸</span>
+          : <FileIcon rel={te.value || "x.txt"} size={14} />}
+        <input autoFocus value={te.value} spellCheck={false}
+          onChange={e => this.setState(st => (st.treeEdit ? { treeEdit: { ...st.treeEdit, value: e.target.value } } : null))}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); void this.commitTreeEdit(); }
+            else if (e.key === "Escape") { e.preventDefault(); this.cancelTreeEdit(); }
+          }}
+          onBlur={() => { if (this.state.treeEdit) void this.commitTreeEdit(); }}
+          placeholder={te.kind === "newFolder" ? t("tree.newFolderPh") : te.kind === "rename" ? "" : t("tree.newFilePh")}
+          style={{ flex: 1, minWidth: 0, height: 20, fontFamily: MONO, fontSize: 12, color: "var(--fg)", background: "var(--bg-root)", border: "1px solid var(--accent)", borderRadius: 4, padding: "0 6px", outline: "none" }} />
+      </div>
+    );
+  }
+
   renderTree() {
     const s = this.state;
     // 데스크톱 앱 + 워크스페이스 없음 → 빈 상태 (데모 트리는 웹 프리뷰 전용)
@@ -5050,36 +5317,63 @@ ${(r.output || "").slice(0, 2000)}`;
         for (let i = 0; i < parts.length - 1; i++) { acc = acc ? acc + "/" + parts[i] : parts[i]; if (collapsed[acc]) return true; }
         return false;
       };
+      const te = s.treeEdit;
+      const rows: React.ReactNode[] = [];
+      for (const en of ws.entries) {
+        const pad = 16 + en.depth * 14;
+        // 이름변경 중인 대상은 그 자리에서 입력칸으로 바꾼다.
+        if (te && te.kind === "rename" && te.rel === en.rel) {
+          rows.push(this.renderTreeInput(en.depth, en.dir));
+          continue;
+        }
+        if (isHidden(en.rel)) continue;
+        if (en.dir) {
+          const isCollapsed = !!s.collapsed[en.rel];
+          rows.push(
+            <div key={en.rel} className="hv04 sz-row-in treeRow" onClick={() => this.setState(st => ({ collapsed: { ...st.collapsed, [en.rel]: !st.collapsed[en.rel] } }))}
+              onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: true } }); }}
+              style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 8px 0 ${pad}px`, cursor: "pointer" }}>
+              <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8, display: "inline-block", transform: isCollapsed ? "rotate(0deg)" : "rotate(90deg)", transition: "transform var(--dur) var(--ease)" }}>▸</span>
+              <span style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+              <div style={{ flex: 1 }} />
+              {/* 폴더에 마우스 올리면 새 파일·폴더 아이콘 — 클릭은 폴더 접힘과 겹치지 않게 stopPropagation */}
+              <div className="treeAct" style={{ flex: "none", display: "flex", gap: 1 }}>
+                {this.newFileIconBtn(en.rel)}
+                {this.newFolderIconBtn(en.rel)}
+              </div>
+            </div>
+          );
+          // 이 폴더 안에 새로 만드는 중이면 바로 아래에 입력칸.
+          if (te && te.kind !== "rename" && te.rel === en.rel) rows.push(this.renderTreeInput(en.depth + 1, te.kind === "newFolder"));
+          continue;
+        }
+        const inPane = this.isOpen(en.rel, s);
+        const dirty = s.paneDirty[en.rel];
+        rows.push(
+          <div key={en.rel} className="hv04 sz-row-in treeRow" onClick={() => this.openFile(en.rel)}
+            onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: false } }); }}
+            style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 8px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
+            <FileIcon rel={en.rel} size={14} />
+            <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+            <div style={{ flex: 1 }} />
+            {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
+          </div>
+        );
+      }
       return (
         <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid var(--w06)" }}>
-          <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{ws.name.toUpperCase()}</div>
-          {ws.entries.map(en => {
-            const pad = 16 + en.depth * 14;
-            if (isHidden(en.rel)) return null;
-            if (en.dir) {
-              const isCollapsed = !!s.collapsed[en.rel];
-              return (
-                <div key={en.rel} className="hv04 sz-row-in" onClick={() => this.setState(st => ({ collapsed: { ...st.collapsed, [en.rel]: !st.collapsed[en.rel] } }))}
-                  onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: true } }); }}
-                  style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer" }}>
-                  <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8, display: "inline-block", transform: isCollapsed ? "rotate(0deg)" : "rotate(90deg)", transition: "transform var(--dur) var(--ease)" }}>▸</span>
-                  <span style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
-                </div>
-              );
-            }
-            const inPane = this.isOpen(en.rel, s);
-            const dirty = s.paneDirty[en.rel];
-            return (
-              <div key={en.rel} className="hv04 sz-row-in" onClick={() => this.openFile(en.rel)}
-                onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: false } }); }}
-                style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
-                <FileIcon rel={en.rel} size={14} />
-                <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
-                <div style={{ flex: 1 }} />
-                {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
-              </div>
-            );
-          })}
+          <div className="treeHdr" style={{ display: "flex", alignItems: "center", padding: "4px 8px 6px 16px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ws.name.toUpperCase()}</span>
+            <div style={{ flex: 1 }} />
+            {/* 루트에 새 파일·폴더 — 헤더 아이콘은 늘 은은히 보인다(트리가 비었을 때도 눌러야 하므로) */}
+            <div className="treeActAlways" style={{ flex: "none", display: "flex", gap: 1 }}>
+              {this.newFileIconBtn("")}
+              {this.newFolderIconBtn("")}
+            </div>
+          </div>
+          {/* 루트에 새로 만드는 중이면 헤더 바로 아래 입력칸 */}
+          {te && te.kind !== "rename" && te.rel === "" && this.renderTreeInput(0, te.kind === "newFolder")}
+          {rows}
           {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "var(--fg-dim2)" }}>{t("flowtree.truncated")}</div>}
         </div>
       );
@@ -6001,7 +6295,9 @@ ${(r.output || "").slice(0, 2000)}`;
       if (tabsHere.length === 0 || !activeRel) {
         return (
           <div key={"empty" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
-            onMouseDown={() => { this._focusSlot = si; }}>
+            onMouseDown={() => { this._focusSlot = si; }}
+            onDragOver={e => { if (this._dragTab) e.preventDefault(); }}
+            onDrop={e => { e.preventDefault(); const d = this._dragTab; this._dragTab = null; if (d) this.moveTab(d.slot, d.rel, si); }}>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--fg-dim3)" }}>
               {window.schutz && !s.workspace ? (
                 <>
@@ -6027,7 +6323,9 @@ ${(r.output || "").slice(0, 2000)}`;
       const isReal = realFile && !isImg && !isMdPrev;
       return (
         <div key={"slot" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
-          onMouseDown={() => { this._focusSlot = si; }}>
+          onMouseDown={() => { this._focusSlot = si; }}
+          onDragOver={e => { if (this._dragTab && this._dragTab.slot !== si) e.preventDefault(); }}
+          onDrop={e => { const d = this._dragTab; if (!d || d.slot === si) return; e.preventDefault(); this._dragTab = null; this.moveTab(d.slot, d.rel, si); }}>
           {this.renderTabStrip(si, tabsHere, activeRel)}
           {this.parsePreviewKey(activeRel) ? (
             <PreviewPane key={activeRel} url={this.parsePreviewKey(activeRel)!} />
@@ -6069,6 +6367,8 @@ ${(r.output || "").slice(0, 2000)}`;
       <div style={{ flex: "none", height: 34, display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--w05)", background: "var(--bg-panel)" }}>
         <div className="sz-tabstrip"
           onWheel={e => { const el = e.currentTarget; if (e.deltaY && el.scrollWidth > el.clientWidth) el.scrollLeft += e.deltaY; }}
+          onDragOver={e => { if (this._dragTab) e.preventDefault(); }}
+          onDrop={e => { const d = this._dragTab; if (!d) return; e.preventDefault(); this._dragTab = null; if (d.slot !== si) this.moveTab(d.slot, d.rel, si); }}
           style={{ flex: 1, display: "flex", alignItems: "stretch", overflowX: "auto", minWidth: 0 }}>
           {tabsHere.map(rel => {
             const on = rel === activeRel;
@@ -6116,6 +6416,41 @@ ${(r.output || "").slice(0, 2000)}`;
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: lock.color, animation: "szPulse 1.1s ease-in-out infinite" }} />{t("sc4.agentWorking", { name: lock.name })}
           </span>
         )}
+        {/* 편집기 분할 — 오른쪽 끝. 아이콘은 **누르면 될 모양**을 보여준다:
+            1분할→2분할 그림, 2분할→4분할(2×2) 그림, 4분할→한 칸으로 되돌아가는 그림.
+            그래야 다음에 무엇이 되는지 눌러 보기 전에 안다. */}
+        <button className="hv05" title={t(s.layout === 1 ? "editor.split" : s.layout === 2 ? "editor.split4" : "editor.splitReset")}
+          onClick={() => { if (s.layout >= 4) this.setLayout(1); else this.splitActiveEditor(si); }}
+          style={{ flex: "none", alignSelf: "center", width: 24, height: 22, marginRight: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", borderRadius: 5, color: "var(--fg-sub2)", background: "transparent", border: "none" }}>
+          {/* 획을 지웠다 그리지 않고 **전부 남겨 둔 채** 투명도·스케일만 바꾼다 —
+              그래야 선이 자라나고 사라지며 부드럽게 넘어간다(툭 갈아끼우지 않는다). */}
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1.3" />
+            {/* 세로 나눔선 — 1·2분할에서 보이고, 되돌리기(4분할)에선 접힌다 */}
+            <path d="M8 2.5v11" style={{
+              opacity: s.layout >= 4 ? 0 : 1,
+              transform: s.layout >= 4 ? "scaleY(0)" : "scaleY(1)",
+              transformBox: "fill-box", transformOrigin: "center",
+              transition: "opacity var(--dur) var(--ease), transform var(--dur) var(--ease)",
+            }} />
+            {/* 가로 나눔선 — 2분할일 때만. 가운데에서 좌우로 자라난다 */}
+            <path d="M1.5 8h13" style={{
+              opacity: s.layout === 2 ? 1 : 0,
+              transform: s.layout === 2 ? "scaleX(1)" : "scaleX(0)",
+              transformBox: "fill-box", transformOrigin: "center",
+              transition: "opacity var(--dur) var(--ease), transform var(--dur) var(--ease)",
+            }} />
+            {/* 되돌리기 화살표 — 4분할에서만 떠오른다 */}
+            <g style={{
+              opacity: s.layout >= 4 ? 1 : 0,
+              transform: s.layout >= 4 ? "scale(1)" : "scale(.6)",
+              transformBox: "fill-box", transformOrigin: "center",
+              transition: "opacity var(--dur) var(--ease), transform var(--dur) var(--ease-emph)",
+            }}>
+              <path d="M9.8 6.2 6.4 8l3.4 1.8" /><path d="M6.4 8h3.2" />
+            </g>
+          </svg>
+        </button>
       </div>
     );
   }
@@ -6341,17 +6676,83 @@ ${(r.output || "").slice(0, 2000)}`;
         );
   }
 
+  /** 리뷰 발견 카드 한 장 — 제안(Proposal)과 달리 편집 패치가 없다. 심각도 색 + 닫기만. */
+  renderFindingCard(f: Finding) {
+    const sev: Record<Finding["severity"], [string, string]> = {
+      high: [t("review.sevHigh"), "#C97B7B"], med: [t("review.sevMed"), "#C4A882"], low: [t("review.sevLow"), "var(--fg-sub2)"],
+    };
+    const [sl, sc] = sev[f.severity];
+    return (
+      <div key={f.id} className="sz-pop" style={{ position: "relative", background: "var(--bg-card)", border: "1px solid var(--w07)", borderRadius: 10, overflow: "hidden" }}>
+        <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: sc, zIndex: 2 }} />
+        <div style={{ padding: "9px 12px 9px 15px" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+            <span style={{ flex: "none", fontSize: 9.5, fontWeight: 600, color: sc, background: sc + "1F", borderRadius: 4, padding: "0 6px", lineHeight: "15px" }}>{sl}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file}{f.line != null ? ":" + f.line : ""}</span>
+            <div style={{ flex: 1 }} />
+            <button className="hv05" title={t("review.dismiss")} onClick={() => this.setState(st => ({ reviewFindings: st.reviewFindings.filter(x => x.id !== f.id) }))}
+              style={{ flex: "none", width: 18, height: 18, lineHeight: "16px", fontSize: 12, cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "1px solid var(--w10)" }}>✕</button>
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.45, color: "var(--fg)", marginTop: 5, fontFamily: SUIT, fontWeight: 500 }}>{f.summary}</div>
+          {f.detail && <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-sub2)", marginTop: 3, fontFamily: SUIT }}>{f.detail}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  /** 수동 리뷰 — 현재 변경 diff 를 독립 패스로 점검한다. unstaged 없으면 staged 를 본다. */
+  async reviewChanges() {
+    const root = this.state.workspace?.root;
+    if (!root || !window.schutz) { this.toast("info", t("review.noDiff")); return; }
+    if (this.state.reviewBusy) return;
+    this.setState({ reviewBusy: true });
+    try {
+      let d = await window.schutz.git(root, "diff", { staged: false }) as any;
+      let patch = d && d.ok ? String(d.patch || "") : "";
+      let truncated = !!(d && d.truncated);
+      if (!patch.trim()) {                              // 워킹트리가 깨끗하면 스테이지된 것을 본다
+        d = await window.schutz.git(root, "diff", { staged: true }) as any;
+        patch = d && d.ok ? String(d.patch || "") : "";
+        truncated = !!(d && d.truncated);
+      }
+      if (!patch.trim()) { this.toast("info", t("review.noDiff")); return; }
+      const findings = await this.runReviewPass(patch);
+      this.setState({ reviewFindings: findings });
+      if (truncated) this.toast("info", t("review.truncated"));
+      if (findings.length === 0) this.toast("ok", t("review.empty"));
+    } finally {
+      this.setState({ reviewBusy: false });
+    }
+  }
+
   renderProposals() {
     const s = this.state;
     const pending = s.proposals.filter(p => p.status === "pending").length;
+    const findings = [...s.reviewFindings].sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{t("agent.review")}</span>
           {s.proposals.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "var(--w06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.proposals.length}</span>}
+          <div style={{ flex: 1 }} />
+          <button className="hv08" title={t("review.button")} disabled={s.reviewBusy} onClick={() => void this.reviewChanges()}
+            style={{ flex: "none", height: 22, padding: "0 9px", fontSize: 10.5, fontFamily: SUIT, cursor: s.reviewBusy ? "default" : "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w10)", opacity: s.reviewBusy ? 0.6 : 1 }}>
+            {s.reviewBusy ? t("review.running") : t("review.button")}
+          </button>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {s.proposals.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>{t("agent.reviewEmpty")}</div>}
+          {findings.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 4, borderBottom: "1px dashed var(--w08)", marginBottom: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--fg-sub2)" }}>{t("review.title")}</span>
+                <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{t("review.foundN", { n: findings.length })}</span>
+                <div style={{ flex: 1 }} />
+                <button className="hv05" onClick={() => this.setState({ reviewFindings: [] })} style={{ fontSize: 10, cursor: "pointer", border: "none", background: "transparent", color: "var(--fg-dim)" }}>{t("review.dismiss")}</button>
+              </div>
+              {findings.map(f => this.renderFindingCard(f))}
+            </div>
+          )}
+          {s.proposals.length === 0 && findings.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>{t("agent.reviewEmpty")}</div>}
           {pending > 1 && (
             <div style={{ display: "flex", gap: 8 }}>
               <button className="hvAccent" onClick={() => s.proposals.filter(p => p.status === "pending").forEach(p => void this.acceptProposal(p.id))} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("misc.acceptAll")}</button>
@@ -7001,7 +7402,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
   private static OVERLAY_KEY: Record<string, string> = {
     aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
-    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", pluginOpen: "plugins", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
+    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", pluginOpen: "plugins", cloudOpen: "cloud", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
     extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
   };
   /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
@@ -7667,7 +8068,7 @@ ${(r.output || "").slice(0, 2000)}`;
     }));
   }
 
-  // ── 플러그인 창작마당 ────────────────────────────────────────────────────────
+  // ── 커넥터 ──────────────────────────────────────────────────────────────────
   // Claude Code 플러그인 하나가 스킬·명령·MCP 서버를 함께 들고 온다. 그래서 "MCP 를 손으로
   // 등록하는 것"(비공식)과 달리, 여기서 켜는 것은 공식 카탈로그에서 고른 묶음이다.
   // 화면은 VS Code 확장 패널과 같은 어법으로 — 검색 · 분류 · 카드 · 켬/끔.
@@ -7686,7 +8087,209 @@ ${(r.output || "").slice(0, 2000)}`;
     void this.refreshPlugins();
   }
 
-  /** 카탈로그에서 직접 받는다. 받자마자 켜 준다 — 창작마당에서 "설치" 는 곧 "쓰겠다" 다. */
+  // ── 클라우드 위임(Codex Cloud) ──────────────────────────────────────────────
+  // 로컬 codex CLI 로 원격 태스크를 넘기고 상태를 폴링한다. 저장소에 연결된 클라우드 환경이
+  // 미리 있어야 하며, 없으면 안내로 돌린다(가장 흔한 경우). PR 은 Codex Cloud 가 직접 연다.
+  private _cloudPoll: ReturnType<typeof setInterval> | null = null;
+
+  private cloudEnv(): string { try { return localStorage.getItem("schutz.cloudEnv") || ""; } catch { return ""; } }
+  private setCloudEnv(v: string) { try { localStorage.setItem("schutz.cloudEnv", v); } catch { /* */ } this.forceUpdate(); }
+
+  openCloud() {
+    this.cancelClose("cloud");
+    this.setState({ cloudOpen: true });
+    void this.refreshCloudTasks();
+    this.startCloudPoll();
+  }
+
+  /** 원격 목록 + 로컬 추적본을 합쳐 cloudTasks 로. 원격이 진실, 로컬은 재시작 복원분. */
+  async refreshCloudTasks() {
+    if (!window.schutz?.codexCloud) return;
+    try {
+      const r = await window.schutz.codexCloud("list", {});
+      const byId = new Map<string, CloudTask>();
+      for (const t of (r.local || [])) byId.set(t.id, { id: t.id, prompt: t.prompt || "", env: t.env, status: t.status || "running", createdAt: t.createdAt || 0, raw: t.raw });
+      for (const t of (r.remote || [])) {  // 원격 필드는 형식이 유동적이라 방어적으로 읽는다
+        const id = String(t.id || t.task_id || t.taskId || "");
+        if (!id) continue;
+        const prev = byId.get(id);
+        const status = String(t.status || t.state || prev?.status || "running");
+        byId.set(id, { id, prompt: prev?.prompt || String(t.prompt || t.title || ""), env: prev?.env ?? null, status, createdAt: prev?.createdAt || 0, raw: prev?.raw });
+      }
+      const tasks = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
+      this.setState({ cloudTasks: tasks });
+    } catch { /* 목록 실패는 조용히 — 패널은 그대로 */ }
+  }
+
+  private startCloudPoll() {
+    if (this._cloudPoll) return;
+    // 진행 중 태스크가 있을 때만 주기적으로 상태를 확인한다(롱폴 아님, 짧은 호출).
+    this._cloudPoll = setInterval(() => {
+      if (!this.state.cloudOpen) { this.stopCloudPoll(); return; }
+      const running = this.state.cloudTasks.filter(t => t.status === "running");
+      if (!running.length) return;
+      running.slice(0, 3).forEach(t => void this.checkCloud(t.id, true));
+    }, 12000);
+  }
+  private stopCloudPoll() { if (this._cloudPoll) { clearInterval(this._cloudPoll); this._cloudPoll = null; } }
+
+  /** 프롬프트를 클라우드에 넘긴다. env 없으면 안내, 실패 사유는 사람 말로 토스트. */
+  async dispatchCloud() {
+    if (!window.schutz?.codexCloud) return;
+    const root = this.state.workspace?.root;
+    if (!root) { this.toast("info", t("cloud.needProject")); return; }
+    const prompt = this.state.cloudPrompt.trim();
+    if (!prompt) return;
+    const env = this.cloudEnv().trim();
+    this.setState({ cloudBusy: "dispatch" });
+    try {
+      const r = await window.schutz.codexCloud("dispatch", { prompt, env, cwd: root });
+      if (r.ok) {
+        this.setState({ cloudPrompt: "" });
+        this.toast("ok", t("cloud.dispatched"));
+        await this.refreshCloudTasks();
+        this.startCloudPoll();
+      } else {
+        this.toast("error", this.cloudReasonText(r.reason) || t("cloud.failed"));
+      }
+    } finally {
+      this.setState({ cloudBusy: "" });
+    }
+  }
+
+  private cloudReasonText(reason?: string | null): string {
+    if (reason === "not-installed") return t("cloud.notInstalled");
+    if (reason === "auth-missing") return t("cloud.authMissing");
+    if (reason === "env-not-configured") return t("cloud.envMissing");
+    return "";
+  }
+
+  async checkCloud(id: string, quiet = false) {
+    if (!window.schutz?.codexCloud) return;
+    try {
+      const r = await window.schutz.codexCloud("status", { id });
+      if (r.ok && r.state) {
+        this.setState(s => ({ cloudTasks: s.cloudTasks.map(t2 => t2.id === id ? { ...t2, status: r.state! } : t2) }));
+      } else if (!quiet && r.reason) {
+        this.toast("info", this.cloudReasonText(r.reason));
+      }
+    } catch { /* */ }
+  }
+
+  async applyCloud(id: string) {
+    if (!window.schutz?.codexCloud || this.state.cloudBusy) return;
+    const root = this.state.workspace?.root;
+    if (!root) { this.toast("info", t("cloud.needProject")); return; }
+    this.setState({ cloudBusy: id });
+    try {
+      const r = await window.schutz.codexCloud("apply", { id, cwd: root });
+      if (r.ok) {
+        this.setState(s => ({ cloudTasks: s.cloudTasks.map(t2 => t2.id === id ? { ...t2, status: "applied" } : t2) }));
+        this.toast("ok", t("cloud.applied"));
+        await this.loadGit();              // 당겨온 변경을 git 패널에 반영
+        void this.reviewChanges();         // 적용된 diff 를 독립 리뷰어로 한 번 훑는다
+      } else {
+        this.toast("error", this.cloudReasonText(r.reason) || t("cloud.failed"));
+      }
+    } finally {
+      this.setState({ cloudBusy: "" });
+    }
+  }
+
+  async stopCloud(id: string) {
+    if (!window.schutz?.codexCloud) return;
+    await window.schutz.codexCloud("stop", { id });
+    this.setState(s => ({ cloudTasks: s.cloudTasks.map(t2 => t2.id === id ? { ...t2, status: "stopped" } : t2) }));
+  }
+
+  async forgetCloud(id: string) {
+    if (!window.schutz?.codexCloud) return;
+    await window.schutz.codexCloud("forget", { id });
+    this.setState(s => ({ cloudTasks: s.cloudTasks.filter(t2 => t2.id !== id) }));
+  }
+
+  /** 클라우드 위임 패널 — 환경 ID · 프롬프트 · 태스크 목록. */
+  renderCloud() {
+    if (!this.state.cloudOpen && !this.isClosing("cloud")) return null;
+    const s = this.state;
+    const close = () => { this.stopCloudPoll(); this.closeOverlay("cloud", { cloudOpen: false }); };
+    const env = this.cloudEnv();
+    const stateLabel: Record<string, [string, string]> = {
+      running: [t("cloud.stateRunning"), "#C4A882"], done: [t("cloud.stateDone"), "var(--ok)"],
+      failed: [t("cloud.stateFailed"), "#C97B7B"], applied: [t("cloud.stateApplied"), "var(--accent-hi)"],
+      stopped: [t("cloud.stateStopped"), "var(--fg-dim)"],
+    };
+    const inputStyle: React.CSSProperties = { width: "100%", background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8, padding: "8px 11px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none" };
+    const btnMini = (label: string, onClick: () => void, opts?: { busy?: boolean; danger?: boolean; accent?: boolean }) => (
+      <button className="hv08" disabled={opts?.busy} onClick={onClick}
+        style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontFamily: SUIT, cursor: opts?.busy ? "default" : "pointer", borderRadius: 6,
+          border: `1px solid ${opts?.accent ? "transparent" : "var(--w10)"}`, background: opts?.accent ? "var(--accent)" : "transparent",
+          color: opts?.danger ? "#CE9A9A" : opts?.accent ? "var(--on-accent)" : "var(--fg-sub)", opacity: opts?.busy ? 0.6 : 1 }}>{label}</button>
+    );
+
+    const body = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg-sub2)", lineHeight: 1.55 }}>{t("cloud.intro")}</div>
+
+        {/* 환경 ID */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <label style={{ fontSize: 10.5, color: "var(--fg-dim)", letterSpacing: 0.5 }}>{t("cloud.envLabel")}</label>
+          <input value={env} onChange={e => this.setCloudEnv(e.target.value)} placeholder={t("cloud.envPlaceholder")}
+            spellCheck={false} style={{ ...inputStyle, fontFamily: MONO, height: 32 }} />
+        </div>
+
+        {/* 프롬프트 + 위임 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <textarea value={s.cloudPrompt} onChange={e => this.setState({ cloudPrompt: e.target.value })}
+            placeholder={t("cloud.promptPlaceholder")} rows={3}
+            style={{ ...inputStyle, resize: "vertical", minHeight: 60, lineHeight: 1.5 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, fontSize: 10.5, color: "var(--fg-dim2)" }}>{!env ? t("cloud.setupGuide") : ""}</div>
+            <button className="hvAccent" disabled={s.cloudBusy === "dispatch" || !s.cloudPrompt.trim()} onClick={() => void this.dispatchCloud()}
+              style={{ flex: "none", height: 30, padding: "0 14px", fontSize: 12, fontWeight: 600, fontFamily: SUIT, cursor: s.cloudBusy === "dispatch" || !s.cloudPrompt.trim() ? "default" : "pointer",
+                borderRadius: 8, border: "none", background: "var(--accent)", color: "var(--on-accent)", opacity: s.cloudBusy === "dispatch" || !s.cloudPrompt.trim() ? 0.55 : 1 }}>
+              {s.cloudBusy === "dispatch" ? t("cloud.dispatching") : t("cloud.delegate")}
+            </button>
+          </div>
+        </div>
+
+        {/* 태스크 목록 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--fg-sub2)", letterSpacing: 0.5 }}>{t("cloud.tasks")}</span>
+          <div style={{ flex: 1 }} />
+          <button className="hv05" onClick={() => void this.refreshCloudTasks()} style={{ fontSize: 10.5, cursor: "pointer", border: "none", background: "transparent", color: "var(--fg-dim)" }}>{t("cloud.refresh")}</button>
+        </div>
+        <div style={{ display: "grid", gap: 7, maxHeight: "40vh", overflowY: "auto", paddingRight: 2 }}>
+          {s.cloudTasks.length === 0 && <div style={{ fontSize: 11.5, color: "var(--fg-dim)", padding: "6px 2px" }}>{t("cloud.noTasks")}</div>}
+          {s.cloudTasks.map(task => {
+            const [sl, sc] = stateLabel[task.status] || [task.status, "var(--fg-dim)"];
+            const busy = s.cloudBusy === task.id;
+            const prUrl = (/https?:\/\/\S+/.exec(task.raw || "") || [])[0];
+            return (
+              <div key={task.id} className="sz-in" style={{ display: "flex", flexDirection: "column", gap: 7, padding: "9px 11px", borderRadius: 9, background: "var(--bg-card)", border: "1px solid var(--w06)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ flex: "none", fontSize: 9.5, fontWeight: 600, color: sc, background: sc + "1F", borderRadius: 4, padding: "1px 7px" }}>{sl}</span>
+                  <span style={{ fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: SUIT }}>{task.prompt || task.id}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 9.5, color: "var(--fg-dim2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.id}</span>
+                  <div style={{ flex: 1 }} />
+                  {prUrl && btnMini(t("cloud.openPr"), () => void window.schutz?.openExternal(prUrl))}
+                  {task.status === "running" && btnMini(t("cloud.check"), () => void this.checkCloud(task.id))}
+                  {(task.status === "done" || task.status === "running") && btnMini(busy ? t("cloud.applying") : t("cloud.apply"), () => void this.applyCloud(task.id), { busy, accent: true })}
+                  {task.status === "running" && btnMini(t("cloud.stop"), () => void this.stopCloud(task.id), { danger: true })}
+                  {task.status !== "running" && btnMini(t("cloud.forget"), () => void this.forgetCloud(task.id))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+    return this.modalShell("cloud", t("cloud.title"), close, body, 640);
+  }
+
+  /** 카탈로그에서 직접 받는다. 받자마자 켜 준다 — 여기서 "설치" 는 곧 "쓰겠다" 다. */
   private async installPlugin(name: string) {
     if (!window.schutz?.pluginInstall || this.state.pluginBusy) return;
     this.setState({ pluginBusy: name });
@@ -7715,7 +8318,7 @@ ${(r.output || "").slice(0, 2000)}`;
     finally { this.setState({ pluginBusy: "" }); }
   }
 
-  /** 창작마당 — 검색·분류·카드. 설치돼 있는 것만 켤 수 있다. */
+  /** 커넥터 목록 — 검색·분류·카드. 설치돼 있는 것만 켤 수 있다. */
   renderPlugins() {
     if (!this.state.pluginOpen && !this.isClosing("plugins")) return null;
     const s = this.state;
@@ -7724,7 +8327,8 @@ ${(r.output || "").slice(0, 2000)}`;
     const cats = [...new Set(s.plugins.map(p => p.category).filter((c): c is string => !!c))].sort();
     const list = s.plugins
       .filter(p => !s.pluginCat || p.category === s.pluginCat)
-      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q) || (p.author || "").toLowerCase().includes(q))
+      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.displayName || "").toLowerCase().includes(q)
+        || (p.description || "").toLowerCase().includes(q) || (p.author || "").toLowerCase().includes(q))
       // 설치된 것 먼저 — 지금 쓸 수 있는 게 위로 온다
       .sort((a, b) => (Number(b.installed) - Number(a.installed)) || a.name.localeCompare(b.name));
     const shown = list.slice(0, 80);
@@ -7737,6 +8341,27 @@ ${(r.output || "").slice(0, 2000)}`;
     const badge = (text: string) => (
       <span style={{ fontSize: 9.5, color: "var(--fg-dim)", border: "1px solid var(--w10)", borderRadius: 4, padding: "0 5px", lineHeight: "14px" }}>{text}</span>
     );
+    // 로고 — 저장소 소유자의 GitHub 아바타. 카탈로그에 아이콘 필드가 없어서 이렇게 얻는다.
+    // 못 얻거나 못 불러오면 이름에서 뽑은 모노그램 타일이 그대로 드러난다(아래에 깔아 둔다).
+    const logo = (p: PluginInfo) => {
+      const label = p.displayName || p.name;
+      let h = 0;
+      for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) % 360;
+      return (
+        <div style={{ flex: "none", position: "relative", width: 30, height: 30, borderRadius: 7, overflow: "hidden",
+          background: `hsl(${h} 32% 46% / 0.22)`, border: "1px solid var(--w06)",
+          display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: `hsl(${h} 38% 62%)`, fontFamily: SUIT }}>
+            {label.replace(/[^A-Za-z0-9가-힣]/g, "").charAt(0).toUpperCase() || "?"}
+          </span>
+          {p.iconUrl && (
+            <img src={p.iconUrl} alt="" loading="lazy"
+              onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          )}
+        </div>
+      );
+    };
 
     const body = (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -7756,9 +8381,10 @@ ${(r.output || "").slice(0, 2000)}`;
           {shown.map(p => (
             <div key={p.marketplace + "/" + p.name} className="sz-in" style={{ display: "flex", alignItems: "flex-start", gap: 10,
               padding: "9px 11px", borderRadius: 9, background: "var(--bg-card)", border: "1px solid var(--w06)" }}>
+              {logo(p)}
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.name}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.displayName || p.name}</span>
                   {p.author && <span style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>{p.author}</span>}
                   {p.category && badge(p.category)}
                   {p.installed && p.skills > 0 && badge(t("plug.nSkills", { n: p.skills }))}
@@ -8634,6 +9260,18 @@ ${(r.output || "").slice(0, 2000)}`;
               ))}
             </div>
           )}
+          {/* 커밋 전 자동 리뷰 — 자율성 정책과 독립. 기본 off, 켤 때만 커밋을 가로챈다. */}
+          <div style={{ height: 1, background: "var(--w06)", margin: "12px 0" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, color: "var(--fg-code)" }}>{t("review.onCommit")}</div>
+              <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", lineHeight: 1.5, marginTop: 2 }}>{t("review.onCommitHint")}</div>
+            </div>
+            <button onClick={() => this.applyAutonomy({ reviewOnCommit: !au.reviewOnCommit })}
+              style={{ flex: "none", width: 36, height: 20, borderRadius: 10, cursor: "pointer", border: "none", background: au.reviewOnCommit ? "var(--accent)" : "var(--w12)", position: "relative", transition: "background var(--dur) var(--ease)" }}>
+              <span style={{ position: "absolute", top: 2.5, left: au.reviewOnCommit ? 18.5 : 2.5, width: 15, height: 15, borderRadius: "50%", background: au.reviewOnCommit ? "var(--on-accent)" : "var(--fg-sub2)", transition: "left var(--dur) var(--ease)" }} />
+            </button>
+          </div>
         </div>
       </div>
     );
