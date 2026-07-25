@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.0.7] — A second pair of eyes
+
+Schutz can now review its own work before you commit it, hand long tasks to the cloud, and reach the skills and connectors you already set up elsewhere. Along the way, three controls that looked like features but did nothing were fixed.
+
+### Review
+
+- **Changes get an independent review.** The reviewer sees the diff and nothing else — no conversation history, no tools, no project instructions. Reusing the agent that just wrote the code makes it lenient about its own work, so this is a separate pass with no shared context. Findings appear as their own cards: they are advice, so they can be dismissed, and they never sit in the same card as an editable proposal.
+- **Optionally, review before every commit.** Off by default. When on, committing runs the review first and shows what it found; you proceed or cancel. If the reviewer itself fails, it neither blocks silently nor commits silently — it says so and leaves the decision to you.
+
+### Cloud
+
+- **Delegate a task to Codex Cloud.** Long work no longer has to occupy the local session. Tasks are dispatched, tracked and pulled back through the Codex CLI already on your machine, so there is no new sign-in. Cloud opens the pull request itself. If no cloud environment is linked to the repository — the usual reason this fails — it says where to link one instead of showing raw output.
+
+### Connectors
+
+- **Connectors carry logos and the name matches Claude Desktop.** The catalog ships no icons, so the repository owner's avatar stands in; 226 of 244 entries resolve, and the rest fall back to a monogram. Interrupted downloads no longer appear in the list as `.name.tmp`.
+
+### Editor
+
+- **New file and new folder work.** Clicking them did nothing at all, because Electron returns null from the prompt they relied on. Both now use an inline input in the tree, and hovering a folder reveals the create buttons. Rename was broken the same way and is fixed with it.
+- **Splitting the editor goes to four panes.** The split button cycles one → two → four → back, and its icon shows what the next click will produce. Tabs can be dragged between splits. `Ctrl+Alt+1/2/4` work now; the menu advertised those shortcuts but nothing ever handled them.
+- **The status bar language follows the file.** It read stale after switching tabs because it only updated when an editor took focus. Clicking it changes the language mode.
+
+### Crashes
+
+- **Report an error in one click.** The crash screen fills in the stack, version and environment and opens the report page. Nothing is sent on its own — a stack can carry your file paths, so you see what goes out before it does.
+
 ## [0.0.6] — Schutz reaches into the engine
 
 Schutz can now drive a creative engine, not just a codebase. OVERDARE Studio is the first one it speaks to, and you can watch what it builds instead of reading about it. Chat learned to take a picture.
