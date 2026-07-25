@@ -18,6 +18,7 @@ export default defineConfig({
     include: [
       "src/engine/**/*.test.ts",
       "src/gameEngine/**/*.test.ts",
+      "src/review/**/*.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",
