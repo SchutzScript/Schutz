@@ -20,9 +20,14 @@ interface SkillInfo {
   file: string;
 }
 
-/** 플러그인 — 창작마당 카탈로그 항목(설치 여부·무엇을 들고 오는지 포함) */
+/** 커넥터 한 개 — 카탈로그 항목(설치 여부·무엇을 들고 오는지 포함).
+ *  타입 이름은 실체(플러그인)를 따르고, 화면에 보이는 말만 "커넥터" 다. */
 interface PluginInfo {
   name: string;
+  /** 사람이 읽는 이름. 없으면 name(슬러그)을 쓴다. */
+  displayName?: string;
+  /** 로고 — 저장소 소유자의 GitHub 아바타. 못 뽑으면 빈 문자열(화면에서 모노그램). */
+  iconUrl?: string;
   description: string;
   author?: string;
   category?: string;
@@ -157,7 +162,7 @@ interface SchutzApi {
   skillsList(root: string | null): Promise<{ ok: boolean; error?: string; skills: SkillInfo[] }>;
   /** 스킬 본문 — 모델이 고른 것만 이때 읽는다(프롬프트 비대화 방지). */
   skillRead(file: string): Promise<{ ok: boolean; error?: string; name?: string; body?: string }>;
-  /** 플러그인 창작마당 — 카탈로그 + 설치·활성 상태 */
+  /** 커넥터 목록 — 카탈로그 + 설치·활성 상태 */
   pluginList(): Promise<{ ok: boolean; error?: string; plugins: PluginInfo[] }>;
   pluginSetEnabled(name: string, on: boolean): Promise<{ ok: boolean; error?: string }>;
   /** 카탈로그에서 직접 받아 설치한다(git clone). Schutz 몫의 디렉터리에 둔다. */
@@ -169,6 +174,16 @@ interface SchutzApi {
   engineInstalledPath(spec: { id: string; entry: string }): Promise<string | null>;
   /** 설치 진행 로그 구독. 해제 함수를 반환한다. */
   onEngineInstallProgress(cb: (d: { id: string; phase: string; line: string }) => void): () => void;
+  /** 외부 브라우저로 URL 열기(http/https 만 허용) */
+  openExternal(url: string): Promise<{ ok: boolean }>;
+  /** Codex Cloud 위임 — 로컬 codex CLI 로 원격 태스크 dispatch/list/status/apply/stop.
+   *  실패 시 reason 으로 "not-installed" | "auth-missing" | "env-not-configured" 를 돌려준다. */
+  codexCloud(action: "dispatch", payload: { prompt: string; env?: string; cwd?: string }): Promise<{ ok: boolean; id?: string; task?: any; raw?: string; reason?: string | null; error?: string; timedOut?: boolean }>;
+  codexCloud(action: "list", payload?: {}): Promise<{ ok: boolean; remote: any[]; local: any[]; reason?: string | null }>;
+  codexCloud(action: "status", payload: { id: string }): Promise<{ ok: boolean; state?: string; text?: string; reason?: string | null; error?: string }>;
+  codexCloud(action: "apply", payload: { id: string; cwd?: string }): Promise<{ ok: boolean; output?: string; reason?: string | null; error?: string }>;
+  codexCloud(action: "stop", payload?: { id?: string }): Promise<{ ok: boolean; killed?: number }>;
+  codexCloud(action: "forget", payload: { id: string }): Promise<{ ok: boolean }>;
   cliLogin(id: string): void;
   cliRun(opts: { agent?: string; cwd?: string; prompt: string; resume?: string; continue?: boolean }): void;
   cliStop(): void;
