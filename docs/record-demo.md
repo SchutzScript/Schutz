@@ -56,7 +56,13 @@ merges with it and the window stops looking like an object. A mid-tone Sage grad
 (the brand colour, which is background-only by convention) gives the contrast that makes it
 float. Push the shadow harder as the background gets lighter.
 
-Current numbers: window 880px wide, 40px margin, 960×623 canvas.
+Current numbers: window 1600px wide, 72px margin, 1744×1131 canvas.
+
+Compose at the **capture's native width**. The first cut downscaled 1600px frames to an 880px
+window, and on a HiDPI screen the result read as soft — the README shows the GIF at ~900px
+CSS, so a 960px-wide asset has no pixels to spare. Keeping the frames at 1600 makes it a 2×
+asset: same size on the page, real detail up close. Raise `maxWidth` in the screencast call if
+you need more than that; the source window here is 2340px.
 
 ## Encoding
 
@@ -71,7 +77,12 @@ Any GIF encoder works; the constraints that matter:
   long identical runs and LZW eats them. On this clip that was **2054 KB → 121 KB for the
   same 40 frames** — an IDE screen is ~99% static between frames, and writing it in full
   every time was the entire cost. That headroom is what pays for 28 fps.
-- **Keep it around 2 MB.** GitHub serves it on every README view.
+- **Keep it under ~3 MB.** GitHub serves it on every README view. At 1744×1131 with 388
+  frames this lands at 2.8 MB; the diff encoding is what keeps it there, since going 1.8×
+  wider only cost 2× the bytes rather than the 3.3× the pixel count would suggest.
+- **Copy `times.json` into the composed folder.** `compose.cjs` only writes PNGs, so if you
+  forget this the encoder silently falls back to a flat 70 ms per frame and the clip runs
+  long (27 s instead of 19 s) with every pause the same length as every fast beat.
 - Posterising the background to help LZW does **not** work: the encoder re-quantises anyway,
   so you get banding for nothing (measured: 2502 KB → 2595 KB).
 
