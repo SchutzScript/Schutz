@@ -1071,11 +1071,8 @@ function Say({ time, tk }: { time: number; tk: typeof THEME_TOKENS[string] }) {
           );
         })}
       </p>
-      {/* 명대사는 독일어로 두되 뜻은 준다 — 멋만 부리고 읽는 사람을 두고 가지 않는다 */}
-      <p style={{
-        fontSize: "clamp(12px,1.3vw,16px)", color: tk.fgDim, margin: "18px 0 0", letterSpacing: ".01em",
-        opacity: ease(seg(time, 7400, 8300)) * (1 - out),
-      }}>{t("open.saySub")}</p>
+      {/* 독일어 한 줄로 끝낸다. 예전엔 밑에 번역을 깔았는데, 자막이 붙는 순간
+          표어가 아니라 설명문이 된다 — 읽히는 대신 넘겨진다. */}
       </div>
     </div>
   );
