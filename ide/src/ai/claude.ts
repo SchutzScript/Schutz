@@ -4,6 +4,7 @@ import {
   getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
 import { getLang } from "../i18n";
+import { retryPlan, sleep } from "./retry";
 
 export type { ToolCall } from "./provider";
 
@@ -164,19 +165,37 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
 
   /** 웹/직접 fetch 경로 → `data:` JSON 문자열 스트림 */
   private async directDataLines(headers: Record<string, string>, body: any, signal?: AbortSignal): Promise<AsyncIterable<string>> {
-    let res: Response;
-    try {
-      res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal });
-    } catch (e) {
-      return (async function* () { yield "__ERRMSG__네트워크 오류: " + (e instanceof Error ? e.message : String(e)); })();
+    // 429·5xx·네트워크 오류는 잠깐 기다렸다 다시 보낸다. 재시도는 **응답 헤더를 받기
+    // 전까지만** — 스트림이 시작된 뒤라면 모델이 이미 도구를 부르게 했을 수 있어,
+    // 다시 보내면 같은 편집·명령이 두 번 실행된다. (정책·백오프는 retry.ts)
+    let res: Response | null = null;
+    let lastErr = "";
+    for (let attempt = 1; ; attempt++) {
+      let netErr = false;
+      try {
+        res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body), signal });
+      } catch (e) {
+        // 사용자가 멈춘 것은 실패가 아니다 — 재시도하지 않는다.
+        if (signal?.aborted) return (async function* () { yield "__ERRMSG__요청이 취소되었습니다."; })();
+        netErr = true; res = null;
+        lastErr = "네트워크 오류: " + (e instanceof Error ? e.message : String(e));
+      }
+      if (res && res.ok && res.body) break;
+      if (res) {
+        let detail = res.statusText;
+        try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
+        lastErr = "Claude API 오류 (" + res.status + "): " + detail;
+      }
+      const wait = retryPlan(
+        attempt,
+        { status: res?.status, networkError: netErr, retryAfter: res?.headers.get("retry-after") },
+        Date.now(), Math.random(),
+      );
+      if (wait === null) { const msg = lastErr; return (async function* () { yield "__ERRMSG__" + msg; })(); }
+      await sleep(wait, signal);
+      if (signal?.aborted) return (async function* () { yield "__ERRMSG__요청이 취소되었습니다."; })();
     }
-    if (!res.ok || !res.body) {
-      let detail = res.statusText;
-      try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
-      const status = res.status;
-      return (async function* () { yield "__ERRMSG__Claude API 오류 (" + status + "): " + detail; })();
-    }
-    const reader = res.body.getReader();
+    const reader = res!.body!.getReader();
     return (async function* () {
       const decoder = new TextDecoder();
       let buffer = "";
@@ -225,15 +244,74 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
 export const WORKSPACE_TOOLS: ToolDef[] = [
   {
     name: "list_files",
-    description: "워크스페이스의 파일 목록(상대 경로)을 반환한다.",
-    input_schema: { type: "object", properties: {}, required: [] },
+    description:
+      "워크스페이스의 파일 목록(상대 경로)을 반환한다. " +
+      "큰 저장소에서는 glob 으로 좁혀라 — 좁히지 않으면 앞부분만 돌려주고 잘렸다고 알린다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        glob: {
+          type: "string",
+          description: "쉼표로 구분한 glob 필터 (예: src/**/*.ts,*.json). 생략하면 전체.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "set_plan",
+    description:
+      "여러 단계가 필요한 일을 시작할 때 계획을 올린다. 사용자 화면의 계획 패널에 그대로 뜬다. " +
+      "단계를 끝낼 때마다 done 을 갱신해 다시 부르면 진행이 보인다. " +
+      "한두 번의 도구 호출로 끝나는 일에는 쓰지 않는다 — 짧은 일에 계획을 붙이면 소음이다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        steps: {
+          type: "array",
+          description: "계획 단계. 각 줄은 한 문장으로 짧게.",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "무엇을 하는 단계인지" },
+              done: { type: "boolean", description: "이미 끝났으면 true" },
+            },
+            required: ["label"],
+          },
+        },
+      },
+      required: ["steps"],
+    },
+  },
+  {
+    name: "search_files",
+    description:
+      "워크스페이스 전체에서 텍스트를 찾아 파일·줄번호·해당 줄을 돌려준다. " +
+      "낯선 코드에서 무언가가 어디에 정의·사용되는지 찾을 때 가장 먼저 쓸 도구다 — " +
+      "파일을 통째로 읽기 전에 이것으로 위치를 좁혀라.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "찾을 텍스트 (2글자 이상)" },
+        include: { type: "string", description: "포함할 파일 glob (쉼표 구분, 예: src/**/*.ts)" },
+        exclude: { type: "string", description: "제외할 파일 glob (쉼표 구분)" },
+        regex: { type: "boolean", description: "query 를 정규식으로 해석한다" },
+      },
+      required: ["query"],
+    },
   },
   {
     name: "read_file",
-    description: "워크스페이스의 파일 내용을 읽는다.",
+    description:
+      "워크스페이스의 파일 내용을 읽는다. 줄 번호가 붙어서 온다. " +
+      "큰 파일은 offset·limit 으로 필요한 구간만 읽어라 — 생략하면 앞부분만 오고 잘렸다고 알린다.",
     input_schema: {
       type: "object",
-      properties: { path: { type: "string", description: "워크스페이스 상대 경로" } },
+      properties: {
+        path: { type: "string", description: "워크스페이스 상대 경로" },
+        offset: { type: "number", description: "읽기 시작할 줄 번호 (1부터). 생략하면 1." },
+        limit: { type: "number", description: "읽을 줄 수. 생략하면 기본 상한까지." },
+      },
       required: ["path"],
     },
   },
@@ -312,6 +390,9 @@ export function schutzSystemPrompt(): string {
 사용자는 당신의 작업 과정을 실시간으로 지켜봅니다. 반드시 ${lang}(으)로, 간결하게 응답하고 계획을 먼저 밝히고 진행하세요.
 
 도구가 제공된 경우(워크스페이스 열림):
+- 단계가 여럿인 일은 set_plan으로 계획을 먼저 올리고, 한 단계를 끝낼 때마다 done을 갱신해 다시 부르세요. 사용자는 그 패널로 진행을 봅니다. 한두 번의 도구 호출로 끝나는 일에는 쓰지 마세요.
+- 낯선 코드를 파악할 때는 search_files로 먼저 위치를 좁히세요. 파일을 통째로 읽는 것보다 훨씬 빠르고 정확합니다.
+- 큰 파일은 read_file의 offset·limit으로 필요한 구간만 읽으세요. 결과가 잘렸다고 나오면 이어서 부르거나 범위를 좁히세요.
 - 파일을 고치기 전에 반드시 read_file로 현재 내용을 확인하세요.
 - 모든 편집은 propose_edit로 제안하세요. 직접 쓸 수 없으며, 사용자가 수락해야 반영됩니다.
 - find는 파일에 정확히 한 번 존재하는 텍스트여야 합니다. 여러 곳을 고치려면 제안을 나누세요.

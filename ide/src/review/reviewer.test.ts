@@ -2,11 +2,24 @@ import { describe, it, expect } from "vitest";
 import { buildReviewSystemPrompt, buildReviewUserPrompt, parseFindings, severityRank } from "./reviewer";
 
 describe("buildReviewSystemPrompt", () => {
-  it("격리: 인자 없이 고정 문자열 — 외부 값 보간 지점이 없다", () => {
+  it("격리: 같은 언어면 늘 같은 문자열 — 외부 값 보간 지점이 없다", () => {
     const p = buildReviewSystemPrompt();
     expect(p).toContain("JSON");
-    // diff·history·repo 같은 실제 값이 프롬프트에 절대 안 섞이도록, 이 함수는 순수 상수여야 한다.
+    // diff·history·repo 같은 실제 값이 프롬프트에 절대 안 섞여야 한다.
+    // 언어는 닫힌 집합이라 자유 문자열이 들어올 자리가 없다.
     expect(buildReviewSystemPrompt()).toBe(p);
+    expect(buildReviewSystemPrompt("ko")).toBe(p);
+  });
+
+  it("결과 언어를 지시한다 — UI 는 4개국어인데 리뷰만 늘 한국어로 오던 자리", () => {
+    expect(buildReviewSystemPrompt("en")).toContain("in English");
+    expect(buildReviewSystemPrompt("de")).toContain("auf Deutsch");
+    expect(buildReviewSystemPrompt("ja")).toContain("日本語");
+    expect(buildReviewSystemPrompt("ko")).toContain("한국어");
+  });
+
+  it("모르는 언어는 한국어로 떨어진다 — 지시가 통째로 빠지면 안 된다", () => {
+    expect(buildReviewSystemPrompt("zz" as any)).toBe(buildReviewSystemPrompt("ko"));
   });
 });
 

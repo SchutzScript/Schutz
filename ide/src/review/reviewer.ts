@@ -15,9 +15,24 @@ export interface Finding {
   detail?: string;
 }
 
-/** 리뷰어 시스템 프롬프트. 인자가 없다 — repo·history 를 절대 보간하지 않는다는 뜻이다.
- *  (테스트가 이 사실을 단언한다: 반환 문자열에 외부 값이 섞이면 격리가 깨진 것.) */
-export function buildReviewSystemPrompt(): string {
+/** 리뷰가 어느 말로 나올지. UI 가 4개국어인데 결과만 늘 한국어로 오던 것을 맞춘다.
+ *  **닫힌 집합**이다 — 자유 문자열을 받지 않는다(아래 격리 규칙 참고). */
+export type ReviewLang = "ko" | "en" | "de" | "ja";
+
+const ANSWER_IN: Record<ReviewLang, string> = {
+  ko: "summary 와 detail 은 한국어로 쓰세요.",
+  en: "Write summary and detail in English.",
+  de: "Schreiben Sie summary und detail auf Deutsch.",
+  ja: "summary と detail は日本語で書いてください。",
+};
+
+/** 리뷰어 시스템 프롬프트.
+ *
+ *  **repo·history·diff 는 절대 보간하지 않는다** — 그게 이 리뷰 패스를 독립적으로 만드는
+ *  근거다. 언어만 받는데, 값이 닫힌 집합이라 외부 문자열이 들어올 자리가 없다.
+ *  (테스트가 두 가지를 다 단언한다: 같은 언어면 항상 같은 문자열, 그리고 언어별로 다름.) */
+export function buildReviewSystemPrompt(lang: ReviewLang = "ko"): string {
+  const answer = ANSWER_IN[lang] ?? ANSWER_IN.ko;
   return [
     "당신은 깐깐한 코드 리뷰어입니다. 아래 통합 diff(unified diff)만 보고, 이 변경에서 실제로",
     "문제가 될 만한 것을 적대적으로 찾아냅니다. 변경되지 않은 코드나 diff 밖의 맥락은 추측하지 마세요.",
@@ -29,6 +44,7 @@ export function buildReviewSystemPrompt(): string {
     "출력은 오직 JSON 배열 하나. 설명·머리말·코드펜스 없이 순수 JSON 만.",
     "각 원소: {\"severity\":\"high|med|low\",\"file\":\"경로\",\"line\":정수(모르면 생략),\"summary\":\"한 줄 요약\",\"detail\":\"왜 문제인지\"}",
     "예: [{\"severity\":\"high\",\"file\":\"src/a.ts\",\"line\":42,\"summary\":\"널 역참조\",\"detail\":\"x 가 null 일 때 x.y 접근\"}]",
+    answer,
   ].join("\n");
 }
 

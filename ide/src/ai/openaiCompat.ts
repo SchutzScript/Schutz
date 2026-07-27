@@ -3,6 +3,7 @@ import {
   ProviderId, getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
 import { t } from "../i18n";
+import { retryPlan, sleep } from "./retry";
 
 export interface CompatConfig {
   id: ProviderId;
@@ -188,38 +189,51 @@ export class OpenAICompatProvider implements AgentProvider {
       return;
     }
 
-    let res: Response;
-    try {
-      res = await fetch(this.cfg.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer " + apiKey,
-        },
-        body: JSON.stringify({
-          model: req.model || getModelOverride(this.cfg.id) || this.cfg.defaultModel,
-          stream: true,
-          stream_options: { include_usage: true },
-          messages: this.toNative(req.transcript, req.system),
-          ...(this.toNativeTools(req.tools) ? { tools: this.toNativeTools(req.tools) } : {}),
-        }),
-        signal: req.signal,
-      });
-    } catch (e) {
-      yield { type: "error", message: t("oai.networkError", { detail: e instanceof Error ? e.message : String(e) }) };
-      yield { type: "done" };
-      return;
+    // 429·5xx·네트워크 오류는 잠깐 기다렸다 다시 보낸다 — 응답 헤더를 받기 전까지만.
+    // 스트림이 시작된 뒤 다시 보내면 모델이 이미 부른 도구가 두 번 실행될 수 있다.
+    let res: Response | null = null;
+    let lastErr = "";
+    for (let attempt = 1; ; attempt++) {
+      let netErr = false;
+      try {
+        res = await fetch(this.cfg.url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer " + apiKey,
+          },
+          body: JSON.stringify({
+            model: req.model || getModelOverride(this.cfg.id) || this.cfg.defaultModel,
+            stream: true,
+            stream_options: { include_usage: true },
+            messages: this.toNative(req.transcript, req.system),
+            ...(this.toNativeTools(req.tools) ? { tools: this.toNativeTools(req.tools) } : {}),
+          }),
+          signal: req.signal,
+        });
+      } catch (e) {
+        // 사용자가 멈춘 것은 실패가 아니다 — 재시도하지 않는다.
+        if (req.signal?.aborted) { yield { type: "done" }; return; }
+        netErr = true; res = null;
+        lastErr = t("oai.networkError", { detail: e instanceof Error ? e.message : String(e) });
+      }
+      if (res && res.ok && res.body) break;
+      if (res) {
+        let detail = res.statusText;
+        try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
+        lastErr = t("oai.apiError", { label: this.label, status: res.status, detail });
+      }
+      const wait = retryPlan(
+        attempt,
+        { status: res?.status, networkError: netErr, retryAfter: res?.headers.get("retry-after") },
+        Date.now(), Math.random(),
+      );
+      if (wait === null) { yield { type: "error", message: lastErr }; yield { type: "done" }; return; }
+      await sleep(wait, req.signal);
+      if (req.signal?.aborted) { yield { type: "done" }; return; }
     }
 
-    if (!res.ok || !res.body) {
-      let detail = res.statusText;
-      try { detail = (await res.text()).slice(0, 300); } catch { /* ignore */ }
-      yield { type: "error", message: t("oai.apiError", { label: this.label, status: res.status, detail }) };
-      yield { type: "done" };
-      return;
-    }
-
-    const reader = res.body.getReader();
+    const reader = res!.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let inTok = 0, outTok = 0;
