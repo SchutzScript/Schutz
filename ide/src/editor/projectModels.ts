@@ -89,6 +89,24 @@ export function isTsLike(rel: string): boolean {
   return TS_EXT.has((rel.split(".").pop() ?? "").toLowerCase());
 }
 
+/* ── 에디터 보기 상태 ─────────────────────────────────────────────────────
+ * 커서·스크롤·접힘. 비활성 탭은 언마운트되고 에디터가 파기되므로, 이걸 안 들고
+ * 있으면 **탭을 옮겼다 돌아올 때마다** 1번 줄 맨 위로 튄다. IDE 에서 가장 자주
+ * 겪는 마찰이었다.
+ *
+ * 모델과 수명을 같이 한다 — 모델이 사라지면 그 위치는 의미가 없다. 그래서
+ * 페인 쪽 지역 변수가 아니라 여기 산다(drop·disposeAll 이 같이 지운다). */
+const viewStates = new Map<string, monaco.editor.ICodeEditorViewState>(); // rel → 상태
+
+export function saveView(rel: string, st: monaco.editor.ICodeEditorViewState | null): void {
+  if (st) viewStates.set(rel, st);
+}
+
+/** 복원용으로 꺼낸다. 남겨 둔다 — 한 파일을 두 페인이 띄우면 둘 다 같은 자리에서 시작한다. */
+export function getView(rel: string): monaco.editor.ICodeEditorViewState | null {
+  return viewStates.get(rel) ?? null;
+}
+
 /** 워크스페이스 TS/JS 파일을 미리 로드 → 파일간 인텔리전스. 캡 초과 시 skipped=true */
 export async function preload(
   root: string,
@@ -154,6 +172,7 @@ export function drop(root: string, rel: string): void {
   relIndex.delete(rel);
   savedContent.delete(key);
   externalChanged.delete(rel);
+  viewStates.delete(rel);
 }
 
 /** rel 및 모든 하위 경로(rel + "/...") 모델을 정리 — 디렉터리 삭제/이름변경용.
@@ -204,5 +223,6 @@ export function disposeAll(): void {
   owned.clear();
   relIndex.clear();
   savedContent.clear();
+  viewStates.clear();
   currentRoot = null;
 }
