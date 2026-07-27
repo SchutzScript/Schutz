@@ -4,6 +4,7 @@ import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { parseJsonc } from "../engine/jsonc";
 
 (self as any).MonacoEnvironment = {
   getWorker(_: unknown, label: string) {
@@ -40,6 +41,65 @@ function configureTypescript() {
   }
 }
 configureTypescript();
+
+/** 마지막으로 적용한 기본 옵션 — 프로젝트를 바꿀 때 이전 프로젝트의 별칭이 남지 않게. */
+const BASE_TS_OPTS = {
+  target: 99, module: 99, moduleResolution: 2, jsx: 2,
+  allowJs: true, allowNonTsExtensions: true, esModuleInterop: true,
+  noEmit: true, skipLibCheck: true, baseUrl: ".", allowSyntheticDefaultImports: true,
+};
+
+/**
+ * 프로젝트 tsconfig 의 `paths` 를 Monaco 에 물린다.
+ *
+ * 안 하면 `@/utils` 같은 별칭 import 가 전부 "모듈을 찾을 수 없음" 으로 뜬다 — 문제 패널이
+ * 유령 오류로 가득 차고, 진짜 오류가 그 안에 묻힌다. 별칭을 쓰는 프로젝트에서는 TS 지원이
+ * 사실상 없는 것과 같았다.
+ *
+ * 경로는 **모델 URI 기준**이어야 한다. 워커는 파일을 `file:///c%3A/...` 로 보므로
+ * baseUrl 도 같은 형태로 준다 — 디스크 경로를 그대로 주면 아무것도 안 맞는다.
+ *
+ * tsconfig 는 거의 늘 JSONC 라 engine/jsonc.ts 로 벗긴다. 못 읽으면 조용히 기본값이다
+ * — 별칭이 없는 프로젝트가 대다수고, 여기서 시끄러우면 그쪽이 손해다.
+ */
+export async function applyTsPaths(root: string, readFile: (rel: string) => Promise<string>): Promise<boolean> {
+  const ts: any = (monaco.languages as any).typescript;
+  if (!ts) return false;
+  let paths: Record<string, string[]> | null = null;
+  let baseRel = ".";
+  for (const name of ["tsconfig.json", "jsconfig.json"]) {
+    try {
+      const co = parseJsonc(await readFile(name))?.compilerOptions;
+      if (!co) continue;
+      if (co.baseUrl) baseRel = String(co.baseUrl);
+      if (co.paths && typeof co.paths === "object") paths = co.paths;
+      break;
+    } catch { /* 없으면 다음 후보 */ }
+  }
+  const baseUri = monaco.Uri.file(
+    root.replace(/\\/g, "/").replace(/\/+$/, "") + "/" + baseRel.replace(/^\.\/?/, ""),
+  ).toString().replace(/\/$/, "");
+  lastTsOpts = { ...BASE_TS_OPTS, baseUrl: baseUri, ...(paths ? { paths } : {}) };
+  for (const d of [ts.typescriptDefaults, ts.javascriptDefaults]) d.setCompilerOptions(lastTsOpts);
+  return !!paths;
+}
+
+let lastTsOpts: any = null;
+
+/**
+ * 진단을 한 번 더 확정한다.
+ *
+ * 옵션을 바꾸면 Monaco 가 열린 모델을 전부 다시 검사하지만(DiagnosticsAdapter 의
+ * recomputeDiagostics), 그와 동시에 TS 워커가 재시작된다. 먼저 날아갔던 검사가 **늦게**
+ * 도착하면 방금 지운 마커를 도로 써 버린다 — 별칭이 세 번에 한 번씩 안 먹던 게 이거였다.
+ * 모델이 다 앉은 뒤 같은 옵션을 한 번 더 넣어 마지막 검사가 우리 것이 되게 한다.
+ */
+export function revalidateTs(): void {
+  const ts: any = (monaco.languages as any).typescript;
+  if (!ts || !lastTsOpts) return;
+  for (const d of [ts.typescriptDefaults, ts.javascriptDefaults]) d.setCompilerOptions(lastTsOpts);
+}
+
 
 /** Feldgrau 테마 — 디자인 토큰의 신택스 팔레트를 Monaco에 등록 */
 monaco.editor.defineTheme("feldgrau", {

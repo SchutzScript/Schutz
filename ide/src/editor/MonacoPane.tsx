@@ -28,6 +28,10 @@ function applyIntellijKeymap(editor: monaco.editor.IStandaloneCodeEditor) {
   const M = monaco.KeyMod, K = monaco.KeyCode;
   // Ctrl+D: 라인 복제 (VS Code 기본은 '다음 항목 선택' → IntelliJ식으로 덮어씀)
   editor.addCommand(M.CtrlCmd | K.KeyD, () => editor.trigger("keymap", "editor.action.copyLinesDownAction", null));
+  // Ctrl+D 를 뺏었으면 '다음 항목 선택' 도 돌려줘야 한다 — 안 그러면 다중 커서로 가는 키가
+  // 하나도 없다. IntelliJ 의 실제 바인딩이 Alt+J / Ctrl+Alt+Shift+J 다.
+  editor.addCommand(M.Alt | K.KeyJ, () => editor.trigger("keymap", "editor.action.addSelectionToNextFindMatch", null));
+  editor.addCommand(M.CtrlCmd | M.Alt | M.Shift | K.KeyJ, () => editor.trigger("keymap", "editor.action.selectHighlights", null));
   // Ctrl+Y: 라인 삭제
   editor.addCommand(M.CtrlCmd | K.KeyY, () => editor.trigger("keymap", "editor.action.deleteLines", null));
   // Ctrl+/: 주석 토글 (Monaco 기본과 동일하나 명시)
@@ -123,8 +127,14 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
       });
       editorRef.current = editor;
       savedRef.current = model.getValue();
+      // 지난번에 이 파일을 보던 자리(커서·스크롤·접힘)로 돌아간다. 탭을 옮겼다 오면
+      // 이게 없어서 늘 1번 줄 맨 위였다. 모델이 그 사이 짧아졌으면 Monaco 가 잘라 맞춘다.
+      const view = projectModels.getView(rel);
+      if (view) { try { editor.restoreViewState(view); } catch { /* 낡은 상태는 버린다 */ } }
       setState("ready");
 
+      // "vscode" 에 분기가 없는 건 빠뜨린 게 아니다 — Monaco 의 기본 바인딩이 곧 VS Code 것이라
+      // 아무것도 안 하는 게 맞다. 여기에 뭔가 채워 넣지 말 것.
       if (prefs.keymap === "vim" && vimStatusRef.current) {
         try { vim = initVimMode(editor, vimStatusRef.current); } catch { /* 기본 폴백 */ }
       } else if (prefs.keymap === "intellij") {
@@ -222,6 +232,8 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
 
     return () => {
       disposed = true;
+      // 파기 **전에** 보던 자리를 남긴다. dispose 뒤엔 못 읽는다.
+      try { if (editor) projectModels.saveView(rel, editor.saveViewState()); } catch { /* 못 남겨도 무방 */ }
       try { vim?.dispose(); } catch { /* ignore */ }
       paneRegistry.panes.delete(rel);
       if (paneRegistry.focused?.rel === rel) paneRegistry.focused = null;

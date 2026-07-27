@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import monaco, { languageOf } from "./monacoSetup";
 import { activeMonacoTheme } from "../ext/activeTheme";
 import { getEditorPrefs, codeFontStack } from "../settings";
+import { t } from "../i18n";
 
 interface Props {
   root: string;
@@ -46,8 +47,8 @@ export function DiffPane({ root, rel, staged, untracked }: Props) {
           : window.schutz!.readFile(root, rel).then(text => ({ ok: true, content: text }));
         const [head, mod] = await Promise.all([headP, modP]);
         if (disposed) return;
-        if (head && head.ok === false) throw new Error(head.error || "HEAD 버전을 읽지 못했습니다");
-        if (mod && mod.ok === false) throw new Error(mod.error || "수정본을 읽지 못했습니다");
+        if (head && head.ok === false) throw new Error(head.error || t("mono.headReadFailed"));
+        if (mod && mod.ok === false) throw new Error(mod.error || t("mono.modifiedReadFailed"));
         const lang = languageOf(rel);
         const original = monaco.editor.createModel(head?.content ?? "", lang);
         const modified = monaco.editor.createModel(mod?.content ?? "", lang);
@@ -72,7 +73,7 @@ export function DiffPane({ root, rel, staged, untracked }: Props) {
   return (
     <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
       <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
-      {state === "loading" && <div style={overlay}>diff 불러오는 중…</div>}
+      {state === "loading" && <div style={overlay}>{t("mono.diffLoading")}</div>}
       {state === "error" && <div style={{ ...overlay, color: "#CE9A9A" }}>⚠️ {error}</div>}
     </div>
   );

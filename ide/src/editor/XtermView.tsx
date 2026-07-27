@@ -3,8 +3,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { codeFontStack } from "../settings";
+import { t } from "../i18n";
 
-interface Props { id: string; cwd?: string; codeFont: string; fontSize: number; themeId: string }
+interface Props {
+  id: string; cwd?: string; codeFont: string; fontSize: number; themeId: string;
+  /** 터미널이 열리자마자 한 번 실행할 명령(작업 실행기). 셸이 등록된 뒤에 보내야
+   *  유실되지 않으므로 사용자가 친 것과 같은 경로(sendInput)로 넣는다. */
+  initialCommand?: string;
+}
 
 function termTheme(dark: boolean) {
   return dark
@@ -16,7 +22,7 @@ function termTheme(dark: boolean) {
  *  PTY면 셸이 에코·라인편집·시그널을 처리하므로 프론트는 raw 바이트만 왕복한다.
  *  PTY 로드 실패(폴백 파이프 셸)면 로컬 라인 에디터로 전환한다.
  *  폰트/테마는 재생성 없이 옵션만 갱신해 라이브 반영한다(PTY 세션 유지). */
-export function XtermView({ id, cwd, codeFont, fontSize, themeId }: Props) {
+export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -58,20 +64,39 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId }: Props) {
       }
     };
 
-    // PTY 여부 확인 후 셸 시작 (초기 크기 전달)
+    /** 셸을 띄운다 — **크기가 잡힌 뒤에만.**
+     *
+     *  터미널 도크가 닫힌 상태에서 터미널을 만들면(작업 실행기가 그렇다) 도크가 0→210 으로
+     *  펼쳐지는 동안 마운트돼 fit() 이 0 열 0 행을 낸다. 그 크기로 셸을 띄우면 PTY 가
+     *  0×0 으로 떠서 프롬프트조차 못 찍는다 — 터미널이 열렸는데 영원히 빈 화면이었다.
+     *  그래서 ptyReal 응답과 "0 이 아닌 크기" 둘 다 갖춰질 때까지 미룬다. */
+    let ptyResolved = false;
+    const tryStart = () => {
+      if (disposed || started || !ptyResolved) return;
+      try { fit.fit(); } catch { /* */ }
+      if (term.cols < 2 || term.rows < 2) return; // 아직 레이아웃 전 — 다음 리사이즈에 다시 본다
+      window.schutz!.termStart(cwd, id, term.cols, term.rows);
+      started = true;
+      if (pending) { window.schutz!.termInput(pending, id); pending = ""; } // 조기 입력 flush
+      // 작업 실행기가 준 명령을 사용자가 친 것처럼 넣는다. 셸이 stdin 을 버퍼링하므로
+      // 프롬프트가 아직 안 떴어도 순서는 지켜진다.
+      if (initialCommand) window.schutz!.termInput(initialCommand + "\r", id);
+    };
+
     window.schutz.ptyReal().then((real) => {
       if (disposed) return;
       realPty = real;
       if (!real) term.writeln("\x1b[2m Schutz 터미널 · 파이프 셸(폴백, 입력은 라인 단위) \x1b[0m");
-      window.schutz!.termStart(cwd, id, term.cols, term.rows);
-      started = true;
-      if (pending) { window.schutz!.termInput(pending, id); pending = ""; } // 조기 입력 flush
+      ptyResolved = true;
+      tryStart();
     });
 
     // 입력: PTY면 raw 그대로, 폴백이면 로컬 라인 편집
     const onData = term.onData((d: string) => { if (realPty) sendInput(d); else localLine(d); });
 
     const ro = new ResizeObserver(() => {
+      // 아직 안 떴으면 이 리사이즈가 "이제 크기가 생겼다" 는 신호다.
+      if (!started) { tryStart(); return; }
       try { fit.fit(); if (realPty) window.schutz!.termResize(id, term.cols, term.rows); } catch { /* */ }
     });
     ro.observe(hostRef.current);
