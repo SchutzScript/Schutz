@@ -9,6 +9,8 @@ try { require("./extensions.cjs").init(ipcMain); } catch (e) { console.error("EX
 try { require("./mcp.cjs").init(ipcMain); } catch (e) { console.error("MCP init failed:", e && e.message); }
 try { require("./plugins.cjs").init(ipcMain); } catch (e) { console.error("PLUGINS init failed:", e && e.message); }
 try { require("./codexCloud.cjs").init(ipcMain); } catch (e) { console.error("CODEXCLOUD init failed:", e && e.message); }
+try { require("./checkpoints.cjs").init(ipcMain, { app, shell, safeJoin }); } catch (e) { console.error("CHECKPOINTS init failed:", e && e.message); }
+try { require("./mcpb.cjs").init(ipcMain, { app }); } catch (e) { console.error("MCPB init failed:", e && e.message); }
 
 const DEV_URL = process.env.SCHUTZ_DEV_URL || "http://localhost:4322";
 const isDev = !app.isPackaged;
@@ -371,7 +373,7 @@ function git(root, args, input) {
 
 /** git status --porcelain 파싱 → 스테이지/워킹/미추적 분류 */
 function parseStatus(out) {
-  const staged = [], unstaged = [], untracked = [];
+  const staged = [], unstaged = [], untracked = [], conflicted = [];
   const lines = out.split("\n").filter(Boolean);
   for (const ln of lines) {
     const x = ln[0], y = ln[1];
@@ -381,10 +383,17 @@ function parseStatus(out) {
     if (arrow >= 0) p = p.slice(arrow + 4);
     p = p.replace(/^"|"$/g, "");
     if (x === "?" && y === "?") { untracked.push({ path: p, code: "?" }); continue; }
+    // 충돌(unmerged) — U 가 한쪽이라도 있거나 AA·DD. 스테이지도 워킹도 아니다.
+    // 예전엔 UU 가 staged 와 unstaged 양쪽에 들어가, 손도 안 댄 충돌 파일이
+    // "이미 스테이지됨" 으로 보였다. 따로 빼서 해결해야 할 것으로 세운다.
+    if (x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D")) {
+      conflicted.push({ path: p, code: x + y });
+      continue;
+    }
     if (x !== " " && x !== "?") staged.push({ path: p, code: x });
     if (y !== " " && y !== "?") unstaged.push({ path: p, code: y });
   }
-  return { staged, unstaged, untracked };
+  return { staged, unstaged, untracked, conflicted };
 }
 
 ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
@@ -465,8 +474,28 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
     if (action === "commit") {
       const msg = String(payload.message ?? "").trim();
       if (!msg) return { ok: false, error: "커밋 메시지가 비어 있습니다" };
-      const r = await git(root, ["commit", "-m", msg]);
+      // amend 는 히스토리를 고쳐 쓴다. 이미 밀어 올린 커밋이면 강제 푸시가 필요해지므로
+      // 부르는 쪽이 그 사실을 사용자에게 먼저 말한다(여기서는 시키는 대로 한다).
+      const args = payload?.amend ? ["commit", "--amend", "-m", msg] : ["commit", "-m", msg];
+      const r = await git(root, args);
       return { ok: r.ok, error: r.ok ? "" : (r.stderr || r.stdout), output: r.stdout };
+    }
+    // HEAD 커밋 메시지 — amend 를 켤 때 입력칸을 채운다. 빈 칸에서 다시 쓰게 하면
+    // 원래 메시지를 실수로 날리기 딱 좋다.
+    if (action === "headMessage") {
+      const r = await git(root, ["log", "-1", "--pretty=format:%B"]);
+      return { ok: r.ok, message: r.ok ? r.stdout.trim() : "", error: r.ok ? "" : (r.stderr || r.stdout) };
+    }
+    // 커밋 하나를 통째로 보여준다 — 히스토리 줄을 눌러도 아무 일도 없던 자리.
+    if (action === "show") {
+      const h = String(payload?.hash ?? "");
+      if (!/^[0-9a-fA-F]{4,40}$/.test(h)) return { ok: false, error: "잘못된 커밋 해시" };
+      const r = await git(root, ["show", "--stat", "--patch", "--format=%H%n%an <%ae>%n%ad%n%n%B", h]);
+      if (!r.ok) return { ok: false, error: r.stderr || r.stdout };
+      // 큰 커밋으로 렌더러를 얼리지 않는다
+      const MAX = 400_000;
+      const text = r.stdout.length > MAX ? r.stdout.slice(0, MAX) : r.stdout;
+      return { ok: true, text, truncated: r.stdout.length > MAX };
     }
     if (action === "push") {
       const args = payload?.setUpstream ? ["push", "-u", "origin", "HEAD"] : ["push"];
@@ -525,6 +554,32 @@ ipcMain.handle("schutz:git", async (_e, root, action, payload) => {
       const r = await git(root, ["stash", "list", "--pretty=format:%gd\x1f%s"]);
       const stashes = r.ok ? r.stdout.split("\n").filter(Boolean).map(ln => { const [ref, subject] = ln.split("\x1f"); return { ref, subject }; }) : [];
       return { ok: true, stashes };
+    }
+    // 충돌 해결 — 한쪽을 통째로 고른다(ours=내 것, theirs=상대 것). 고른 뒤 add 까지 해야
+    // git 이 "해결됨" 으로 보므로 두 단계를 한 액션으로 묶는다.
+    if (action === "resolveConflict") {
+      const p = String(payload?.path ?? "");
+      const side = payload?.side === "theirs" ? "--theirs" : "--ours";
+      if (!p) return { ok: false, error: "경로가 없습니다" };
+      const co = await git(root, ["checkout", side, "--", p]);
+      if (!co.ok) return { ok: false, error: co.stderr || co.stdout };
+      const add = await git(root, ["add", "--", p]);
+      return { ok: add.ok, error: add.ok ? "" : (add.stderr || add.stdout) };
+    }
+    // 충돌 마커를 손으로 정리한 뒤 "해결됨" 으로 표시(내용은 건드리지 않고 add 만).
+    if (action === "markResolved") {
+      const p = String(payload?.path ?? "");
+      if (!p) return { ok: false, error: "경로가 없습니다" };
+      const r = await git(root, ["add", "--", p]);
+      return { ok: r.ok, error: r.ok ? "" : (r.stderr || r.stdout) };
+    }
+    // stash 목록에서 고른 항목에 적용/삭제. ref 는 git 이 만든 stash@{N} 형태만 받는다 —
+    // 목록에서 온 값이라도 그대로 인자로 넘기지 않고 형태를 확인한다(인자 주입 차단).
+    if (action === "stashApply" || action === "stashDrop") {
+      const ref = String(payload?.ref ?? "");
+      if (!/^stash@\{\d{1,4}\}$/.test(ref)) return { ok: false, error: "잘못된 stash 참조" };
+      const r = await git(root, ["stash", action === "stashApply" ? "pop" : "drop", ref]);
+      return { ok: r.ok, error: r.ok ? "" : (r.stderr || r.stdout), output: r.stdout };
     }
     if (action === "pull") {
       const r = await git(root, ["pull", "--ff-only"]);

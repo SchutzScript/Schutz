@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 /**
  * 렌더러에 노출되는 안전한 파일 시스템 API.
@@ -55,6 +55,25 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:fsChange", h);
   },
   mkdir: (root, rel) => ipcRenderer.invoke("schutz:mkdir", root, rel),
+  /** 체크포인트 — AI 실행 하나가 손댄 파일의 원본을 잡아 두고 통째로 되돌린다.
+   *  해시는 전부 메인에서 계산한다(렌더러와 인코딩이 어긋나면 가짜 드리프트가 난다). */
+  cpCapture: (root, runId, rel, kind, startedAt) => ipcRenderer.invoke("schutz:cp:capture", root, runId, rel, kind, startedAt),
+  cpMark: (root, runId, rel) => ipcRenderer.invoke("schutz:cp:mark", root, runId, rel),
+  cpClose: (root, runId) => ipcRenderer.invoke("schutz:cp:close", root, runId),
+  cpList: (root) => ipcRenderer.invoke("schutz:cp:list", root),
+  cpProbe: (root, runId) => ipcRenderer.invoke("schutz:cp:probe", root, runId),
+  cpRestore: (root, runId, actions) => ipcRenderer.invoke("schutz:cp:restore", root, runId, actions),
+  cpDrop: (root, runId) => ipcRenderer.invoke("schutz:cp:drop", root, runId),
+  /** 끌어다 놓은 File 의 실제 경로. Electron 32 부터 File.path 가 사라져서 이게 유일한 길이다
+   *  — 없는 걸 쓰면 드롭이 조용히 아무 일도 안 한다. */
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ""; } },
+  /** MCP 번들(.mcpb) — 풀어 보기 → 확정 → 목록/삭제. 등록 자체는 mcpAdd 가 한다. */
+  mcpbPick: () => ipcRenderer.invoke("schutz:mcpbPick"),
+  mcpbOpen: (filePath) => ipcRenderer.invoke("schutz:mcpbOpen", filePath),
+  mcpbCommit: (name) => ipcRenderer.invoke("schutz:mcpbCommit", name),
+  mcpbDiscard: () => ipcRenderer.invoke("schutz:mcpbDiscard"),
+  mcpbList: () => ipcRenderer.invoke("schutz:mcpbList"),
+  mcpbRemove: (name) => ipcRenderer.invoke("schutz:mcpbRemove", name),
   // 첫 실행 데모용 샘플 프로젝트를 만들고 그 경로를 돌려준다 (경로는 메인이 정한다)
   demoProject: () => ipcRenderer.invoke("schutz:demoProject"),
   reveal: (root, rel) => ipcRenderer.invoke("schutz:reveal", root, rel),
@@ -94,6 +113,8 @@ contextBridge.exposeInMainWorld("schutz", {
   mcpWriteServer: (name, code) => ipcRenderer.invoke("schutz:mcpWriteServer", name, code),
   /** Claude Code 스킬 — 목록은 이름·설명만, 본문은 고른 것만 읽는다 */
   skillsList: (root) => ipcRenderer.invoke("schutz:skillsList", root),
+  /** 서브에이전트 목록 — 스킬과 같은 출처(사용자·프로젝트·켠 플러그인) */
+  agentsList: (root) => ipcRenderer.invoke("schutz:agentsList", root),
   skillRead: (file) => ipcRenderer.invoke("schutz:skillRead", file),
   /** 커넥터 목록 — 카탈로그 + 설치·활성 상태 */
   pluginList: () => ipcRenderer.invoke("schutz:pluginList"),
