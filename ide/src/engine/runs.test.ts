@@ -106,6 +106,32 @@ describe("RunRegistry — depth 와 사슬", () => {
     expect(r.chain(grand.runId)).toEqual(["claude", "gpt", "grok"]);
   });
 
+  it("rootOf 는 어느 깊이에서든 루트를 돌려준다 — 체크포인트가 이 단위로 되돌린다", () => {
+    const r = reg();
+    const root = r.start({ agentId: "claude", role: "manager", cancel: noop });
+    const child = r.start({ agentId: "gpt", role: "sub", parentRunId: root.runId, cancel: noop });
+    const grand = r.start({ agentId: "grok", role: "sub", parentRunId: child.runId, cancel: noop });
+
+    expect(r.rootOf(grand.runId)).toBe(root.runId);
+    expect(r.rootOf(child.runId)).toBe(root.runId);
+    expect(r.rootOf(root.runId)).toBe(root.runId);
+  });
+
+  it("rootOf 는 모르는 runId 를 그대로 돌려준다 — reap 이 버린 뒤에도 죽지 않는다", () => {
+    const r = reg();
+    expect(r.rootOf("없는id")).toBe("없는id");
+  });
+
+  it("rootOf 는 부모가 버려지면 아는 데까지만 올라간다", () => {
+    const r = reg();
+    const root = r.start({ agentId: "claude", role: "manager", cancel: noop });
+    const child = r.start({ agentId: "gpt", role: "sub", parentRunId: root.runId, cancel: noop });
+    r.finish(root.runId, "done");
+    r.finish(child.runId, "done");
+    r.reap(0, Date.now() + 1000);          // 둘 다 버려진다
+    expect(r.rootOf(child.runId)).toBe(child.runId);   // 기록이 없으면 자기 자신
+  });
+
   it("isAgentBusy 는 끝난 실행을 바쁨으로 보지 않는다", () => {
     const r = reg();
     const run = r.start({ agentId: "gpt", role: "sub", cancel: noop });
