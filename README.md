@@ -5,8 +5,7 @@
 <h1 align="center">Schutz</h1>
 
 <p align="center">
-  <strong>Die KI schreibt. Du entscheidest.</strong><br>
-  <sub>An AI-native IDE that shows you the AI editing your code, live.</sub>
+  <strong>Die KI schreibt. Du entscheidest.</strong>
 </p>
 
 <p align="center">
@@ -17,7 +16,15 @@
 
 ---
 
-Most AI coding tools hand you a finished diff and ask you to trust it. Schutz shows you the **process** instead — which files the agent opens and why, how it rewrites them line by line, and what it intends to do next, all streaming into the UI as it happens. The goal is to make an AI's edits **observable, beautiful, and controllable**.
+Most AI coding tools hand you a finished diff and ask you to trust it. Schutz shows you the **process** instead. Tool calls, the agent's plan, and its progress stream into the UI live; the edit itself is then replayed into the editor line by line, so you see exactly what changed and where. The goal is to make an AI's edits **observable, beautiful, and controllable**.
+
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Asking Schutz for a change and watching the edit stream into the editor" width="960">
+</p>
+
+<p align="center">
+  <sub>One prompt, and the edit arrives as a diff you can accept or reject — line by line.</sub>
+</p>
 
 ## The four pillars
 
@@ -66,13 +73,13 @@ The spotlight tour covers the rest, and can be replayed any time from the Help m
 
 **Editor** — Tabbed editing with 1/2/4 split groups, unsaved-changes guards, project-wide search and replace, TypeScript intelligence, a problems panel, command palette, and symbol outline. Additional languages are supported through LSP (Python via pyright, plus a bridge for custom servers) with formatting, code actions, folding, highlights, and inlay hints.
 
-**AI** — Claude and Codex accounts, chat with file and selection context, inline edit, per-project conversation history, and per-agent stop control. The autonomy policy decides which low-risk changes apply on their own and which wait for review.
+**AI** — Claude and Codex accounts, chat with file and selection context, inline edit, per-project conversation history, and per-agent stop control. The autonomy policy decides which low-risk changes apply on their own and which wait for review. Every run is checkpointed, so you can undo everything one turn touched — and a file you edited afterwards is reported, never silently overwritten. Subagents defined in `.claude/agents` become delegation targets with their own instructions and tool limits.
 
 **Git** — Stage, commit, and push from the source control panel; side-by-side diff against `HEAD`; gutter change markers; branch and ahead/behind status; blame and stash.
 
 **Terminal** — A real PTY terminal (xterm.js + node-pty) with ANSI color, scrollback, and multiple tabs, alongside a log tab showing live agent activity.
 
-**MCP** — A built-in Model Context Protocol host. Import existing servers or generate one from a program, manage them from the title bar, and expose their tools to the agent loop.
+**MCP** — A built-in Model Context Protocol host. Import existing servers, generate one from a program, or drop an `.mcpb` bundle onto the window — the install dialog shows the exact command before anything runs. Manage them from the title bar and expose their tools to the agent loop.
 
 **Debugging** — Breakpoints, call stack, variables, and stepping via DAP (Python/debugpy today).
 
@@ -82,7 +89,7 @@ The spotlight tour covers the rest, and can be replayed any time from the Help m
 
 ## Design principles
 
-- **Provider-agnostic** — Claude, OpenAI, Gemini, or local models behind a swappable adapter
+- **Provider-agnostic** — Claude, OpenAI, Grok, and GLM today, behind a swappable adapter
 - **Observable by default** — every AI action surfaces in the UI
 - **Human-in-the-loop** — every change can be accepted, rejected, or reverted
 - **Progressive fidelity** — validate the experience first, then deepen it at the editor core
@@ -104,8 +111,8 @@ npm run dist:linux # Linux build
 ## Roadmap
 
 - **Phase 1** — validate the core experience *(done)*
-- **Phase 2** — deepen renderer-level visual effects at the editor core
-- **Phase 3** — multi-provider support, codebase indexing, ecosystem
+- **Phase 2** — deepen renderer-level visual effects at the editor core *(in progress)*
+- **Phase 3** — more providers (Gemini, local/OpenAI-compatible endpoints), codebase indexing, ecosystem
 
 ## Contributing
 

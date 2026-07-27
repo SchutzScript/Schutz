@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+The four pillars on the front page were the promise; only one of them was fully true. Fixing that is most of this release. The rest is the friction you hit every day, and a pass over the claims themselves.
+
+### The change review
+
+- **Accept or reject a proposal one hunk at a time.** The README advertised per-line accept since the beginning, but a proposal was all-or-nothing — the only per-hunk code was demo-only and never touched disk. Now a proposal is split into hunks you can toggle, and only what you kept is written. Everything selected is the default, so accepting a whole proposal behaves exactly as before.
+- **The plan panel and the multi-file overview follow real runs.** Both were fed only by the web demo script, which never runs in the desktop app — so on a real turn they stayed empty. The agent now posts its plan through a tool and updates it step by step, and the overview is derived from the actual proposals rather than a parallel list that could drift out of sync.
+
+### Undo a whole run
+
+- **Every run is checkpointed.** With an autonomy policy that applies edits on its own, the only way back was per-file undo in the editor, or git. Now the original bytes of everything a turn touched are kept, and one button puts them back — restoring what was edited and moving what was created to the trash.
+- **A file you changed afterwards is never silently overwritten.** Undo shows what it will restore, what it will delete, and what it is leaving alone with the reason: you edited it since, it has unsaved changes open, or it was too large to keep a copy of. It also says plainly that only edits applied through proposals are covered — changes made by terminal commands or MCP tools are not.
+
+### Editor
+
+- **Tabs remember where you were.** Switching away unmounted the editor, so coming back always dropped you at line 1. Cursor, scroll and folds now survive the round trip.
+- **Ctrl+D has a counterpart again.** The IntelliJ keymap rebinds Ctrl+D to duplicate the line, which left no way to reach multi-cursor at all. Alt+J adds the next occurrence, Ctrl+Alt+Shift+J selects them all.
+- **Path aliases from `tsconfig.json` are honored.** A project using `@/…` filled the problems panel with phantom "cannot find module" errors that buried the real ones.
+- **The problems panel shows information-level diagnostics, and can fix them.** Anything below warning was dropped, so a diagnostic underlined in the editor could be missing from the list. Each row also has a Fix button — quick fixes were reachable only from the editor's lightbulb.
+- **Rename can move.** Put a `/` in the name and the file moves; `..` walks up, a leading `/` is from the project root. The backend always supported this — the caller only ever swapped the last segment.
+- **Copy path, copy absolute path, and duplicate** are in the file tree's context menu.
+- **Jump to a search result without losing the list.** F4 and Shift+F4 walk the hits. Seeing thirty matches used to mean opening the panel thirty times.
+
+### Git
+
+- **Amend the last commit.** Turning it on fills in the existing message so it isn't lost, and warns first if the commit is already on the remote.
+- **Commits in the history are clickable** and open the full patch.
+
+### Connectors
+
+- **Install an MCP server by dropping an `.mcpb` bundle on the window.** A bundle is someone else's program from the internet, so the dialog shows the exact command that will run, what the bundle asks for, and what tools it brings — before anything is installed. Values marked sensitive are masked in that preview.
+- **Subagents are delegation targets.** Agents defined in `.claude/agents` — yours, the project's, or an enabled connector's — can be delegated to by name, with their own instructions and tool limits. They run on whichever model you have connected, never on one you haven't.
+
+### Honest wording
+
+- The front page claimed Gemini and local models; the app ships Claude, OpenAI, Grok and GLM. The list now matches, and the others moved to the roadmap where they belong.
+- The edit animation was described as streaming "as it happens." It is a replay, right after the edit lands. The description says so.
+- **Review findings follow the interface language.** The reviewer was always asked in Korean, so its findings came back in Korean no matter which of the four languages you were using.
+- The last few interface strings that were still hardcoded in Korean — the diff pane, the terminal fallback notice, and the message you see before connecting an AI — now ship in all four languages.
+
 ## [0.0.7] — A second pair of eyes
 
 Schutz can now review its own work before you commit it, hand long tasks to the cloud, and reach the skills and connectors you already set up elsewhere. Along the way, three controls that looked like features but did nothing were fixed.
