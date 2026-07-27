@@ -19,6 +19,8 @@ export default defineConfig({
       "src/engine/**/*.test.ts",
       "src/gameEngine/**/*.test.ts",
       "src/review/**/*.test.ts",
+      "src/ai/retry.test.ts",
+      "src/keymap.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",

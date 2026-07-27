@@ -170,6 +170,26 @@ export class RunRegistry {
     return out.reverse();
   }
 
+  /** 이 실행이 속한 **루트** 실행. 위임으로 생긴 하위 실행은 부모를 따라 올라간다.
+   *
+   *  체크포인트가 이걸 쓴다 — 되돌리기는 "이 턴이 한 일" 단위여야지, 하위 에이전트
+   *  하나만 되돌리면 나머지 절반이 남는다. 기록이 없으면 자기 자신을 루트로 본다
+   *  (reap 이 부모를 이미 버렸을 수 있다 — 그래서 캡처 시점에 확정해 저장해야 한다).
+   *
+   *  사이클 가드는 chain() 과 같다. 부모 사슬이 꼬여도 멈춘다. */
+  rootOf(runId: RunId): RunId {
+    const seen = new Set<RunId>();
+    let cur = this.runs.get(runId);
+    if (cur === undefined) return runId;
+    while (cur.parentRunId !== null && !seen.has(cur.runId)) {
+      seen.add(cur.runId);
+      const parent = this.runs.get(cur.parentRunId);
+      if (parent === undefined) break;   // 부모가 이미 버려짐 — 여기까지가 아는 루트다
+      cur = parent;
+    }
+    return cur.runId;
+  }
+
   /** 끝난 지 오래된 레코드를 버린다 — 긴 세션에서 메모리가 무한히 늘지 않게. */
   reap(olderThanMs: number, nowMs: number): number {
     let n = 0;
