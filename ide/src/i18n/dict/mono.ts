@@ -6,6 +6,11 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "mono.edit": { ko: "편집", en: "Edit", de: "Bearbeiten", ja: "編集" },
   "mono.cancel": { ko: "취소", en: "Cancel", de: "Abbrechen", ja: "キャンセル" },
   "mono.loading": { ko: "불러오는 중…", en: "Loading…", de: "Wird geladen…", ja: "読み込み中…" },
+  // diff 페인·터미널 — 화면에 뜨는데 한국어로 굳어 있던 것들.
+  "mono.diffLoading": { ko: "diff 불러오는 중…", en: "Loading diff…", de: "Diff wird geladen…", ja: "diff を読み込み中…" },
+  "mono.headReadFailed": { ko: "HEAD 버전을 읽지 못했습니다", en: "Could not read the HEAD version", de: "Die HEAD-Version konnte nicht gelesen werden", ja: "HEAD 版を読み込めませんでした" },
+  "mono.modifiedReadFailed": { ko: "수정본을 읽지 못했습니다", en: "Could not read the modified version", de: "Die geänderte Fassung konnte nicht gelesen werden", ja: "変更後の内容を読み込めませんでした" },
+  "mono.pipeShell": { ko: " Schutz 터미널 · 파이프 셸(폴백, 입력은 라인 단위) ", en: " Schutz terminal · pipe shell (fallback, line-by-line input) ", de: " Schutz-Terminal · Pipe-Shell (Fallback, zeilenweise Eingabe) ", ja: " Schutz ターミナル · パイプシェル（フォールバック、入力は行単位） " },
   "mono.saved": { ko: "✓ 저장됨", en: "✓ Saved", de: "✓ Gespeichert", ja: "✓ 保存済み" },
   "mono.modified": { ko: "● 수정됨 · Ctrl+S 저장", en: "● Modified · Ctrl+S to save", de: "● Geändert · Ctrl+S zum Speichern", ja: "● 変更あり · Ctrl+Sで保存" },
 };

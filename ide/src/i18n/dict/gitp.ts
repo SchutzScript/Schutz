@@ -22,4 +22,30 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "gitp.stageAll": { ko: "모두 스테이지", en: "Stage all", de: "Alle stagen", ja: "すべてステージ" },
   "gitp.noChanges": { ko: "변경 사항이 없습니다. 작업 트리가 깨끗합니다.", en: "No changes. The working tree is clean.", de: "Keine Änderungen. Der Arbeitsbaum ist sauber.", ja: "変更はありません。作業ツリーはクリーンです。" },
   "gitp.history": { ko: "히스토리", en: "History", de: "Verlauf", ja: "履歴" },
+  // amend — 방금 한 커밋을 고쳐 쓴다. 이미 올린 커밋이면 강제 푸시가 필요해지므로 먼저 묻는다.
+  "gitp.amend": { ko: "고쳐 쓰기", en: "Amend", de: "Ändern", ja: "修正" },
+  "gitp.amendCommit": { ko: "마지막 커밋 고쳐 쓰기", en: "Amend last commit", de: "Letzten Commit ändern", ja: "最後のコミットを修正" },
+  "gitp.amendHint": { ko: "새 커밋을 만들지 않고 마지막 커밋을 고쳐 씁니다. 메시지만 고칠 수도 있습니다.", en: "Rewrites the last commit instead of creating a new one. You can change just the message.", de: "Schreibt den letzten Commit um, statt einen neuen zu erstellen. Auch nur die Nachricht ist möglich.", ja: "新しいコミットを作らず、最後のコミットを書き換えます。メッセージだけの修正も可能です。" },
+  "gitp.amendPushedWarn": { ko: "이 커밋은 이미 원격에 올라가 있습니다. 고쳐 쓰면 히스토리가 갈라져 강제 푸시가 필요합니다. 계속할까요?", en: "This commit is already on the remote. Amending rewrites history and will require a force push. Continue?", de: "Dieser Commit ist bereits auf dem Remote. Ein Ändern schreibt die Historie um und erfordert einen Force-Push. Fortfahren?", ja: "このコミットはすでにリモートにあります。修正すると履歴が変わり、強制プッシュが必要になります。続けますか？" },
+  // 히스토리 한 줄을 누르면 커밋 전문을 본다 — 40줄을 그려 놓고 눌러도 아무 일도 없었다.
+  "gitp.loadingCommit": { ko: "커밋을 불러오는 중…", en: "Loading commit…", de: "Commit wird geladen…", ja: "コミットを読み込み中…" },
+  "gitp.commitTruncated": { ko: "커밋이 커서 일부만 보여 줍니다.", en: "Commit is large — showing part of it.", de: "Commit ist groß — nur ein Teil wird angezeigt.", ja: "コミットが大きいため一部のみ表示しています。" },
+  "gitp.copyPatch": { ko: "패치 복사", en: "Copy patch", de: "Patch kopieren", ja: "パッチをコピー" },
+  // 병합 충돌 — 해결 전엔 커밋할 수 없다
+  "gitp.conflicts": { ko: "충돌", en: "Conflicts", de: "Konflikte", ja: "コンフリクト" },
+  "gitp.ours": { ko: "내 것", en: "Ours", de: "Unsere", ja: "自分" },
+  "gitp.theirs": { ko: "상대 것", en: "Theirs", de: "Ihre", ja: "相手" },
+  "gitp.takeOurs": { ko: "이 파일을 내 쪽 내용으로 해결합니다", en: "Resolve this file with our version", de: "Diese Datei mit unserer Version lösen", ja: "このファイルを自分側の内容で解決します" },
+  "gitp.takeTheirs": { ko: "이 파일을 상대 쪽 내용으로 해결합니다", en: "Resolve this file with their version", de: "Diese Datei mit ihrer Version lösen", ja: "このファイルを相手側の内容で解決します" },
+  "gitp.markResolved": { ko: "해결됨", en: "Resolved", de: "Gelöst", ja: "解決済み" },
+  "gitp.markResolvedHint": { ko: "직접 정리한 내용 그대로 해결됨으로 표시합니다", en: "Mark as resolved with the content you edited", de: "Als gelöst markieren mit dem von Ihnen bearbeiteten Inhalt", ja: "自分で整理した内容のまま解決済みにします" },
+  "gitp.markersRemain": { ko: "충돌 마커(<<<<<<<)가 아직 남아 있습니다. 먼저 정리하세요.", en: "Conflict markers (<<<<<<<) are still present. Clean them up first.", de: "Konfliktmarker (<<<<<<<) sind noch vorhanden. Bitte zuerst bereinigen.", ja: "コンフリクトマーカー(<<<<<<<)が残っています。先に整理してください。" },
+  "gitp.conflictResolved": { ko: "{path} 충돌을 해결했습니다.", en: "Resolved conflict in {path}.", de: "Konflikt in {path} gelöst.", ja: "{path} のコンフリクトを解決しました。" },
+  "gitp.commitBlockedByConflicts": { ko: "충돌 {n}개를 먼저 해결해야 커밋할 수 있습니다.", en: "Resolve {n} conflict(s) before committing.", de: "Lösen Sie {n} Konflikt(e), bevor Sie committen.", ja: "先に {n} 件のコンフリクトを解決してください。" },
+  // 감춰둔 변경(stash) — 목록·꺼내기·버리기
+  "gitp.stashes": { ko: "감춰둔 변경", en: "Stashes", de: "Stashes", ja: "スタッシュ" },
+  "gitp.stashPop": { ko: "꺼내기", en: "Pop", de: "Anwenden", ja: "取り出す" },
+  "gitp.stashDrop": { ko: "버리기", en: "Drop", de: "Verwerfen", ja: "破棄" },
+  "gitp.stashDropConfirm": { ko: "감춰둔 변경을 버립니다. 되돌릴 수 없습니다.\n\n{subject}", en: "This discards the stash. It cannot be undone.\n\n{subject}", de: "Der Stash wird verworfen. Das kann nicht rückgängig gemacht werden.\n\n{subject}", ja: "スタッシュを破棄します。元に戻せません。\n\n{subject}" },
+  "gitp.stashDropped": { ko: "감춰둔 변경을 버렸습니다.", en: "Stash dropped.", de: "Stash verworfen.", ja: "スタッシュを破棄しました。" },
 };

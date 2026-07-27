@@ -2,7 +2,6 @@
 // 로컬 codex CLI 로 조종한다. 저장소에 연결된 클라우드 환경이 미리 있어야 동작한다.
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
   "cloud.title": { ko: "클라우드 위임", en: "Cloud delegation", de: "Cloud-Delegation", ja: "クラウド委任" },
-  "cloud.menu": { ko: "클라우드 위임…", en: "Cloud delegation…", de: "Cloud-Delegation…", ja: "クラウド委任…" },
   "cloud.intro": {
     ko: "태스크를 Codex Cloud 샌드박스에 넘깁니다. 원격에서 저장소를 받아 작업하고, 다 되면 diff 를 로컬로 당기거나 PR 을 엽니다.",
     en: "Hand a task to a Codex Cloud sandbox. It works on your repo remotely, then you pull the diff locally or open a PR.",

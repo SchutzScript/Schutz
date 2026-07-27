@@ -13,5 +13,10 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "dbg.variables": { ko: "변수", en: "Variables", de: "Variablen", ja: "変数" },
   "dbg.breakpoints": { ko: "브레이크포인트", en: "Breakpoints", de: "Haltepunkte", ja: "ブレークポイント" },
   "dbg.breakpointsEmpty": { ko: "거터를 클릭해 추가하세요.", en: "Click the gutter to add one.", de: "Klicken Sie auf die Leiste, um einen hinzuzufügen.", ja: "ガターをクリックして追加してください。" },
+  // 조사식 — 멈춘 프레임에서 임의 식의 값을 본다
+  "dbg.watch": { ko: "조사식", en: "Watch", de: "Überwachung", ja: "ウォッチ" },
+  "dbg.watchAdd": { ko: "식을 입력하고 Enter", en: "Type an expression, press Enter", de: "Ausdruck eingeben, Enter drücken", ja: "式を入力して Enter" },
+  "dbg.watchEmpty": { ko: "값을 계속 지켜볼 식을 추가하세요.", en: "Add an expression to keep an eye on.", de: "Fügen Sie einen Ausdruck hinzu, den Sie beobachten möchten.", ja: "値を見張りたい式を追加してください。" },
+  "dbg.watchIdle": { ko: "멈춰야 값이 보입니다", en: "value shown when paused", de: "Wert wird beim Anhalten angezeigt", ja: "停止時に値が表示されます" },
   "dbg.console": { ko: "디버그 콘솔", en: "Debug Console", de: "Debug-Konsole", ja: "デバッグコンソール" },
 };
