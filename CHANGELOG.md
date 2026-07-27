@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.8] — A way back
+
 The four pillars on the front page were the promise; only one of them was fully true. Fixing that is most of this release. The rest is the friction you hit every day, and a pass over the claims themselves.
 
 ### The change review
