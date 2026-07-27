@@ -7,6 +7,20 @@ interface QuotaInfo {
   at: number;
 }
 
+/** 체크포인트 한 개의 요약 — 실행 하나가 무엇을 얼마나 건드렸나.
+ *  `restorable` 은 실제로 되돌릴 수 있는 파일 수(oversize·미기록 제외)라 0 이면 버튼이 무의미하다. */
+interface CheckpointInfo {
+  rootRunId: string;
+  startedAt: number;
+  /** 아직 도는 실행 — 보관 상한에서 제외된다. */
+  open: boolean;
+  bytes: number;
+  files: number;
+  created: number;
+  modified: number;
+  restorable: number;
+}
+
 /** Claude Code 스킬 — SKILL.md 의 머리말. 본문은 필요할 때 skillRead 로 읽는다.
  *  프롬프트 묶음이라 모델을 가리지 않는다(Claude·GPT 동일). */
 interface SkillInfo {
@@ -40,6 +54,8 @@ interface PluginInfo {
   enabled: boolean;
   skills: number;
   commands: number;
+  /** 이 커넥터가 들고 오는 서브에이전트 수 */
+  agents?: number;
   mcp: boolean;
   /** Schutz 가 직접 받은 것 — 지울 수 있다 */
   own?: boolean;
@@ -75,7 +91,7 @@ interface SchutzApi {
   readTree(root: string): Promise<SchutzWorkspaceTree>;
   readFile(root: string, rel: string): Promise<string>;
   writeFile(root: string, rel: string, content: string): Promise<boolean>;
-  searchFiles(root: string, query: string, opts?: { max?: number }): Promise<{ hits: { rel: string; line: number; col: number; preview: string }[]; truncated: boolean }>;
+  searchFiles(root: string, query: string, opts?: { max?: number; include?: string; exclude?: string; regex?: boolean; caseSensitive?: boolean; wholeWord?: boolean }): Promise<{ hits: { rel: string; line: number; col: number; preview: string }[]; truncated: boolean; error?: string }>;
   git(root: string, action: string, payload?: any): Promise<any>;
   httpGet(url: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number; json?: any; error?: string }>;
   lspLanguages(): Promise<string[]>;
@@ -120,6 +136,43 @@ interface SchutzApi {
   watchStop(): void;
   onFsChange(cb: () => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
+  /** 체크포인트 — 한 실행이 손댄 파일의 원본 바이트를 메인에 잡아 두고 통째로 되돌린다.
+   *  해시는 전부 메인이 계산한다. 무엇을 되돌릴지는 engine/checkpoints.ts 가 정한다. */
+  cpCapture(root: string, runId: string, rel: string, kind: "modify" | "create", startedAt: number):
+    Promise<{ beforeHash: string | null; oversize: boolean; first: boolean }>;
+  cpMark(root: string, runId: string, rel: string): Promise<{ afterHash: string | null }>;
+  /** 실행 종료 — 헤더 목록을 돌려준다. 보관 상한은 렌더러(pruneCheckpoints)가 적용한다. */
+  cpClose(root: string, runId: string): Promise<CheckpointInfo[]>;
+  cpList(root: string): Promise<CheckpointInfo[]>;
+  cpProbe(root: string, runId: string): Promise<{
+    entries: { rel: string; kind: "modify" | "create"; beforeHash: string | null; afterHash: string | null; oversize: boolean }[];
+    disk: [string, { exists: boolean; hash: string | null }][];
+    startedAt: number;
+  } | null>;
+  cpRestore(root: string, runId: string, actions: { rel: string; action: "restore" | "delete" }[]):
+    Promise<{ done: string[]; failed: { rel: string; why: string }[] }>;
+  cpDrop(root: string, runId: string): Promise<boolean>;
+  /** 끌어다 놓은 File 의 실제 경로 (Electron 32+ 에서 File.path 가 사라졌다). 못 얻으면 "" */
+  pathForFile(file: File): string;
+  /** 서브에이전트 목록 — `agents/*.md`. 지침 본문까지 함께 온다(위임 즉시 필요하고 파일이 작다). */
+  agentsList(root: string | null): Promise<{
+    ok: boolean;
+    agents: {
+      id: string; name: string; description: string; tools: string[]; model: string;
+      prompt: string; source: "user" | "project" | "plugin"; owner: string | null; file: string;
+    }[];
+    error?: string;
+  }>;
+  /** 파일 고르기 대화상자. 취소하면 null. */
+  mcpbPick(): Promise<string | null>;
+  /** MCP 번들(.mcpb/.dxt) — 풀어 보기. 아직 등록하지 않는다.
+   *  매니페스트는 **원문 그대로** 온다 — 해석은 engine/mcpb.ts 한 군데서만 한다. */
+  mcpbOpen(filePath: string): Promise<{ ok: boolean; manifest?: unknown; bytes?: number; error?: string }>;
+  /** 확정 — 임시 폴더를 제 이름으로 옮긴다. 그 경로가 `${__dirname}` 이 된다. */
+  mcpbCommit(name: string): Promise<{ ok: boolean; dir?: string; error?: string }>;
+  mcpbDiscard(): Promise<{ ok: boolean }>;
+  mcpbList(): Promise<string[]>;
+  mcpbRemove(name: string): Promise<{ ok: boolean; error?: string }>;
   /** 첫 실행 데모용 샘플 프로젝트를 만들고 루트 경로를 돌려준다. 경로는 메인이 정한다. */
   demoProject(): Promise<string>;
   reveal(root: string, rel: string): Promise<boolean>;
@@ -152,7 +205,7 @@ interface SchutzApi {
   mcpTools(name: string): Promise<McpTool[]>;
   mcpAllTools(): Promise<(McpTool & { server: string })[]>;
   mcpCall(name: string, tool: string, args: any): Promise<{ ok: boolean; result?: any; error?: string }>;
-  mcpAdd(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; url?: string; headers?: Record<string, string> }): Promise<{ ok: boolean; error?: string }>;
+  mcpAdd(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; url?: string; headers?: Record<string, string>; overwrite?: boolean }): Promise<{ ok: boolean; error?: string }>;
   mcpRemove(name: string): Promise<{ ok: boolean }>;
   mcpDiscover(root: string | null): Promise<{ name: string; source: string; command: string; args: string[]; env: Record<string, string>; url: string | null; added: boolean }[]>;
   cliHelp(cmd: string): Promise<{ ok: boolean; text?: string; error?: string }>;

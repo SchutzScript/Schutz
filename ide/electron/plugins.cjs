@@ -78,6 +78,42 @@ function scanSkillsDir(dir, source, owner) {
   return out;
 }
 
+/** 서브에이전트 스캔 — `agents/*.md`. 스킬과 달리 파일 하나가 곧 에이전트 하나다.
+ *
+ *  본문이 곧 그 에이전트의 지침(시스템 프롬프트)이라 여기서 같이 읽는다. 스킬은 모델이
+ *  고른 뒤에야 본문을 읽지만(그게 스킬의 요점이다), 서브에이전트는 위임하는 순간 본문이
+ *  필요하고 파일도 작다. */
+function scanAgentsDir(dir, source, owner) {
+  const out = [];
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(".md")) continue;
+    let text;
+    try { text = fs.readFileSync(path.join(dir, e.name), "utf8"); } catch { continue; }
+    if (text.length > 200_000) continue;             // 에이전트 지침치고 말이 안 되는 크기
+    const { meta, body } = parseFrontmatter(text);
+    const name = String(meta.name || e.name.replace(/\.md$/i, ""));
+    // 이름은 위임 대상 id 가 된다 — 공백·콜론이 섞이면 모델이 부를 수 없다.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)) continue;
+    out.push({
+      id: (owner ? owner + ":" : "") + name,
+      name,
+      description: String(meta.description || ""),
+      // 비우면 "전부 허용" 이다. 스킬의 allowed-tools 와 같은 규약.
+      tools: Array.isArray(meta.tools) ? meta.tools.map(String)
+        : typeof meta.tools === "string" ? meta.tools.split(",").map(s => s.trim()).filter(Boolean)
+        : [],
+      model: String(meta.model || ""),
+      prompt: body.slice(0, 60000),
+      source,
+      owner: owner || null,
+      file: path.join(dir, e.name),
+    });
+  }
+  return out;
+}
+
 /** 활성화된 플러그인 목록 — Schutz 가 관리하는 파일. 없으면 빈 목록. */
 function enabledPath() { return path.join(app.getPath("userData"), "plugins.json"); }
 function readEnabled() {
@@ -131,6 +167,7 @@ function readPlugin(p) {
   const commandsDir = path.join(p.dir, "commands");
   let commands = 0;
   try { commands = fs.readdirSync(commandsDir).filter(f => f.endsWith(".md")).length; } catch { /* */ }
+  const agents = scanAgentsDir(path.join(p.dir, "agents"), "plugin", p.name).length;
   let mcp = false;
   for (const f of [".mcp.json", "mcp.json"]) { if (fs.existsSync(path.join(p.dir, f))) { mcp = true; break; } }
   return {
@@ -150,6 +187,7 @@ function readPlugin(p) {
     dir: p.dir,
     skills: skills.length,
     commands,
+    agents,
     mcp,
     installed: true,
     own: p.marketplace === "schutz",   // Schutz 가 받은 것만 지울 수 있다
@@ -319,6 +357,25 @@ function init(ipcMain) {
       for (const s of skills) { if (seen.has(s.id)) continue; seen.add(s.id); uniq.push(s); }
       return { ok: true, skills: uniq };
     } catch (e) { return { ok: false, error: String(e && e.message || e), skills: [] }; }
+  });
+
+  // 서브에이전트 목록 — 스킬과 같은 출처(사용자·프로젝트·켠 플러그인).
+  // 지침 본문까지 같이 온다: 위임하는 순간 필요하고, 파일이 작다.
+  ipcMain.handle("schutz:agentsList", (_e, root) => {
+    try {
+      const enabled = new Set(readEnabled());
+      const agents = [
+        ...scanAgentsDir(path.join(CLAUDE_DIR, "agents"), "user", null),
+        ...(root ? scanAgentsDir(path.join(root, ".claude", "agents"), "project", null) : []),
+      ];
+      for (const p of localPluginDirs()) {
+        if (!enabled.has(p.name)) continue;             // 켠 플러그인의 에이전트만 노출한다
+        agents.push(...scanAgentsDir(path.join(p.dir, "agents"), "plugin", p.name));
+      }
+      const seen = new Set(); const uniq = [];
+      for (const a of agents) { if (seen.has(a.id)) continue; seen.add(a.id); uniq.push(a); }
+      return { ok: true, agents: uniq };
+    } catch (e) { return { ok: false, error: String(e && e.message || e), agents: [] }; }
   });
 
   // 스킬 본문 — 모델이 고른 것만 이때 읽는다.
