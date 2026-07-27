@@ -34,13 +34,16 @@ export interface Autonomy {
   rules: { docs: boolean; tests: boolean; deps: boolean };
   /** 커밋 전에 변경을 독립 리뷰 패스로 점검할지. 기본 off — 켤 때만 커밋을 가로챈다. */
   reviewOnCommit: boolean;
+  /** 프로젝트의 CLAUDE.md·AGENTS.md 를 시스템 프롬프트에 실을지. 기본 off —
+   *  저장소 파일이 모델 지시로 들어가는 일이라 사용자가 켤 때만 한다. */
+  projectInstructions: boolean;
 }
 
 const ED_KEY = "schutz.editor";
 const AU_KEY = "schutz.autonomy";
 
 const ED_DEFAULT: EditorPrefs = { codeFont: "plex", fontSize: 13, uiFont: "suit", keymap: "intellij", wordWrap: false, minimap: false, formatOnSave: false, autoSave: "off", tabSize: 4, lineNumbers: true, cursorStyle: "line", renderWhitespace: false };
-const AU_DEFAULT: Autonomy = { policy: "manual", rules: { docs: true, tests: true, deps: false }, reviewOnCommit: false };
+const AU_DEFAULT: Autonomy = { policy: "manual", rules: { docs: true, tests: true, deps: false }, reviewOnCommit: false, projectInstructions: false };
 
 export function getEditorPrefs(): EditorPrefs {
   try {
@@ -74,7 +77,7 @@ export function setEditorPrefs(p: Partial<EditorPrefs>): void {
 export function getAutonomy(): Autonomy {
   try {
     const raw = localStorage.getItem(AU_KEY);
-    if (!raw) return { policy: AU_DEFAULT.policy, rules: { ...AU_DEFAULT.rules }, reviewOnCommit: AU_DEFAULT.reviewOnCommit };
+    if (!raw) return { policy: AU_DEFAULT.policy, rules: { ...AU_DEFAULT.rules }, reviewOnCommit: AU_DEFAULT.reviewOnCommit, projectInstructions: AU_DEFAULT.projectInstructions };
     const a = JSON.parse(raw);
     return {
       policy: ["manual", "balanced", "auto"].includes(a.policy) ? a.policy : AU_DEFAULT.policy,
@@ -84,8 +87,9 @@ export function getAutonomy(): Autonomy {
         deps: !!(a.rules?.deps ?? AU_DEFAULT.rules.deps),
       },
       reviewOnCommit: !!(a.reviewOnCommit ?? AU_DEFAULT.reviewOnCommit),
+      projectInstructions: !!(a.projectInstructions ?? AU_DEFAULT.projectInstructions),
     };
-  } catch { return { policy: AU_DEFAULT.policy, rules: { ...AU_DEFAULT.rules }, reviewOnCommit: AU_DEFAULT.reviewOnCommit }; }
+  } catch { return { policy: AU_DEFAULT.policy, rules: { ...AU_DEFAULT.rules }, reviewOnCommit: AU_DEFAULT.reviewOnCommit, projectInstructions: AU_DEFAULT.projectInstructions }; }
 }
 
 export function setAutonomy(a: Partial<Autonomy>): void {
@@ -95,6 +99,7 @@ export function setAutonomy(a: Partial<Autonomy>): void {
       policy: a.policy ?? cur.policy,
       rules: { ...cur.rules, ...(a.rules ?? {}) },
       reviewOnCommit: a.reviewOnCommit ?? cur.reviewOnCommit,
+      projectInstructions: a.projectInstructions ?? cur.projectInstructions,
     };
     localStorage.setItem(AU_KEY, JSON.stringify(next));
   } catch { /* ignore */ }
