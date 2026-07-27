@@ -50,9 +50,6 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Nichts aus diesem Werkzeug. Probieren Sie oben einen anderen Reiter.",
     ja: "このツールの会話はありません。上の別のタブをご覧ください。",
   },
-  "imp.turns": { ko: "{n}마디", en: "{n} messages", de: "{n} Nachrichten", ja: "{n}件" },
-  "imp.import": { ko: "가져오기", en: "Import", de: "Holen", ja: "取り込む" },
-  "imp.cancel": { ko: "취소", en: "Cancel", de: "Abbrechen", ja: "キャンセル" },
   "imp.close": { ko: "닫기 (Esc)", en: "Close (Esc)", de: "Schließen (Esc)", ja: "閉じる (Esc)" },
   "imp.reading": { ko: "읽는 중…", en: "Reading…", de: "Lese…", ja: "読み込み中…" },
 

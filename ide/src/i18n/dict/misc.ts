@@ -17,6 +17,12 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "misc.accept": { ko: "수락", en: "Accept", de: "Annehmen", ja: "承認" },
   "misc.reject": { ko: "거절", en: "Reject", de: "Ablehnen", ja: "拒否" },
   "misc.newTerminal": { ko: "새 터미널", en: "New terminal", de: "Neues Terminal", ja: "新しいターミナル" },
+  "misc.editorTabs": { ko: "편집기 탭", en: "Editor tabs", de: "Editor-Tabs", ja: "エディタータブ" },
+  // 변경 전체 개요 — 여러 파일이 움직일 때만 뜬다
+  "chg.title": { ko: "이번 변경", en: "This change", de: "Diese Änderung", ja: "この変更" },
+  "chg.total": { ko: "파일 {files}개", en: "{files} files", de: "{files} Dateien", ja: "{files} ファイル" },
+  // 작업 실행기 — package.json 의 scripts
+  "task.run": { ko: "작업: {name}", en: "Task: {name}", de: "Aufgabe: {name}", ja: "タスク: {name}" },
   "misc.problems": { ko: "문제", en: "Problems", de: "Probleme", ja: "問題" },
   "misc.aiLog": { ko: "AI 로그", en: "AI log", de: "AI-Log", ja: "AIログ" },
   "misc.collapseDock": { ko: "독 접기", en: "Collapse dock", de: "Dock einklappen", ja: "ドックを折りたたむ" },
@@ -24,6 +30,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "misc.agentActivityHere": { ko: "에이전트 활동이 여기에 기록됩니다.", en: "Agent activity is logged here.", de: "Agenten-Aktivität wird hier protokolliert.", ja: "エージェントの活動がここに記録されます。" },
   "misc.largeProjectDiag": { ko: "대형 프로젝트 — 파일간 진단은 비활성(열린 파일 단위로 표시).", en: "Large project — cross-file diagnostics disabled (shown per open file).", de: "Großes Projekt — dateiübergreifende Diagnose deaktiviert (pro geöffneter Datei angezeigt).", ja: "大規模プロジェクト — ファイル間診断は無効(開いているファイル単位で表示)。" },
   "misc.noProblems": { ko: "문제가 없습니다. ✓", en: "No problems. ✓", de: "Keine Probleme. ✓", ja: "問題はありません。✓" },
+  // 빠른 수정 — 전구가 에디터 안에만 있어서 문제 패널에서는 이동만 되고 고칠 수가 없었다.
+  "misc.quickFix": { ko: "고치기", en: "Fix", de: "Beheben", ja: "修正" },
+  "misc.quickFixTitle": { ko: "이 자리로 가서 빠른 수정을 엽니다", en: "Go there and open quick fixes", de: "Dorthin springen und Schnellkorrekturen öffnen", ja: "その位置へ移動してクイックフィックスを開きます" },
   "misc.unsavedTitle": { ko: "저장하지 않은 변경", en: "Unsaved changes", de: "Ungespeicherte Änderungen", ja: "保存されていない変更" },
   "misc.unsavedBodySuffix": { ko: " 에 저장하지 않은 변경이 있습니다. 어떻게 할까요?", en: " has unsaved changes. What would you like to do?", de: " hat ungespeicherte Änderungen. Was möchten Sie tun?", ja: " に保存されていない変更があります。どうしますか?" },
   "misc.cancel": { ko: "취소", en: "Cancel", de: "Abbrechen", ja: "キャンセル" },

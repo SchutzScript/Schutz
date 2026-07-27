@@ -33,7 +33,17 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc3.replaceFailed": { ko: "바꾸기 실패: ", en: "Replace failed: ", de: "Ersetzen fehlgeschlagen: ", ja: "置換に失敗: " },
   "sc3.replaceSaveFirst": { ko: "미저장 파일을 먼저 저장하세요(모두 바꾸기는 디스크에 적용되어 미저장 편집과 충돌): {files}", en: "Save open files first — Replace All writes to disk and would conflict with unsaved edits: {files}", de: "Speichern Sie offene Dateien zuerst — Alle ersetzen schreibt auf die Festplatte und würde mit ungespeicherten Änderungen kollidieren: {files}", ja: "先に未保存ファイルを保存してください（すべて置換はディスクに適用され未保存編集と競合）: {files}" },
   "sc3.replaceResultsStale": { ko: "검색 결과가 최신이 아닙니다. 다시 검색한 뒤 바꾸세요.", en: "Search results are stale. Re-run the search before replacing.", de: "Suchergebnisse sind veraltet. Führen Sie die Suche erneut aus, bevor Sie ersetzen.", ja: "検索結果が最新ではありません。再検索してから置換してください。" },
+  // AI를 아직 안 붙인 사용자가 **처음 보는 메시지**. 마지막까지 한국어로 굳어 있었다.
+  "sc3.noAiConnected": {
+    ko: "아직 연결된 AI가 없습니다.\n\n설정(⚙)을 열고 [로그인]을 눌러 Claude 또는 ChatGPT 계정으로 연결하세요 (구독 사용, API 키 불필요). API 키 방식도 지원합니다.",
+    en: "No AI is connected yet.\n\nOpen Settings (⚙) and click [Sign in] to connect your Claude or ChatGPT account — it uses your subscription, so no API key is needed. API keys work too.",
+    de: "Es ist noch keine KI verbunden.\n\nÖffnen Sie die Einstellungen (⚙) und klicken Sie auf [Anmelden], um Ihr Claude- oder ChatGPT-Konto zu verbinden — das nutzt Ihr Abo, ein API-Schlüssel ist nicht nötig. API-Schlüssel gehen ebenfalls.",
+    ja: "まだ AI が接続されていません。\n\n設定（⚙）を開き［ログイン］から Claude または ChatGPT アカウントを接続してください。サブスクリプションを使うので API キーは不要です。API キー方式にも対応しています。",
+  },
   "sc3.openProjectFirst": { ko: "먼저 프로젝트를 열어주세요.", en: "Please open a project first.", de: "Bitte öffnen Sie zuerst ein Projekt.", ja: "先にプロジェクトを開いてください。" },
+  // 전역 검색 결과 순회 — 패널을 다시 열지 않고 F4 로 다음 히트로 간다.
+  "sc3.noSearchHits": { ko: "옮겨 갈 검색 결과가 없습니다.", en: "No search results to step through.", de: "Keine Suchergebnisse zum Durchgehen.", ja: "移動できる検索結果がありません。" },
+  "sc3.hitPosition": { ko: "{i}/{n} · {rel}", en: "{i}/{n} · {rel}", de: "{i}/{n} · {rel}", ja: "{i}/{n} · {rel}" },
   "sc3.openDebugFile": { ko: "디버그할 파일을 여세요.", en: "Open a file to debug.", de: "Öffnen Sie eine Datei zum Debuggen.", ja: "デバッグするファイルを開いてください。" },
   "sc3.pythonOnlyDebug": { ko: "현재는 Python(.py) 디버깅만 지원합니다.", en: "Only Python (.py) debugging is currently supported.", de: "Derzeit wird nur Python-Debugging (.py) unterstützt.", ja: "現在は Python(.py) のデバッグのみ対応しています。" },
   "sc3.debugSessionEnded": { ko: "디버그 세션 종료", en: "Debug session ended", de: "Debug-Sitzung beendet", ja: "デバッグセッション終了" },

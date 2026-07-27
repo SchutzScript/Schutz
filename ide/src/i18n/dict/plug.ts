@@ -26,6 +26,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "plug.notFetched": { ko: "아직 안 받음", en: "not fetched", de: "nicht geladen", ja: "未取得" },
   "plug.nSkills": { ko: "스킬 {n}", en: "{n} skills", de: "{n} Skills", ja: "スキル {n}" },
   "plug.nCommands": { ko: "명령 {n}", en: "{n} commands", de: "{n} Befehle", ja: "コマンド {n}" },
+  "plug.nAgents": { ko: "에이전트 {n}", en: "{n} agents", de: "{n} Agenten", ja: "エージェント {n}" },
   "plug.none": { ko: "조건에 맞는 커넥터가 없습니다.", en: "No connectors match.", de: "Keine passenden Connectors.", ja: "条件に合うコネクタがありません。" },
   "plug.enabled": { ko: "{name} 켰습니다", en: "{name} turned on", de: "{name} aktiviert", ja: "{name} をオンにしました" },
   "plug.disabled": { ko: "{name} 껐습니다", en: "{name} turned off", de: "{name} deaktiviert", ja: "{name} をオフにしました" },

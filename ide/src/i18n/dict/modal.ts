@@ -2,7 +2,6 @@
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
   "modal.aboutTitle": { ko: "Schutz 정보", en: "About Schutz", de: "Über Schutz", ja: "Schutz について" },
   "modal.aboutTagline": { ko: "v{version} · AI 네이티브 IDE", en: "v{version} · AI-native IDE", de: "v{version} · KI-natives IDE", ja: "v{version} · AI ネイティブ IDE" },
-  "modal.aboutDesc": { ko: "멀티 AI가 코드를 고치는 과정을 실시간으로 보여주는 IDE.", en: "An IDE that shows multiple AIs fixing code in real time.", de: "Eine IDE, die mehrere KIs beim Beheben von Code in Echtzeit zeigt.", ja: "複数の AI がコードを修正する過程をリアルタイムで見せる IDE。" },
   "modal.aboutLicense": { ko: "라이선스", en: "License", de: "Lizenz", ja: "ライセンス" },
   "modal.aboutEnv": { ko: "환경", en: "Environment", de: "Umgebung", ja: "環境" },
   "modal.aboutEngine": { ko: "엔진", en: "Engine", de: "Engine", ja: "エンジン" },
@@ -11,6 +10,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "modal.usageTitle": { ko: "사용량 대시보드", en: "Usage dashboard", de: "Nutzungs-Dashboard", ja: "使用量ダッシュボード" },
   "modal.usageInputTokens": { ko: "입력 토큰", en: "Input tokens", de: "Eingabe-Tokens", ja: "入力トークン" },
   "modal.usageOutputTokens": { ko: "출력 토큰", en: "Output tokens", de: "Ausgabe-Tokens", ja: "出力トークン" },
+  // 비용은 CLI 가 청구액을 알려줄 때만 뜬다 — 토큰 수로 추정하지 않는다(요금표는 자주 바뀐다).
+  "modal.usageCost": { ko: "비용", en: "Cost", de: "Kosten", ja: "コスト" },
+  "modal.usageCostNote": { ko: "CLI 가 보고한 실제 청구액입니다. 보고하지 않는 연결은 빠져 있습니다.", en: "Actual amount reported by the CLI. Connections that don't report it are not included.", de: "Tatsächlich vom CLI gemeldeter Betrag. Verbindungen ohne Meldung fehlen.", ja: "CLI が報告した実際の請求額です。報告しない接続は含まれません。" },
   "modal.usageSessionCost": { ko: "세션 비용", en: "Session cost", de: "Sitzungskosten", ja: "セッション費用" },
   "modal.usageByAgent": { ko: "에이전트별", en: "By agent", de: "Nach Agent", ja: "エージェント別" },
   "modal.usageNoAgents": { ko: "연결된 에이전트가 없습니다. 설정에서 로그인하세요.", en: "No connected agents. Sign in from settings.", de: "Keine verbundenen Agenten. Melde dich in den Einstellungen an.", ja: "接続されたエージェントがありません。設定からログインしてください。" },
@@ -21,14 +23,4 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   // 단가를 모르는 모델 — 추정값으로 금액을 지어내지 않는다
   "modal.quotaResets": { ko: "{when} 후 리셋", en: "resets in {when}", de: "Reset in {when}", ja: "{when} 後にリセット" },
   "modal.keysTitle": { ko: "키보드 단축키", en: "Keyboard shortcuts", de: "Tastenkürzel", ja: "キーボードショートカット" },
-  "modal.kbWorkspaceSymbol": { ko: "작업공간 기호 이동", en: "Go to workspace symbol", de: "Zu Arbeitsbereich-Symbol springen", ja: "ワークスペースシンボルへ移動" },
-  "modal.kbCycleTabs": { ko: "탭 순환 (MRU)", en: "Cycle tabs (MRU)", de: "Tabs durchwechseln (MRU)", ja: "タブ切り替え (MRU)" },
-  "modal.kbGoToLine": { ko: "줄로 이동", en: "Go to line", de: "Zu Zeile springen", ja: "行へ移動" },
-  "modal.kbDebugStart": { ko: "디버그 실행/계속", en: "Start/continue debugging", de: "Debugging starten/fortsetzen", ja: "デバッグ開始/続行" },
-  "modal.kbStepOver": { ko: "스텝 오버", en: "Step over", de: "Überspringen", ja: "ステップオーバー" },
-  "modal.kbStepInto": { ko: "스텝 인투", en: "Step into", de: "Hineinspringen", ja: "ステップイン" },
-  "modal.kbStepOut": { ko: "스텝 아웃", en: "Step out", de: "Herausspringen", ja: "ステップアウト" },
-  "modal.kbDebugStop": { ko: "디버그 정지", en: "Stop debugging", de: "Debugging stoppen", ja: "デバッグ停止" },
-  "modal.kbInlineEdit": { ko: "인라인 편집 (AI)", en: "Inline edit (AI)", de: "Inline-Bearbeitung (KI)", ja: "インライン編集 (AI)" },
-  "modal.kbToggleTerminal": { ko: "터미널 토글", en: "Toggle terminal", de: "Terminal umschalten", ja: "ターミナル切り替え" },
 };

@@ -4,8 +4,8 @@
 // 않고 약속을 말한다 — 무엇이 어디 있는지는 그 다음(15단계 투어)이 한다.
 //
 // open.say 는 **언어와 무관하게 독일어**로 둔다. Schutz·Feldgrau 가 이미 독일어라
-// 브랜드의 목소리이고, 짧고 대구가 맞아 뜻을 몰라도 리듬이 읽힌다. 대신 바로 아래에
-// open.saySub 로 사용자 언어 번역을 작게 깐다 — 멋만 부리고 뜻을 안 주면 안 된다.
+// 브랜드의 목소리이고, 짧고 대구가 맞아 뜻을 몰라도 리듬이 읽힌다. 번역 자막은
+// 붙이지 않는다 — 자막이 붙는 순간 표어가 아니라 설명문이 되고, 설명문은 넘겨진다.
 // *별표* 로 감싼 낱말은 강조로 렌더된다.
 export const dict: Record<string, Record<string, string>> = {
   "open.aria": {
@@ -19,12 +19,6 @@ export const dict: Record<string, Record<string, string>> = {
     en: "Die *KI* schreibt. *Du* entscheidest.",
     de: "Die *KI* schreibt. *Du* entscheidest.",
     ja: "Die *KI* schreibt. *Du* entscheidest.",
-  },
-  "open.saySub": {
-    ko: "AI 가 씁니다. 당신이 정합니다.",
-    en: "The AI writes. You decide.",
-    de: "Die KI schreibt den Code — Sie entscheiden, was davon bleibt.",
-    ja: "AI が書きます。あなたが決めます。",
   },
 
   // ── 세팅 (오프닝에서 유일하게 멈추는 지점) ─────────────────────────

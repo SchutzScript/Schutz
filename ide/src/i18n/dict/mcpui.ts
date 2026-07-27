@@ -1,6 +1,27 @@
 // mcpui 도메인 번역 사전
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
   "mcpui.title": { ko: "MCP 서버", en: "MCP Servers", de: "MCP-Server", ja: "MCP サーバー" },
+  // MCP 번들(.mcpb) — 파일 하나를 끌어다 놓으면 서버가 된다. 남이 만든 파일이 우리 기계에서
+  // 명령을 실행하게 되는 일이라, 무엇이 실행될지 보여 준 뒤에만 설치한다.
+  "mcpb.section": { ko: "번들에서 설치", en: "Install from a bundle", de: "Aus einem Bundle installieren", ja: "バンドルからインストール" },
+  "mcpb.sectionHint": { ko: ".mcpb 파일을 창에 끌어다 놓거나 여기서 고르세요.", en: "Drop a .mcpb file onto the window, or choose one here.", de: "Ziehen Sie eine .mcpb-Datei auf das Fenster oder wählen Sie hier eine aus.", ja: ".mcpb ファイルをウィンドウにドロップするか、ここで選んでください。" },
+  "mcpb.pick": { ko: "번들 고르기", en: "Choose bundle", de: "Bundle wählen", ja: "バンドルを選ぶ" },
+  "mcpb.title": { ko: "MCP 번들 설치", en: "Install MCP bundle", de: "MCP-Bundle installieren", ja: "MCP バンドルをインストール" },
+  "mcpb.willRun": { ko: "설치하면 이 명령이 실행됩니다", en: "Installing will run this command", de: "Bei der Installation wird dieser Befehl ausgeführt", ja: "インストールするとこのコマンドが実行されます" },
+  "mcpb.tools": { ko: "들고 오는 도구 {n}개", en: "{n} tools included", de: "{n} Werkzeuge enthalten", ja: "含まれるツール {n} 個" },
+  "mcpb.settings": { ko: "번들이 요구하는 값", en: "Values this bundle needs", de: "Vom Bundle benötigte Werte", ja: "バンドルが必要とする値" },
+  "mcpb.fillRequired": { ko: "필수 항목을 채워 주세요.", en: "Please fill in the required fields.", de: "Bitte füllen Sie die Pflichtfelder aus.", ja: "必須項目を入力してください。" },
+  "mcpb.install": { ko: "설치", en: "Install", de: "Installieren", ja: "インストール" },
+  "mcpb.installing": { ko: "설치 중…", en: "Installing…", de: "Wird installiert…", ja: "インストール中…" },
+  "mcpb.installedStarted": { ko: "{name} 을(를) 설치하고 시작했습니다.", en: "Installed and started {name}.", de: "{name} installiert und gestartet.", ja: "{name} をインストールして開始しました。" },
+  "mcpb.installedNotStarted": { ko: "{name} 을(를) 설치했지만 시작하지 못했습니다. 목록에서 다시 시도해 보세요.", en: "Installed {name} but it did not start. Try starting it from the list.", de: "{name} wurde installiert, startete aber nicht. Versuchen Sie es in der Liste erneut.", ja: "{name} をインストールしましたが起動できませんでした。一覧から再試行してください。" },
+  "mcpb.willReplace": { ko: "이미 {name} 이라는 서버가 있습니다. 설치하면 그것을 대신합니다.", en: "A server named {name} already exists. Installing will replace it.", de: "Ein Server namens {name} existiert bereits. Die Installation ersetzt ihn.", ja: "{name} という名前のサーバーが既にあります。インストールすると置き換えられます。" },
+  "mcpb.warnShell": { ko: "이 번들은 셸을 직접 실행합니다. 만든 곳을 믿을 수 있을 때만 설치하세요.", en: "This bundle runs a shell directly. Install it only if you trust its source.", de: "Dieses Bundle führt direkt eine Shell aus. Installieren Sie es nur aus vertrauenswürdiger Quelle.", ja: "このバンドルはシェルを直接実行します。提供元を信頼できる場合のみインストールしてください。" },
+  "mcpb.scope": { ko: "번들은 인터넷에서 받은 남의 프로그램입니다. 설치하면 위 명령이 이 컴퓨터에서 실행됩니다.", en: "A bundle is someone else's program from the internet. Installing runs the command above on this computer.", de: "Ein Bundle ist ein fremdes Programm aus dem Internet. Die Installation führt den obigen Befehl auf diesem Rechner aus.", ja: "バンドルはインターネットから入手した他者のプログラムです。インストールすると上のコマンドがこのコンピューターで実行されます。" },
+  "mcpb.noPath": { ko: "끌어다 놓은 파일의 경로를 얻지 못했습니다.", en: "Could not get the path of the dropped file.", de: "Der Pfad der abgelegten Datei konnte nicht ermittelt werden.", ja: "ドロップしたファイルのパスを取得できませんでした。" },
+  "mcpb.openFailed": { ko: "번들을 열지 못했습니다.", en: "Could not open the bundle.", de: "Das Bundle konnte nicht geöffnet werden.", ja: "バンドルを開けませんでした。" },
+  "mcpb.commitFailed": { ko: "번들을 설치 위치로 옮기지 못했습니다.", en: "Could not move the bundle into place.", de: "Das Bundle konnte nicht an seinen Platz verschoben werden.", ja: "バンドルを設置先へ移動できませんでした。" },
+  "mcpb.unresolved": { ko: "채워지지 않은 값이 있습니다: {keys}", en: "Some values were left unfilled: {keys}", de: "Einige Werte wurden nicht ausgefüllt: {keys}", ja: "未入力の値があります: {keys}" },
   "mcpui.intro": { ko: "Schutz가 직접 MCP 서버를 실행하고, 그 도구를 AI에게 노출합니다. 프로그램을 분석해 새로 만들거나, Claude Code·Codex에 설정된 서버를 가져올 수 있어요.", en: "Schutz runs MCP servers directly and exposes their tools to the AI. You can analyze a program to create a new one, or import servers configured in Claude Code or Codex.", de: "Schutz führt MCP-Server direkt aus und stellt ihre Werkzeuge der KI bereit. Du kannst ein Programm analysieren, um einen neuen zu erstellen, oder in Claude Code bzw. Codex konfigurierte Server importieren.", ja: "Schutz が MCP サーバーを直接実行し、そのツールを AI に公開します。プログラムを解析して新規作成したり、Claude Code・Codex に設定されたサーバーを取り込んだりできます。" },
   "mcpui.createNew": { ko: "새 MCP 서버 생성", en: "Create new MCP server", de: "Neuen MCP-Server erstellen", ja: "新しい MCP サーバーを作成" },
   "mcpui.modeCli": { ko: "CLI 도구", en: "CLI tool", de: "CLI-Werkzeug", ja: "CLI ツール" },
