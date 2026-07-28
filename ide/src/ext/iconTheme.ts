@@ -1,6 +1,6 @@
 // VS Code 아이콘 테마를 파일 아이콘으로 적용. 폰트형(fontCharacter) + SVG형(iconPath) 모두 지원.
 // SVG는 렌더 중 동기 접근이 안 되므로 lazy 로드 후 onChange로 재렌더한다.
-import { parseJsonc } from "./jsonc";
+import { parseJsonc } from "../engine/jsonc";
 
 export interface IconRender {
   kind: "font" | "svg";

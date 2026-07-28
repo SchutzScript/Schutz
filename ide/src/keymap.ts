@@ -19,7 +19,8 @@ export type ActionId =
   | "split.one" | "split.two" | "split.four"
   | "debug.startOrContinue" | "debug.stop" | "debug.stepOver" | "debug.stepIn" | "debug.stepOut"
   | "find.next" | "find.prev"
-  | "search.nextHit" | "search.prevHit";
+  | "search.nextHit" | "search.prevHit"
+  | "tabs.close" | "tabs.reopen" | "editor.fontUp" | "editor.fontDown" | "view.sidebar";
 
 /** i18n 키로 라벨을 만든다 — 표가 언어별 문자열을 들고 있지 않게. */
 export interface Binding { id: ActionId; def: string; labelKey: string }
@@ -45,8 +46,13 @@ export const BINDINGS: Binding[] = [
   { id: "file.new", def: "Mod+N", labelKey: "key.newFile" },
   { id: "window.new", def: "Mod+Shift+N", labelKey: "key.newWindow" },
   { id: "project.open", def: "Mod+O", labelKey: "key.openProject" },
+  { id: "tabs.close", def: "Mod+W", labelKey: "key.closeTab" },
+  { id: "tabs.reopen", def: "Mod+Shift+T", labelKey: "key.reopenTab" },
   { id: "tabs.mru", def: "Mod+Tab", labelKey: "key.cycleTabs" },
   { id: "tabs.mruBack", def: "Mod+Shift+Tab", labelKey: "key.cycleTabsBack" },
+  { id: "editor.fontUp", def: "Mod+=", labelKey: "key.fontUp" },
+  { id: "editor.fontDown", def: "Mod+-", labelKey: "key.fontDown" },
+  { id: "view.sidebar", def: "Mod+B", labelKey: "key.toggleSidebar" },
   { id: "settings.open", def: "Mod+,", labelKey: "key.settings" },
   { id: "terminal.toggle", def: "Mod+`", labelKey: "key.toggleTerminal" },
   { id: "mode.toggle", def: "Mod+Shift+M", labelKey: "key.toggleMode" },

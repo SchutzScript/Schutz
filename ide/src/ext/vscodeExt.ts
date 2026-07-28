@@ -1,7 +1,7 @@
 // VS Code 확장의 선언형 기여를 Monaco에 적용 — 테마 · 스니펫 · 언어설정.
 // 프로그램형(vscode.* API) 확장은 처리하지 않는다(미지원).
 import monaco from "../editor/monacoSetup";
-import { parseJsonc } from "./jsonc";
+import { parseJsonc } from "../engine/jsonc";
 
 export interface ImportedTheme { id: string; label: string; base: "vs" | "vs-dark"; extId: string; }
 

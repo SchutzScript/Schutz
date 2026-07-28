@@ -299,6 +299,8 @@ interface S {
   /** Git 브랜치·로그 */
   gitBranches: string[];
   gitLog: { hash: string; author: string; date: string; subject: string }[];
+  /** git 상태가 갱신될 때마다 오르는 수 — 에디터 거터를 다시 그리게 하는 신호. */
+  gitVer: number;
   /** 감춰둔 변경(stash) 목록. 백엔드 stashList 는 있었는데 부르는 곳이 없어
    *  감춰만 두고 무엇이 들어 있는지 볼 방법이 없었다. */
   gitStashes: { ref: string; subject: string }[];
@@ -509,6 +511,8 @@ interface S {
   langPickOpen: boolean;
   /** 트리 우클릭 메뉴 */
   ctxMenu: { x: number; y: number; rel: string; isDir: boolean } | null;
+  /** 탭 우클릭 메뉴 — 다른 탭 닫기·오른쪽 닫기처럼 한 번에 여러 개를 정리하는 자리. */
+  tabMenu: { x: number; y: number; slot: number; rel: string } | null;
   /** 트리 인라인 편집 — 새 파일/폴더(rel=부모 dir, ""=루트) 또는 이름변경(rel=대상) */
   treeEdit: { kind: "newFile" | "newFolder" | "rename"; rel: string; value: string } | null;
   /** 새 버전 알림 — 최신 릴리스가 지금 버전보다 위일 때만 채워진다 */
@@ -648,7 +652,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     breakpoints: {}, debug: null, debugConsole: [], watches: [], watchInput: "",
     extCommands: [], extList: [], extErrors: [], extLimited: [], extPanel: null, extThemes: [], extIconThemes: [], iconVer: 0, extSearch: "", extResults: [], extBusy: false, extInstalling: [], extDetail: null, extDetailBusy: false,
     git: null, gitMsg: "", gitBusy: false, gitError: "",
-    gitBranches: [], gitLog: [], gitStashes: [], branchOpen: false, newBranch: "",
+    gitBranches: [], gitLog: [], gitStashes: [], gitVer: 0, branchOpen: false, newBranch: "",
     attach: [], attachPickerOpen: false, attachQuery: "",
     openMenu: null, projOpen: false,
     agentsOpen: true, reviewOpen: true,
@@ -679,7 +683,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     problems: [], tsLargeProject: false,
     cmdOpen: false, cmdQuery: "", cmdSel: 0, modelPickFor: null,
     toasts: [],
-    leftW: (() => { try { return Math.max(200, Math.min(520, +(localStorage.getItem("schutz.leftW") || 272))); } catch { return 272; } })(),
+    // 0 은 "접힘" 이다. 예전엔 하한 200 이라 접은 채로 껐다 켜면 도로 펴졌다.
+    leftW: (() => { try { const v = +(localStorage.getItem("schutz.leftW") || 272); return v === 0 ? 0 : Math.max(200, Math.min(520, v)); } catch { return 272; } })(),
     uiMode: getUiMode(),   // 워크스페이스는 아직 없다 — 전역 기본값. 열릴 때 프로젝트 값으로 다시 맞춘다
     rightW: (() => { try { return Math.max(240, Math.min(600, +(localStorage.getItem("schutz.rightW") || 336))); } catch { return 336; } })(),
     // 대화 높이. 예전엔 트리와 대화가 둘 다 flex:1 이라 50/50 으로 고정이었다.
@@ -687,7 +692,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     mdPreview: {}, replaceOpen: false, replaceVal: "",
     searchOpts: { regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "" },
     mruOpen: false, mruSel: 0,
-    collapsed: {}, statusInfo: null, langPickOpen: false, ctxMenu: null, treeEdit: null, update: null,
+    collapsed: {}, statusInfo: null, langPickOpen: false, ctxMenu: null, tabMenu: null, treeEdit: null, update: null,
   };
 
   /** 새 파일이 열릴 슬롯 (포커스 추종) */
@@ -1185,7 +1190,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       const restored = this.restoredLayout(tree, this.state.layout); // 재시작 전 열려 있던 탭/레이아웃 복원
       // 복원 직후 첫 componentDidUpdate 의 자동 persist 스킵 — 복원본(prune 포함)을 그대로 되쓰지 않게
       // (일시적 미가용·오판 prune 이 저장 레이아웃을 영구 덮어쓰는 것 방지). componentDidUpdate 는 setState 콜백보다 먼저 실행되므로 여기서 시드.
-      this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active;
+      this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active; this._lastCollapsedRef = restored.collapsed;
       this.setState(s => ({
         workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
         docs: window.schutz ? {} : freshDocs(), files: [], plan: [], tools: [], chips: {},
@@ -1194,7 +1199,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         uiMode: getUiMode(tree.root),
         // 어느 대화를 열지 여기서 정한다 — 이어보던 것 → 레거시 이관분 → 가장 최근 → 새것.
         convId: this.pickConv(tree.root),
-        agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: {},
+        agents: this.freshAgents(), proposals: [], paneVer: {}, collapsed: restored.collapsed,
         git: null, gitMsg: "", gitError: "", attach: [], problems: [], tsLargeProject: false,
       } as any), () => {
         this._focusSlot = 0;
@@ -1244,7 +1249,14 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     if (!ws) return [];
     const q = this.state.quickQuery.toLowerCase();
     const files = ws.entries.filter(e => !e.dir);
-    if (!q) return files.slice(0, 12);
+    // 빈 채로 열면 **최근 연 파일**을 준다. 예전엔 사전순 앞 12개라 Ctrl+P → Enter 가
+    // 늘 엉뚱한 파일로 갔다 — VS Code 에서는 그게 "직전 파일로 돌아가기" 다.
+    if (!q) {
+      const byRel = new Map(files.map(f => [f.rel, f]));
+      const recent = this._tabMRU.map(r => byRel.get(r)).filter((f): f is SchutzTreeEntry => !!f);
+      const rest = files.filter(f => !this._tabMRU.includes(f.rel));
+      return [...recent, ...rest].slice(0, 12);
+    }
     const scored = files
       .map(f => {
         const p = f.rel.toLowerCase();
@@ -2570,6 +2582,53 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     this._removeTab(slot, rel);
   }
 
+  /** 이 슬롯에서 한 번에 여러 탭을 닫는다. 미저장 확인은 closeTab 이 각자 하므로
+   *  그대로 태운다 — 확인이 뜨면 그 파일만 남고 나머지는 정리된다. */
+  closeTabsIn(slot: number, which: "others" | "right" | "all") {
+    const here = this.state.tabs[slot] ?? [];
+    const cur = this.state.tabMenu?.rel ?? this.state.active[slot];
+    const i = here.indexOf(cur);
+    const targets =
+      which === "all" ? [...here]
+      : which === "others" ? here.filter(r => r !== cur)
+      : i >= 0 ? here.slice(i + 1) : [];
+    // 뒤에서부터 — 앞에서 지우면 인덱스가 밀려 오른쪽 목록이 어긋난다.
+    for (const rel of [...targets].reverse()) this.closeTab(slot, rel);
+  }
+
+  /** 방금 닫은 탭들 — Ctrl+Shift+T 로 되살린다. 커서·스크롤은 projectModels 가
+   *  이미 들고 있어서(saveView) 경로만 기억하면 원래 보던 자리로 그대로 돌아온다. */
+  private _closedTabs: { slot: number; rel: string }[] = [];
+
+  reopenClosedTab() {
+    for (;;) {
+      const last = this._closedTabs.pop();
+      if (!last) { this.toast("info", t("tabm.nothingToReopen")); return; }
+      if (this.isOpen(last.rel)) continue;          // 그 사이 다시 연 것은 건너뛴다
+      this.openFile(last.rel);
+      return;
+    }
+  }
+
+  /** 에디터 글자 크기 한 칸. 설정과 같은 경로를 타므로 모든 페인에 즉시 반영된다. */
+  bumpFontSize(delta: number) {
+    const cur = getEditorPrefs().fontSize;
+    const next = Math.max(9, Math.min(28, cur + delta));
+    if (next === cur) return;
+    this.applyEditorPref({ fontSize: next });
+    this.toast("info", t("misc.fontSizeNow", { n: next }));
+  }
+
+  /** 좌측 패널 접기/펴기. 폭은 200 아래로 못 내려가게 막혀 있어서, 좁은 화면에서
+   *  코드 폭을 확보할 방법이 아예 없었다. 접기 전 폭을 기억해 그대로 되돌린다. */
+  private _leftWBeforeHide = 0;
+  toggleSidebar() {
+    this.setState(s => {
+      if (s.leftW > 0) { this._leftWBeforeHide = s.leftW; return { leftW: 0 }; }
+      return { leftW: this._leftWBeforeHide || 272 };
+    }, () => { try { localStorage.setItem("schutz.leftW", String(this.state.leftW)); } catch { /* */ } });
+  }
+
   private _closeTabTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 대기 중인 닫기 애니메이션 취소 — 재오픈/선택 시 뒤늦게 탭이 제거되는 것 방지 */
   private _cancelPendingClose(rel: string) {
@@ -2582,6 +2641,10 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   private _removeTab(slot: number, rel: string) {
     const key = slot + ":" + rel;
     if (this.state.closingTabs.includes(key)) return;
+    // 되살리기 스택 — diff·프리뷰 같은 특수 탭은 경로가 아니라 키라서 담지 않는다.
+    if (!this.parseDiffKey(rel) && !this.parsePreviewKey(rel)) {
+      this._closedTabs = [...this._closedTabs.filter(c => c.rel !== rel), { slot, rel }].slice(-20);
+    }
     // 탭을 곧바로 제거하지 않고 szTabOut 재생 후 언마운트.
     // 전용 타이머 — clearTimers()(startRun/stopRun) 가 이 닫기 타이머를 지워 좀비탭(닫힘 상태 영구 고착)이 되지 않도록 _timers 풀 밖에 둔다.
     this.setState(s => ({ closingTabs: [...s.closingTabs, key] }));
@@ -3834,12 +3897,32 @@ ${(r.output || "").slice(0, 2000)}`;
     return this._winId > 0 ? `schutz.layout:${r}::w${this._winId}` : `schutz.layout:${r}`;
   }
   /** 재시작 전 열려 있던 탭/활성/레이아웃 복원 (존재하는 실제 파일만). 없으면 빈 슬롯 */
-  private restoredLayout(tree: SchutzWorkspaceTree, fallbackLayout: number): { tabs: string[][]; active: string[]; layout: number } {
+  /** 트리 접힘 상태 — 저장된 게 있으면 그대로, 없으면 **깊은 폴더는 접은 채로** 연다.
+   *
+   *  예전엔 늘 전부 펼친 상태였다. node_modules 를 걸러도 웬만한 저장소는 수백 줄이라
+   *  트리가 벽이 되고, 파일 하나 찾으려면 스크롤부터 해야 했다. 위 두 단계만 보이게
+   *  시작하면 프로젝트의 모양이 한눈에 들어온다. 사용자가 편 것은 그대로 저장된다. */
+  private restoredCollapsed(tree: SchutzWorkspaceTree, saved: any): Record<string, boolean> {
+    if (saved && Array.isArray(saved.collapsed)) {
+      const out: Record<string, boolean> = {};
+      for (const rel of saved.collapsed) if (typeof rel === "string") out[rel] = true;
+      return out;
+    }
+    const out: Record<string, boolean> = {};
+    for (const e of tree.entries) if (e.dir && e.depth >= 1) out[e.rel] = true;
+    return out;
+  }
+
+  private restoredLayout(tree: SchutzWorkspaceTree, fallbackLayout: number): { tabs: string[][]; active: string[]; layout: number; collapsed: Record<string, boolean> } {
     const k = this.layoutKey(tree.root);
     let d: any = null;
     try { const raw = k && localStorage.getItem(k); if (raw) d = JSON.parse(raw); } catch { /* */ }
     const layout = d && [1, 2, 4].includes(d.layout) ? d.layout : fallbackLayout;
-    if (!d || !Array.isArray(d.tabs)) { const ns = this.normSlots([], [], layout); return { tabs: ns.tabs, active: ns.active, layout }; }
+    // 저장본이 없거나 깨졌을 때 — 첫 실행이 정확히 이 길이라 collapsed 를 빠뜨리면 안 된다.
+    if (!d || !Array.isArray(d.tabs)) {
+      const ns = this.normSlots([], [], layout);
+      return { tabs: ns.tabs, active: ns.active, layout, collapsed: this.restoredCollapsed(tree, d) };
+    }
     // 트리가 capped(truncated)면 tree.entries 를 존재 오라클로 신뢰 불가(>4000파일·깊은 경로 파일 누락) →
     // 필터하지 않고 보존해 실제 존재하는 탭이 시작 시 사라지지 않게. 진짜 삭제 파일은 pane 오류 오버레이가 처리.
     const truncated = !!(tree as any).truncated;
@@ -3848,7 +3931,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const tabs: string[][] = [];
     for (let i = 0; i < layout; i++) tabs.push((Array.isArray(d.tabs[i]) ? d.tabs[i] : []).filter(keep));
     const active = tabs.map((slot, i) => (Array.isArray(d.active) && slot.includes(d.active[i])) ? d.active[i] : (slot[slot.length - 1] ?? ""));
-    return { tabs, active, layout };
+    return { tabs, active, layout, collapsed: this.restoredCollapsed(tree, d) };
   }
   private _layoutT: ReturnType<typeof setTimeout> | null = null;
   /** 현재 탭/활성/레이아웃을 워크스페이스별로 저장 (디바운스) */
@@ -3858,9 +3941,12 @@ ${(r.output || "").slice(0, 2000)}`;
       const k = this.layoutKey();
       if (!k) return;
       try {
-        const { tabs, active, layout } = this.state;
+        const { tabs, active, layout, collapsed } = this.state;
         const clean = tabs.map(slot => slot.filter(rel => !this.parseDiffKey(rel) && !this.parsePreviewKey(rel))); // diff 등 특수 탭 제외
-        localStorage.setItem(k, JSON.stringify({ tabs: clean, active, layout }));
+        // 접어 둔 폴더도 같이 남긴다 — 이게 없으면 프로젝트를 열 때마다 트리가 전부 펼쳐진다.
+        // true 인 것만 담아 저장본이 폴더 수만큼 불어나지 않게 한다.
+        const folded = Object.keys(collapsed).filter(r => collapsed[r]);
+        localStorage.setItem(k, JSON.stringify({ tabs: clean, active, layout, collapsed: folded }));
       } catch { /* ignore */ }
     }, 400);
   }
@@ -4160,7 +4246,9 @@ ${(r.output || "").slice(0, 2000)}`;
       const r = await window.schutz.git(ws.root, "status");
       if (stale()) return; // 스테일 응답 드롭(순서 역전 시 옛 status 로 클로버 방지)
       if (!r.ok) { this.setState({ git: { branch: ws.branch ?? null, ahead: 0, behind: 0, upstream: false, notRepo: !!r.notRepo, staged: [], unstaged: [], untracked: [], conflicted: [] } }); return; }
-      this.setState({ git: { branch: r.branch, ahead: r.ahead, behind: r.behind, upstream: r.upstream, staged: r.staged, unstaged: r.unstaged, untracked: r.untracked, conflicted: r.conflicted ?? [] } });
+      // gitVer 를 올려 열려 있는 에디터의 거터를 다시 그리게 한다 — 커밋 직후에도
+      // 거터가 옛 변경을 계속 가리키던 자리다.
+      this.setState(st => ({ git: { branch: r.branch, ahead: r.ahead, behind: r.behind, upstream: r.upstream, staged: r.staged, unstaged: r.unstaged, untracked: r.untracked, conflicted: r.conflicted ?? [] }, gitVer: st.gitVer + 1 }));
       // 브랜치·로그도 함께 (실패 무시, 스테일 시 무시)
       window.schutz.git(ws.root, "branches").then(b => { if (!stale() && b?.ok) this.setState({ gitBranches: b.branches }); }).catch(() => { });
       window.schutz.git(ws.root, "log", { n: 40 }).then(l => { if (!stale() && l?.ok) this.setState({ gitLog: l.commits }); }).catch(() => { });
@@ -4728,6 +4816,20 @@ ${(r.output || "").slice(0, 2000)}`;
       case "search.nextHit": prevent(); this.stepHit(1); return;
       case "search.prevHit": prevent(); this.stepHit(-1); return;
 
+      // 탭을 닫는 길이 ✕ 버튼 하나뿐이었다 — 20개 열어 두면 20번 조준해야 했다.
+      case "tabs.close": {
+        const slot = this._focusSlot, rel = this.state.active[slot];
+        if (!rel) return;
+        prevent(); this.closeTab(slot, rel); return;
+      }
+      case "tabs.reopen": prevent(); this.reopenClosedTab(); return;
+
+      // 글자 크기 — 설정 모달을 열지 않고. wrap·minimap 팔레트 명령과 같은 경로다.
+      case "editor.fontUp": prevent(); this.bumpFontSize(1); return;
+      case "editor.fontDown": prevent(); this.bumpFontSize(-1); return;
+
+      case "view.sidebar": prevent(); this.toggleSidebar(); return;
+
       case "editor.outline": prevent(); this.triggerOutline(); return;
       case "editor.gotoLine": prevent(); this.triggerEditorAction("editor.action.gotoLine"); return;
       // 에디터 안이면 Monaco 에 맡긴다(자체 서식 바인딩이 있다).
@@ -5233,6 +5335,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
   private _lastTabsRef: string[][] | null = null;
   private _lastActiveRef: string[] | null = null;
+  private _lastCollapsedRef: Record<string, boolean> | null = null;
   /** 렌더 커밋 직전의 채팅 스크롤 상태 — 하단 추적 판정은 반드시 갱신 전 값으로 해야 한다 */
   getSnapshotBeforeUpdate(): { chatAtBottom: boolean } | null {
     const el = this._chat;
@@ -5263,9 +5366,12 @@ ${(r.output || "").slice(0, 2000)}`;
       clearTimeout(this._sessionT);
       this._sessionT = setTimeout(() => this.saveSession(), 400);
     }
-    // 탭/활성/레이아웃이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스)
-    if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef)) {
+    // 탭/활성/레이아웃/트리 접힘이 바뀌면(참조 비교 O(1)) 레이아웃 영속 (디바운스).
+    // collapsed 를 여기 안 넣으면 폴더를 접어도 저장이 안 걸린다 — 저장 코드만 고치고
+    // 트리거를 빼먹어서 실제로 한 번 그랬다.
+    if (this.state.workspace && (this.state.tabs !== this._lastTabsRef || this.state.active !== this._lastActiveRef || this.state.collapsed !== this._lastCollapsedRef)) {
       this._lastTabsRef = this.state.tabs; this._lastActiveRef = this.state.active;
+      this._lastCollapsedRef = this.state.collapsed;
       this.persistLayout();
     }
     if (this._chat) {
@@ -5463,6 +5569,32 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderImport()}
         {this.renderToasts()}
         {this.renderMru()}
+        {s.tabMenu && (() => {
+          const tm = s.tabMenu;
+          const here = s.tabs[tm.slot] ?? [];
+          const rightCount = Math.max(0, here.length - 1 - here.indexOf(tm.rel));
+          const item = (label: string, run: () => void, disabled?: boolean) => (
+            <div key={label} className={disabled ? "" : "hvMenuItem"}
+              onClick={() => { if (disabled) return; this.setState({ tabMenu: null }); run(); }}
+              style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: disabled ? "default" : "pointer", color: disabled ? "var(--fg-dim3)" : "var(--fg-code)" }}>{label}</div>
+          );
+          return (
+            <div onClick={() => this.setState({ tabMenu: null })} onContextMenu={e => { e.preventDefault(); this.setState({ tabMenu: null }); }}
+              style={{ position: "fixed", inset: 0, zIndex: 190 }}>
+              <div className="sz-drop" onClick={e => e.stopPropagation()}
+                style={{ position: "fixed", left: tm.x, top: tm.y, minWidth: 170, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, boxShadow: "var(--shadow-pop)", padding: 4, zIndex: 191 }}>
+                {item(t("tabm.close"), () => this.closeTab(tm.slot, tm.rel))}
+                {item(t("tabm.closeOthers"), () => this.closeTabsIn(tm.slot, "others"), here.length < 2)}
+                {item(t("tabm.closeRight"), () => this.closeTabsIn(tm.slot, "right"), rightCount === 0)}
+                {item(t("tabm.closeAll"), () => this.closeTabsIn(tm.slot, "all"))}
+                <div style={{ height: 1, background: "var(--w06)", margin: "4px 6px" }} />
+                {item(t("sc4.ctxCopyPath"), () => void this.copyPath(tm.rel, false))}
+                {item(t("sc4.ctxReveal"), () => void this.revealAt(tm.rel))}
+              </div>
+            </div>
+          );
+        })()}
+
         {s.ctxMenu && (() => {
           const ctx = s.ctxMenu;
           // 항목 하나 = 라벨 + 할 일. 다섯 줄이 같은 여섯 개 속성을 반복하고 있어서 묶었다.
@@ -5484,6 +5616,12 @@ ${(r.output || "").slice(0, 2000)}`;
               {sep}
               {item(t("sc4.ctxCopyPath"), r => void this.copyPath(r, false))}
               {item(t("sc4.ctxCopyAbsPath"), r => void this.copyPath(r, true))}
+              {/* 이 폴더만 검색 — 예전엔 전역 검색을 열고 include 칸에 glob 를 손으로 쳐야 했다 */}
+              {ctx.isDir && item(t("sc4.ctxSearchHere"), r => {
+                this.openO({ searchOpen: true, searchSel: 0 });
+                this.setState(st => ({ searchOpts: { ...st.searchOpts, include: r + "/**" } }),
+                  () => this.onSearchInput(this.state.searchQuery));
+              })}
               {item(t("sc4.ctxReveal"), r => void this.revealAt(r))}
               {sep}
               {item(t("sc4.ctxDelete"), r => void this.deleteAt(r), true)}
@@ -5722,7 +5860,8 @@ ${(r.output || "").slice(0, 2000)}`;
 
           {/* ── Left column ── */}
           <div ref={el => { this._leftCol = el; }}
-            style={{ flex: ag ? 1 : "none", width: ag ? "auto" : s.leftW, minWidth: 0, display: "flex", flexDirection: "column", borderRight: ag ? "none" : "1px solid var(--w06)", background: ag ? "var(--bg-root)" : "var(--bg-panel)" }}>
+            // leftW 0 = 접힘(Ctrl+B). overflow 를 막지 않으면 폭이 0 이어도 내용이 삐져나온다.
+            style={{ flex: ag ? 1 : "none", width: ag ? "auto" : s.leftW, minWidth: 0, overflow: "hidden", display: "flex", flexDirection: "column", borderRight: ag ? "none" : "1px solid var(--w06)", background: ag ? "var(--bg-root)" : "var(--bg-panel)" }}>
             <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", ...gone }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
@@ -7261,6 +7400,7 @@ ${(r.output || "").slice(0, 2000)}`;
               breakpoints={s.breakpoints[activeRel]}
               stoppedLine={s.debug?.stoppedRel === activeRel ? s.debug.stoppedLine : null}
               onToggleBreakpoint={this.toggleBreakpoint}
+              gitVer={s.gitVer}
             />
           ) : this.renderDemoBody(activeRel)}
         </div>
@@ -7349,6 +7489,9 @@ ${(r.output || "").slice(0, 2000)}`;
                 // flex:none 이 핵심 — 예전엔 기본값(0 1 auto)이라 탭이 줄어들었다. 아이콘·닫기
                 // 버튼·패딩이 61px 를 먹으니, 11개만 열어도 이름 칸이 13px 로 눌려 파일명이
                 // 사실상 안 보였다. 이제 탭은 내용 크기(최대 200px)를 지키고 스트립이 스크롤된다.
+                // 가운데 클릭으로 닫기 — 탭이 여럿일 때 ✕ 를 조준하는 것보다 훨씬 빠르다.
+                onAuxClick={e => { if (e.button === 1) { e.preventDefault(); this.closeTab(si, rel); } }}
+                onContextMenu={e => { e.preventDefault(); this.setState({ tabMenu: { x: e.clientX, y: e.clientY, slot: si, rel } }); }}
                 style={{ display: "flex", flex: "none", alignItems: "center", gap: 6, padding: "0 8px 0 11px", cursor: "pointer", minWidth: 0, maxWidth: 200, borderRight: "1px solid var(--w04)", background: on ? "var(--bg-editor)" : "transparent", transition: "background var(--dur) var(--ease)" }}>
                 {dm ? <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: on ? "var(--accent)" : "var(--fg-dim3)" }} />
                   : pv ? <span style={{ flex: "none", fontSize: 11, lineHeight: 1, color: on ? "var(--ok)" : "var(--fg-dim2)" }}>◉</span>
@@ -9960,7 +10103,18 @@ ${(r.output || "").slice(0, 2000)}`;
   }
   mcpStartServer(name: string) { void this.mcpAct(name, async () => { const r = await mcp.startServer(name); if (!r.ok) this.toast("error", t("sc5.mcpStartFail", { name, reason: r.reason || "" })); else this.toast("ok", t("sc5.mcpStarted", { name })); }); }
   mcpStopServer(name: string) { void this.mcpAct(name, () => mcp.stopServer(name)); }
-  mcpRemoveServer(name: string) { void this.mcpAct(name, () => mcp.removeServer(name)); }
+  /** 서버를 목록에서 뺀다. 번들(.mcpb)로 깔린 것이면 풀어 둔 파일까지 지운다 —
+   *  설정만 지우면 userData 에 서버 코드가 영영 남아, 설치·제거를 반복할수록 쌓인다. */
+  mcpRemoveServer(name: string) {
+    void this.mcpAct(name, async () => {
+      await mcp.removeServer(name);
+      if (!window.schutz) return;
+      try {
+        const bundles = await window.schutz.mcpbList();
+        if (bundles.includes(name)) await window.schutz.mcpbRemove(name);
+      } catch { /* 파일 정리 실패가 제거 자체를 막으면 안 된다 */ }
+    });
+  }
   mcpImport(d: { name: string; command: string; args: string[]; env: Record<string, string>; url?: string | null }) {
     void this.mcpAct(d.name, async () => {
       // 원격 커넥터(url)는 실행 파일이 아니라 주소로 등록한다.

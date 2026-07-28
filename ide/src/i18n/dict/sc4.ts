@@ -6,10 +6,17 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc4.ctxNewFolder": { ko: "새 폴더", en: "New Folder", de: "Neuer Ordner", ja: "新規フォルダー" },
   "sc4.ctxRename": { ko: "이름 바꾸기", en: "Rename", de: "Umbenennen", ja: "名前を変更" },
   "sc4.ctxReveal": { ko: "탐색기에서 보기", en: "Reveal in Explorer", de: "Im Explorer anzeigen", ja: "エクスプローラーで表示" },
+  // 탭 우클릭 — 여러 탭을 한 번에 정리하는 자리. 예전엔 ✕ 를 하나씩 눌러야 했다.
+  "tabm.close": { ko: "닫기", en: "Close", de: "Schließen", ja: "閉じる" },
+  "tabm.closeOthers": { ko: "다른 탭 모두 닫기", en: "Close others", de: "Andere schließen", ja: "他のタブを閉じる" },
+  "tabm.closeRight": { ko: "오른쪽 탭 모두 닫기", en: "Close to the right", de: "Rechts davon schließen", ja: "右側のタブを閉じる" },
+  "tabm.closeAll": { ko: "모두 닫기", en: "Close all", de: "Alle schließen", ja: "すべて閉じる" },
+  "tabm.nothingToReopen": { ko: "다시 열 탭이 없습니다.", en: "No closed tab to reopen.", de: "Kein geschlossener Tab zum Wiederöffnen.", ja: "開き直すタブがありません。" },
   // 경로 복사·복제 — 앱 어디에도 없던 것들. 리뷰·이슈에 붙일 땐 상대 경로가 기본이다.
   "sc4.ctxCopyPath": { ko: "경로 복사", en: "Copy path", de: "Pfad kopieren", ja: "パスをコピー" },
   "sc4.ctxCopyAbsPath": { ko: "전체 경로 복사", en: "Copy absolute path", de: "Absoluten Pfad kopieren", ja: "絶対パスをコピー" },
   "sc4.ctxDuplicate": { ko: "복제", en: "Duplicate", de: "Duplizieren", ja: "複製" },
+  "sc4.ctxSearchHere": { ko: "이 폴더에서 찾기", en: "Find in this folder", de: "In diesem Ordner suchen", ja: "このフォルダー内を検索" },
   "sc4.pathCopied": { ko: "복사했습니다 — {path}", en: "Copied — {path}", de: "Kopiert — {path}", ja: "コピーしました — {path}" },
   "sc4.copyFailed": { ko: "복사하지 못했습니다: ", en: "Could not copy: ", de: "Kopieren fehlgeschlagen: ", ja: "コピーできませんでした: " },
   "sc4.duplicated": { ko: "{to} 를 만들었습니다.", en: "Created {to}.", de: "{to} erstellt.", ja: "{to} を作成しました。" },

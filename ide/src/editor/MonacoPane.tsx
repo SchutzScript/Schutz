@@ -21,6 +21,9 @@ interface Props {
   stoppedLine?: number | null;
   /** 거터 클릭으로 브레이크포인트 토글 */
   onToggleBreakpoint?: (rel: string, line: number) => void;
+  /** git 상태가 바뀔 때마다 올라가는 수 — 커밋·브랜치 전환 뒤 거터를 다시 그리게 한다.
+   *  (내용이 아니라 "다시 봐라" 는 신호라서 값 자체에는 뜻이 없다.) */
+  gitVer?: number;
 }
 
 /** IntelliJ 키맵 — 체감되는 핵심 바인딩만 재현 (완전 1:1 아님) */
@@ -57,7 +60,7 @@ export const paneRegistry: { panes: Map<string, PaneApi>; focused: PaneApi | nul
 type LoadState = "loading" | "ready" | "error";
 
 /** 실제 파일을 여는 Monaco 편집 페인 (Electron 전용 — window.schutz 필요) */
-function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint }: Props) {
+function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint, gitVer }: Props) {
   // React.memo 가 부모의 forceUpdate 를 막으므로 언어는 여기서 직접 구독한다.
   const langTick = useLang();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +71,8 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
   const onBpRef = useRef(onToggleBreakpoint);
   onBpRef.current = onToggleBreakpoint;
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  /** 거터를 다시 그리는 함수 — 저장 뒤와 gitVer 변경 때 부른다. setup 안에서 채워진다. */
+  const drawGutterRef = useRef<(() => Promise<void>) | null>(null);
   const bpDecoRef = useRef<string[]>([]);
   const [inlineSel, setInlineSel] = useState<string | null>(null);
   const inlineRangeRef = useRef<{ startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } | null>(null); // Ctrl+K 선택 범위 — 텍스트가 아닌 정확 범위로 적용(non-unique 선택 대응)
@@ -154,6 +159,7 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
           savedRef.current = text;
           setDirty(false);
           onDirtyChange?.(rel, false);
+          void drawGutterRef.current?.();   // 저장했으니 거터도 다시 — 안 하면 방금 고친 줄이 안 뜬다
           setFlash(true);
           setTimeout(() => setFlash(false), 900);
         } catch (e) {
@@ -195,12 +201,19 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
         editor.onDidBlurEditorText(() => { if (editorRef.current && editorRef.current.getValue() !== savedRef.current) void save(); });
       }
 
-      // Git 거터 변경 표시
-      void (async () => {
-        if (!window.schutz) return;
+      // Git 거터 변경 표시.
+      //
+      // 예전엔 이 블록이 마운트 때 딱 한 번만 돌았다(effect 의존성이 [root, rel]). 저장해도,
+      // 커밋해도, 브랜치를 바꿔도 다시 계산되지 않아서 거터의 초록·노랑 줄이 **파일을 처음 연
+      // 순간의 화석**이었다. 커밋 직후에는 전부 거짓말이 된다 — 없는 변경을 있다고 가리킨다.
+      // 이제 저장 뒤와 gitVer 가 바뀔 때 다시 그린다.
+      const drawGutter = async () => {
+        if (!window.schutz || disposed || !editorRef.current) return;
         try {
           const r = await window.schutz.git(root, "diffLines", { path: rel });
-          if (disposed || !r?.ok || !editor) return;
+          const ed = editorRef.current;
+          if (disposed || !ed) return;
+          if (!r?.ok) { decoIds = ed.deltaDecorations(decoIds, []); return; }  // git 밖 파일이면 지운다
           const decos: monaco.editor.IModelDeltaDecoration[] = [];
           for (const [a, b, isMod] of (r.added ?? [])) {
             decos.push({ range: new monaco.Range(a, 1, b, 1), options: { isWholeLine: true, linesDecorationsClassName: isMod ? "sz-gd-mod" : "sz-gd-add" } });
@@ -209,9 +222,11 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
             const line = Math.max(1, ln);
             decos.push({ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, linesDecorationsClassName: "sz-gd-del" } });
           }
-          decoIds = editor.deltaDecorations(decoIds, decos);
+          decoIds = ed.deltaDecorations(decoIds, decos);
         } catch { /* git 없음 무시 */ }
-      })();
+      };
+      drawGutterRef.current = drawGutter;
+      void drawGutter();
     };
 
     const existing = projectModels.getByRel(rel);
@@ -257,6 +272,13 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
     if (stoppedLine) editor.revealLineInCenter(stoppedLine);
     // langTick — hover 메시지의 t() 가 여기서 굳으므로, 언어가 바뀌면 다시 돌아야 한다.
   }, [breakpoints, stoppedLine, state, langTick]);
+
+  // git 상태가 바뀌면 거터를 다시 그린다(커밋·스테이지·브랜치 전환·stash).
+  // 첫 마운트는 setup 이 이미 그렸으므로 여기서 또 부르지 않도록 state 를 본다.
+  useEffect(() => {
+    if (state !== "ready") return;
+    void drawGutterRef.current?.();
+  }, [gitVer, state]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, position: "relative" }}>

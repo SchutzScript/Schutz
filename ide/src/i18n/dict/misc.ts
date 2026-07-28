@@ -30,6 +30,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "misc.agentActivityHere": { ko: "에이전트 활동이 여기에 기록됩니다.", en: "Agent activity is logged here.", de: "Agenten-Aktivität wird hier protokolliert.", ja: "エージェントの活動がここに記録されます。" },
   "misc.largeProjectDiag": { ko: "대형 프로젝트 — 파일간 진단은 비활성(열린 파일 단위로 표시).", en: "Large project — cross-file diagnostics disabled (shown per open file).", de: "Großes Projekt — dateiübergreifende Diagnose deaktiviert (pro geöffneter Datei angezeigt).", ja: "大規模プロジェクト — ファイル間診断は無効(開いているファイル単位で表示)。" },
   "misc.noProblems": { ko: "문제가 없습니다. ✓", en: "No problems. ✓", de: "Keine Probleme. ✓", ja: "問題はありません。✓" },
+  "misc.fontSizeNow": { ko: "글자 크기 {n}", en: "Font size {n}", de: "Schriftgröße {n}", ja: "文字サイズ {n}" },
   // 빠른 수정 — 전구가 에디터 안에만 있어서 문제 패널에서는 이동만 되고 고칠 수가 없었다.
   "misc.quickFix": { ko: "고치기", en: "Fix", de: "Beheben", ja: "修正" },
   "misc.quickFixTitle": { ko: "이 자리로 가서 빠른 수정을 엽니다", en: "Go there and open quick fixes", de: "Dorthin springen und Schnellkorrekturen öffnen", ja: "その位置へ移動してクイックフィックスを開きます" },

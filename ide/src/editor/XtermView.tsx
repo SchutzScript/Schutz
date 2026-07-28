@@ -29,6 +29,7 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
 
   useEffect(() => {
     if (!hostRef.current || !window.schutz) return;
+    const host = hostRef.current;
     const term = new Terminal({
       fontFamily: codeFontStack(codeFont),
       fontSize: fontSize - 1,
@@ -94,6 +95,49 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
     // 입력: PTY면 raw 그대로, 폴백이면 로컬 라인 편집
     const onData = term.onData((d: string) => { if (realPty) sendInput(d); else localLine(d); });
 
+    // 복사·붙여넣기. 터미널에서 Ctrl+C 는 원래 SIGINT 라 복사에 쓸 수 없다 — 그래서
+    // **고른 게 있을 때만** 복사로 가로채고, 없으면 그대로 셸에 넘긴다(VS Code 와 같다).
+    // 이게 없으면 Ctrl+V 가 셸에 \x16 으로 들어가서, 경로 하나 붙여넣는 것도 못 한다.
+    const paste = async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        // 붙여넣은 줄바꿈이 그대로 실행되지 않게 CR 로 통일하지 않는다 — 셸의 괄호 붙여넣기
+        // 모드가 처리하도록 원문 그대로 넘긴다.
+        if (realPty) sendInput(text); else localLine(text);
+      } catch { /* 클립보드 권한이 없으면 조용히 넘어간다 */ }
+    };
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return true;
+      const k = e.key.toLowerCase();
+      if (k === "v" && !e.shiftKey) { void paste(); return false; }
+      if (k === "c" && !e.shiftKey) {
+        const sel = term.getSelection();
+        if (!sel) return true;                       // 고른 게 없으면 SIGINT 그대로
+        void navigator.clipboard.writeText(sel).catch(() => { /* */ });
+        term.clearSelection();
+        return false;
+      }
+      // Ctrl+Shift+C/V 는 터미널 관례상 항상 복사·붙여넣기다
+      if (e.shiftKey && k === "c") {
+        const sel = term.getSelection();
+        if (sel) void navigator.clipboard.writeText(sel).catch(() => { /* */ });
+        return false;
+      }
+      if (e.shiftKey && k === "v") { void paste(); return false; }
+      return true;
+    });
+    // 우클릭 — 고른 게 있으면 복사, 없으면 붙여넣기(윈도 콘솔 관례)
+    const onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      const sel = term.getSelection();
+      if (sel) { void navigator.clipboard.writeText(sel).catch(() => { /* */ }); term.clearSelection(); }
+      else void paste();
+    };
+    host.addEventListener("contextmenu", onCtx);
+
     const ro = new ResizeObserver(() => {
       // 아직 안 떴으면 이 리사이즈가 "이제 크기가 생겼다" 는 신호다.
       if (!started) { tryStart(); return; }
@@ -105,6 +149,7 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
       disposed = true;
       ro.disconnect();
       onData.dispose();
+      host.removeEventListener("contextmenu", onCtx);
       off();
       try { window.schutz?.termKill(id); } catch { /* */ }
       term.dispose();
