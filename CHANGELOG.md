@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [0.0.9] — The hundred small cuts
+
+Nothing here is a headline feature. It is the set of things you hit ten times a day and work around without thinking about, plus one gutter that was quietly lying to you.
+
+### Editor and tabs
+
+- **Close a tab without aiming at the ✕.** `Ctrl+W`, middle-click, or right-click for close others / close to the right / close all. The close logic — including the unsaved-changes prompt — was already there; the ✕ button was simply the only thing calling it.
+- **Reopen a tab you closed by mistake** with `Ctrl+Shift+T`. Cursor and scroll come back with it.
+- **`Ctrl+P` on an empty box now lists recent files.** It used to show the first twelve files alphabetically, which made `Ctrl+P` `Enter` — the shortcut for "back to the file I was just in" — go somewhere arbitrary.
+- **Font size from the keyboard**, `Ctrl+=` and `Ctrl+-`, instead of opening Settings.
+- **Hide the sidebar** with `Ctrl+B`. The panel could not be dragged below 200px, so on a narrow screen there was no way to give the code more room.
+
+### The file tree
+
+- **Opens with deep folders collapsed, and remembers what you collapsed.** Every project used to open fully expanded — a wall of hundreds of rows before you could find anything — and folding a folder was forgotten the moment you switched projects.
+- **Right-click a folder to search inside it.** The include filter and its glob backend already existed; reaching them meant opening global search and typing `src/foo/**` by hand.
+
+### The terminal
+
+- **Copy and paste work.** `Ctrl+V` was going to the shell as `\x16`, so pasting a path was impossible. `Ctrl+C` copies only when something is selected — otherwise it stays `SIGINT`, as it must. Right-click copies a selection or pastes when there is none.
+
+### Git
+
+- **The change markers in the gutter update.** They were computed once when the file opened and never again, so after a commit they pointed at changes that no longer existed. They now redraw on save and whenever git state changes.
+
+### Fixed
+
+- Removing an MCP server installed from a bundle left the unpacked server on disk. The removal call existed and nothing was calling it.
+- Two JSONC parsers had grown in the codebase. The older one stripped trailing commas with a regex that was not string-aware, so a value like `"x, }"` came back silently truncated — wrong data rather than a parse error. There is one parser now, the one with tests.
+
 ## [0.0.8] — A way back
 
 The four pillars on the front page were the promise; only one of them was fully true. Fixing that is most of this release. The rest is the friction you hit every day, and a pass over the claims themselves.
