@@ -12,6 +12,8 @@ interface Props {
   root: string;
   rel: string;
   onDirtyChange?: (rel: string, dirty: boolean) => void;
+  /** 디스크에 실제로 쓴 뒤. 확장 훅(file.save)이 여기서 나간다 — dirty=false 는 저장 말고도 생긴다. */
+  onSaved?: (rel: string) => void;
   onStatus?: (info: { rel: string; lang: string; line: number; col: number }) => void;
   /** Ctrl+K 인라인 편집 — 선택 영역과 지시를 App으로 전달 */
   onInlineEdit?: (rel: string, selection: string, instruction: string, range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }) => void;
@@ -60,7 +62,7 @@ export const paneRegistry: { panes: Map<string, PaneApi>; focused: PaneApi | nul
 type LoadState = "loading" | "ready" | "error";
 
 /** 실제 파일을 여는 Monaco 편집 페인 (Electron 전용 — window.schutz 필요) */
-function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint, gitVer }: Props) {
+function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint, gitVer }: Props) {
   // React.memo 가 부모의 forceUpdate 를 막으므로 언어는 여기서 직접 구독한다.
   const langTick = useLang();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -159,6 +161,7 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onStatus, onInlineEdit, brea
           savedRef.current = text;
           setDirty(false);
           onDirtyChange?.(rel, false);
+          onSaved?.(rel);
           void drawGutterRef.current?.();   // 저장했으니 거터도 다시 — 안 하면 방금 고친 줄이 안 뜬다
           setFlash(true);
           setTimeout(() => setFlash(false), 900);

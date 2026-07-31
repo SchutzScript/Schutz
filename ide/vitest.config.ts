@@ -22,6 +22,7 @@ export default defineConfig({
       "src/ai/retry.test.ts",
       "src/keymap.test.ts",
       "src/overlays.test.ts",
+      "src/ext/hooks.test.ts",
       "src/theme.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",

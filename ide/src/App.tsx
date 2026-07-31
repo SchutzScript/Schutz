@@ -747,6 +747,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
    *  (onDidFocusEditorWidget). 그래서 `paneRegistry.focused?.save()` 하나만 두면,
    *  트리에서 파일을 골라 열기만 한 상태나 크로스파일 이름 바꾸기 직후처럼 팬이
    *  포커스를 받은 적 없는 흔한 상황에서 Ctrl+S 가 아무 일도 안 하고 아무 말도 안 했다. */
+  /** 저장을 확장에 알린다. 저장 경로가 둘(페인·모델)이라 여기 한 곳으로 모은다. */
+  private notifySaved = (rel: string) => extHost.notifyExtensions("file.save", { rel });
+
   async saveActive() {
     const p = paneRegistry.focused;
     if (p) { await p.save(); return; }
@@ -773,6 +776,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       try {
         await window.schutz.writeFile(ws.root, rel, content);
         projectModels.markSaved(ws.root, rel, content);
+        this.notifySaved(rel);
         this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
         n++;
       } catch (e) {
@@ -1220,6 +1224,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       });
       void this.loadGit();
       void this.loadTasks(tree);     // package.json scripts → 팔레트의 "작업: …"
+      this.notifyWorkspaceOpen(tree.root);
       void this.refreshCheckpoints(tree.root); // 지난 실행의 되돌리기 지점 (프로젝트별로 따로 보관된다)
       void this.loadAgentCommands(); // 프로젝트 .claude/commands 반영
       window.schutz.watchStart(tree.root); // 외부 변경 감지 시작
@@ -1821,6 +1826,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         editStart = res.start;
         editEnd = res.end;
       }
+      extHost.notifyExtensions("proposal.accept", { rel: p.rel, agent: p.agent });
       this._proposalsById.set(id, { ...p, status: "accepted" }); // 동기 레지스트리도 갱신 — 자동수락 호출측이 결과를 즉시 읽는다
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "accepted" as const } : x),
@@ -1892,6 +1898,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   rejectProposal(id: string) {
+    const p = this._proposalsById.get(id) ?? this.state.proposals.find(x => x.id === id);
+    if (p && p.status === "pending") extHost.notifyExtensions("proposal.reject", { rel: p.rel, agent: p.agent });
     this.setState(s => ({
       proposals: s.proposals.map(x => x.id === id && x.status === "pending" ? { ...x, status: "rejected" as const } : x),
     }));
@@ -2389,6 +2397,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   }
 
   openFile(path: string) {
+    extHost.notifyExtensions("file.open", { rel: path });
     this.navRecord(path);
     this._touchMru(path);
     this._cancelPendingClose(path); // 닫힘 애니 중 재오픈 시 뒤늦은 제거 취소
@@ -3513,6 +3522,7 @@ ${(r.output || "").slice(0, 2000)}`;
       cancel: () => abort.abort(),
     });
     opts.onCancel?.(() => abort.abort());
+    extHost.notifyExtensions("run.start", { agent: agentId, manager: opts.isManager });
     this.abortCtls.set(run.runId, abort);
     this.setAgent(agentId, { status: opts.isManager ? "plan" : "edit" });
 
@@ -3697,6 +3707,7 @@ ${(r.output || "").slice(0, 2000)}`;
       }
     }
 
+    extHost.notifyExtensions("run.end", { agent: agentId, manager: opts.isManager, cause: stopCause });
     // 부모(또는 위임 호출자)에게 돌려주는 구조체. 산문은 여기서 만들지 않는다.
     if (stopCause === "abort") return { status: "aborted" };
     if (stopCause === "error") return { status: "failed", message: failMsg };
@@ -5350,6 +5361,17 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── 확장 ─────────────────────────────────────────────────────────────────
+  /** workspace.open 을 확장에 **한 번만** 알린다.
+   *  프로젝트는 확장 로드보다 먼저 열릴 수도, 나중에 열릴 수도 있다. 먼저 열리면
+   *  구독자가 아직 없어서 사건이 허공에 사라졌다 — 그래서 확장 로드가 끝난 뒤에도
+   *  한 번 알린다. 같은 root 를 두 번 알리지 않도록 마지막으로 알린 것을 기억한다. */
+  private _notifiedRoot: string | null = null;
+  private notifyWorkspaceOpen(root: string) {
+    if (this._notifiedRoot === root) return;
+    this._notifiedRoot = root;
+    extHost.notifyExtensions("workspace.open", { root });
+  }
+
   async reloadExtensions() {
     if (!window.schutz) return;
     const res = await extHost.loadExtensions({
@@ -5365,6 +5387,9 @@ ${(r.output || "").slice(0, 2000)}`;
     for (const e of raw) { if (e.kind === "vscode" && e.enabled) for (const it of (e.contributes?.iconThemes || [])) iconThemes.push({ extId: e.id, label: it.label || e.name, path: it.path }); }
     iconTheme.setIconThemeChangeHandler(() => this.setState(s => ({ iconVer: s.iconVer + 1 })));
     const list = await extHost.listExtensions();
+    // 확장이 붙기 전에 이미 열려 있던 프로젝트를 알려 준다(위 주석 참고).
+    const openRoot = this.state.workspace?.root;
+    if (openRoot) { this._notifiedRoot = null; this.notifyWorkspaceOpen(openRoot); }
     this.setState({ extCommands: extHost.getExtCommands(), extList: list, extErrors: res.errors, extLimited: res.limited, extThemes: vres.themes, extIconThemes: iconThemes });
     // TextMate 문법 연결 (있으면 VS Code급 하이라이팅) — 완료 후 테마 조율
     await textmate.loadTextMateGrammars().catch(() => 0);
@@ -7551,6 +7576,7 @@ ${(r.output || "").slice(0, 2000)}`;
               root={s.workspace!.root}
               rel={activeRel}
               onDirtyChange={this.handleDirtyChange}
+              onSaved={this.notifySaved}
               onStatus={this.handleStatus}
               onInlineEdit={this.handleInlineEdit}
               breakpoints={s.breakpoints[activeRel]}
