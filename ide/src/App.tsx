@@ -6072,6 +6072,22 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   // ── 좌 패널: 소스 컨트롤 (Git) ──
+  /** 파일 경로 → 그 파일의 git 상태 색. 없으면 null.
+   *
+   *  소스 컨트롤 패널까지 가야만 무엇이 바뀌었는지 알 수 있었다 — 트리에는 아무 표시가
+   *  없어서, 파일을 열기 전엔 그게 새 파일인지 고친 파일인지 알 방법이 없다.
+   *  충돌 > 새 파일 > 수정 순으로 우선한다(충돌이 가장 급하고, 새 파일은 수정을 겸한다). */
+  private gitTreeColors(): Map<string, string> | null {
+    const g = this.state.git;
+    if (!g || g.notRepo) return null;
+    const m = new Map<string, string>();
+    for (const e of g.staged) m.set(e.path, e.code === "A" ? "var(--ok)" : "var(--dirty)");
+    for (const e of g.unstaged) m.set(e.path, "var(--dirty)");
+    for (const e of g.untracked) m.set(e.path, "var(--ok)");
+    for (const e of g.conflicted) m.set(e.path, "var(--err)");   // 마지막 = 가장 센 신호
+    return m.size ? m : null;
+  }
+
   private gitCodeColor(code: string): string {
     if (code === "A" || code === "?") return "var(--ok)";
     if (code === "M") return "var(--dirty)";
@@ -6447,6 +6463,7 @@ ${(r.output || "").slice(0, 2000)}`;
         return false;
       };
       const te = s.treeEdit;
+      const gitColors = this.gitTreeColors();
       const rows: React.ReactNode[] = [];
       for (const en of ws.entries) {
         const pad = 16 + Math.min(en.depth, 8) * 14;   // 상한 없이 밀면 깊은 경로의 이름 칸이 0 이 된다
@@ -6489,7 +6506,7 @@ ${(r.output || "").slice(0, 2000)}`;
             onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: false } }); }}
             style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 8px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
             <FileIcon rel={en.rel} size={14} />
-            <span title={en.rel} style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+            <span title={en.rel} style={{ fontSize: 12, fontFamily: MONO, color: gitColors?.get(en.rel) ?? (inPane ? "var(--fg)" : "var(--fg-sub)"), minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
             <div style={{ flex: 1 }} />
             {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--dirty)" }} />}
           </div>
