@@ -20,7 +20,8 @@ export type ActionId =
   | "debug.startOrContinue" | "debug.stop" | "debug.stepOver" | "debug.stepIn" | "debug.stepOut"
   | "find.next" | "find.prev"
   | "search.nextHit" | "search.prevHit"
-  | "tabs.close" | "tabs.reopen" | "editor.fontUp" | "editor.fontDown" | "view.sidebar";
+  | "tabs.close" | "tabs.reopen" | "editor.fontUp" | "editor.fontDown" | "view.sidebar"
+  | "nav.back" | "nav.forward";
 
 /** i18n 키로 라벨을 만든다 — 표가 언어별 문자열을 들고 있지 않게. */
 export interface Binding { id: ActionId; def: string; labelKey: string }
@@ -48,6 +49,9 @@ export const BINDINGS: Binding[] = [
   { id: "project.open", def: "Mod+O", labelKey: "key.openProject" },
   { id: "tabs.close", def: "Mod+W", labelKey: "key.closeTab" },
   { id: "tabs.reopen", def: "Mod+Shift+T", labelKey: "key.reopenTab" },
+  // 방금 어디 있었더라 — 정의로 점프한 뒤 원래 자리로 돌아오는 길. VS Code 와 같은 화음.
+  { id: "nav.back", def: "Alt+Left", labelKey: "key.navBack" },
+  { id: "nav.forward", def: "Alt+Right", labelKey: "key.navForward" },
   { id: "tabs.mru", def: "Mod+Tab", labelKey: "key.cycleTabs" },
   { id: "tabs.mruBack", def: "Mod+Shift+Tab", labelKey: "key.cycleTabsBack" },
   { id: "editor.fontUp", def: "Mod+=", labelKey: "key.fontUp" },

@@ -12,6 +12,8 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "key.paletteSymbol": { ko: "작업공간 기호로 이동", en: "Go to symbol in workspace", de: "Zu Symbol im Arbeitsbereich", ja: "ワークスペースの記号へ移動" },
   "key.searchInFiles": { ko: "파일에서 찾기", en: "Find in files", de: "In Dateien suchen", ja: "ファイル内を検索" },
   "key.closeTab": { ko: "탭 닫기", en: "Close tab", de: "Tab schließen", ja: "タブを閉じる" },
+  "key.navBack": { ko: "이전 위치로", en: "Go back", de: "Zurück", ja: "前の位置へ" },
+  "key.navForward": { ko: "다음 위치로", en: "Go forward", de: "Vorwärts", ja: "次の位置へ" },
   "key.reopenTab": { ko: "닫은 탭 다시 열기", en: "Reopen closed tab", de: "Geschlossenen Tab wieder öffnen", ja: "閉じたタブを開き直す" },
   "key.fontUp": { ko: "글자 크게", en: "Increase font size", de: "Schrift vergrößern", ja: "文字を大きく" },
   "key.fontDown": { ko: "글자 작게", en: "Decrease font size", de: "Schrift verkleinern", ja: "文字を小さく" },
