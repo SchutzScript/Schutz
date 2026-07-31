@@ -31,6 +31,7 @@ import {
 } from "./engine/checkpoints";
 import { resolveRenameTarget, isMove } from "./engine/movePath";
 import { applyProposal } from "./engine/editApply";
+import { emptyNav, push as navPush, back as navBack, forward as navForward, current as navCurrent, dropMissing as navDropMissing, type NavState } from "./engine/navHistory";
 import { shouldProbeQuota } from "./engine/quotaPoll";
 import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction } from "./overlays";
 import {
@@ -2346,7 +2347,49 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   resolveAll(accept: boolean) { this.state.files.filter(f => f.status === "pending").forEach(f => this.resolveFile(f.path, accept)); }
 
   /** 파일을 포커스된 슬롯의 탭으로 연다 (이미 어느 슬롯에 열려 있으면 그 슬롯을 활성화) */
+  /** 편집 위치 기록. "방금 어디 있었더라" 를 되짚는 길이 없어서, 정의로 점프하고 나면
+   *  원래 자리로 돌아오려면 파일 이름과 줄 번호를 외우고 있어야 했다. */
+  private _nav: NavState = emptyNav();
+  /** 뒤로/앞으로 이동하는 중 — 그때의 openFile 은 새 자리로 기록하면 안 된다(무한 전진). */
+  private _navJumping = false;
+
+  /** 지금 커서가 있는 자리를 기록에 반영한다. 같은 자리면 줄 번호만 갱신된다.
+   *  커서 이동마다 이벤트를 다는 대신, **떠나기 직전**에 한 번 읽는다 —
+   *  Monaco 리스너를 페인마다 붙이지 않아도 결과가 같다. */
+  private navSync() {
+    const rel = this.state.active[this._focusSlot];
+    if (!rel || this.parseDiffKey(rel) || this.parsePreviewKey(rel)) return;
+    const line = paneRegistry.panes.get(rel)?.editor.getPosition()?.lineNumber ?? 1;
+    this._nav = navPush(this._nav, { rel, line });
+  }
+
+  /** 어딘가로 갔다 — 기록에 남긴다. diff·프리뷰 탭은 되돌아갈 "자리" 가 아니라 뺀다. */
+  private navRecord(rel: string) {
+    if (this._navJumping) return;
+    if (this.parseDiffKey(rel) || this.parsePreviewKey(rel)) return;
+    this.navSync();                    // 떠나기 직전 자리를 최신으로
+    const line = paneRegistry.panes.get(rel)?.editor.getPosition()?.lineNumber ?? 1;
+    this._nav = navPush(this._nav, { rel, line });
+  }
+
+  /** Alt+← / Alt+→. 갈 곳이 없으면 아무 일도 하지 않는다(VS Code 와 같다). */
+  private navGo(dir: -1 | 1) {
+    this.navSync();
+    const next = dir < 0 ? navBack(this._nav) : navForward(this._nav);
+    if (next === this._nav) return;    // 같은 객체 = 끝에 닿았다
+    this._nav = next;
+    const spot = navCurrent(next);
+    if (!spot) return;
+    this._navJumping = true;
+    this.openFile(spot.rel);
+    this.revealInPane(spot.rel, spot.line, 1);
+    // openFile 의 setState 콜백과 revealInPane 폴링이 끝난 뒤에 풀어야 그 사이의
+    // openFile 이 새 자리로 기록되지 않는다.
+    setTimeout(() => { this._navJumping = false; }, 0);
+  }
+
   openFile(path: string) {
+    this.navRecord(path);
     this._touchMru(path);
     this._cancelPendingClose(path); // 닫힘 애니 중 재오픈 시 뒤늦은 제거 취소
     this.setState(s => {
@@ -4282,6 +4325,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (tree && !(tree as any).truncated) {
       const present = new Set(tree.entries.filter(e => !e.dir).map(e => e.rel));
       projectModels.dropMissing(ws.root, present);
+      this._nav = navDropMissing(this._nav, rel => present.has(rel));   // 지워진 파일로 되돌아가면 빈 탭이 열린다
     }
     // 대량 변경(브랜치 전환/pull/stash pop): 열지 않은 preload 모델도 디스크로 재로드해 stale 진단 방지
     if (opts?.bulk) void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), this.isDirtyRel);
@@ -4896,6 +4940,10 @@ ${(r.output || "").slice(0, 2000)}`;
         prevent(); this.closeTab(slot, rel); return;
       }
       case "tabs.reopen": prevent(); this.reopenClosedTab(); return;
+
+      // 위치 기록 이동. 에디터 안에서도 동작해야 한다 — Monaco 는 Alt+←/→ 를 안 쓴다.
+      case "nav.back": prevent(); this.navGo(-1); return;
+      case "nav.forward": prevent(); this.navGo(1); return;
 
       // 글자 크기 — 설정 모달을 열지 않고. wrap·minimap 팔레트 명령과 같은 경로다.
       case "editor.fontUp": prevent(); this.bumpFontSize(1); return;
