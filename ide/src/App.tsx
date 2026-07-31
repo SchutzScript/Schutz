@@ -1,8 +1,7 @@
 import React from "react";
 import {
-  AGDEF, MENUS, TM, TY, MD, ENGINE_CREDIT,
-  freshDocs, hunkDefs,
-  DocLine, AgentState, PlanItem, ToolItem, ReviewFile, ChatMsg,
+  AGDEF, MENUS, ENGINE_CREDIT,
+  AgentState, PlanItem, ToolItem, ReviewFile, ChatMsg,
 } from "./ide/data";
 import {
   GitBranchIcon, SearchIcon,
@@ -258,7 +257,6 @@ interface S {
   plan: PlanItem[];
   tools: ToolItem[];
   files: ReviewFile[];
-  docs: Record<string, DocLine[]>;
   chips: Record<string, { text: string; op: number }>;
   /** 슬롯별 열린 탭 (rel 목록). 길이 = layout */
   tabs: string[][];
@@ -386,7 +384,7 @@ interface S {
    *  window.confirm 을 쓰지 않는 이유: 파일별 사유를 한 줄도 못 싣는다. */
   undoAsk: { runId: string; plan: UndoVerdict[]; busy: boolean } | null;
   agents: Record<string, AgentState>;
-  /** 실제로 연 프로젝트 폴더 (Electron 전용). null이면 데모 모드 */
+  /** 실제로 연 프로젝트 폴더. null 이면 아직 아무 프로젝트도 열지 않았다. */
   workspace: SchutzWorkspaceTree | null;
   paneDirty: Record<string, boolean>;
   /** Claude의 실파일 편집 제안 */
@@ -652,8 +650,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   state: S = {
     statusKey: "idle", running: false, runProgress: 0, messages: [], input: "",
-    plan: [], tools: [], files: [], docs: window.schutz ? {} : freshDocs(), chips: {}, // 데스크톱엔 데모 문서를 심지 않는다(실제 파일을 가림)
-    tabs: [[TM]], active: [TM], leftTab: "flow", expanded: null,
+    plan: [], tools: [], files: [], chips: {},
+    tabs: [[]], active: [""], leftTab: "flow", expanded: null,
     breakpoints: {}, debug: null, debugConsole: [], watches: [], watchInput: "",
     extCommands: [], extList: [], extErrors: [], extLimited: [], extPanel: null, extThemes: [], extIconThemes: [], iconVer: 0, extSearch: "", extResults: [], extBusy: false, extInstalling: [], extDetail: null, extDetailBusy: false,
     git: null, gitMsg: "", gitBusy: false, gitError: "",
@@ -675,8 +673,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
-      // 데스크톱은 단일 그룹(탭 스택)으로 시작, 웹 데모는 4분할 시각화
-      return window.schutz ? 1 : 4;
+      // 단일 그룹(탭 스택)으로 시작한다. 4분할은 데모 시각화 전용이었다.
+      return 1;
     })(),
     cliAgents: {}, cliBusy: false, cliModel: "",
     oauthPasteFor: null, oauthPasteVal: "", oauthWait: false, oauthMsg: "", oauthTick: 0,
@@ -818,7 +816,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   // ── 토스트 ──
   /** 토스트 전용 타이머. 탭 닫기와 같은 이유로 _timers 풀 밖에 둔다 —
-   *  clearTimers()(startRun/stopRun)가 이 타이머를 지우면 토스트가 제거되지 않고
+   *  clearTimers()(stopRun)가 이 타이머를 지우면 토스트가 제거되지 않고
    *  좀비로 남는다(leaving 상태로 opacity 0 인 채 마운트된 유령). */
   private _toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -1202,7 +1200,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active; this._lastCollapsedRef = restored.collapsed;
       this.setState(s => ({
         workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
-        docs: window.schutz ? {} : freshDocs(), files: [], plan: [], tools: [], chips: {},
+        files: [], plan: [], tools: [], chips: {},
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         // 프로젝트마다 모드를 따로 기억한다 — 설정이 없으면 전역 기본값으로 떨어진다
         uiMode: getUiMode(tree.root),
@@ -2142,15 +2140,6 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   qt(fn: () => void, at: number) { this._timers.push(setTimeout(fn, at)); }
   clearTimers() { this._timers.forEach(clearTimeout); this._timers = []; }
 
-  updDoc(path: string, fn: (arr: DocLine[]) => DocLine[]) {
-    this.setState(s => ({ docs: { ...s.docs, [path]: fn(s.docs[path].slice()) } }));
-  }
-  insertAfter(path: string, afterId: string, ln: DocLine) {
-    this.updDoc(path, arr => { const i = arr.findIndex(l => l.id === afterId); arr.splice(i + 1, 0, ln); return arr; });
-  }
-  patchLine(path: string, id: string, patch: Partial<DocLine>) {
-    this.updDoc(path, arr => arr.map(l => l.id === id ? { ...l, ...patch } : l));
-  }
   setMsg(id: string, patch: Partial<ChatMsg>) {
     this.setState(s => ({ messages: s.messages.map(m => m.id === id ? { ...m, ...patch } : m) }));
   }
@@ -2174,107 +2163,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       return { agents: { ...s.agents, [id]: { ...a, tin: a.tin + tin, tout: a.tout + tout } } };
     });
   }
-  addFile(path: string, add: number, del: number, agent: string) {
-    this.setState(s => ({ files: [...s.files, { path, add, del, agent, status: "pending" }] }));
-  }
 
-  startRun(text: string) {
-    this.clearTimers();
-    const speed = Math.max(0.2, TYPING_SPEED);
-    this.setState(s => ({
-      running: true, statusKey: "thinking",
-      plan: [], tools: [], files: [], chips: {},
-      // 현재 레이아웃 슬롯 수에 맞춰 구성 (4 하드코딩 제거)
-      docs: freshDocs(),
-      tabs: Array.from({ length: s.layout || 1 }, (_, i) => (i === 0 ? [TM] : [])),
-      active: Array.from({ length: s.layout || 1 }, (_, i) => (i === 0 ? TM : "")),
-      expanded: null,
-      agents: this.freshAgents(),
-      messages: [...s.messages, { id: "u" + (this._uid++), role: "user" as const, text }],
-      input: "",
-    }));
-    let at = 400;
-    const q = (d: number, fn: () => void) => { at += d; this.qt(fn, at); };
-
-    q(0, () => this.setAgent("claude", { status: "plan" }));
-    const aiId = "a" + (this._uid++);
-    const reply = "요청을 분석해 작업을 분배합니다. 제가 token-manager.ts의 스케줄러 구현을 맡고, GPT에 타입 정의를, Grok에 문서 갱신을 위임합니다. 세 파일은 락으로 격리되어 동시에 진행돼도 충돌하지 않습니다.";
-    q(500, () => this.setState(s => ({ messages: [...s.messages, { id: aiId, role: "ai" as const, who: "Claude · 관리자", text: "", streaming: true }] })));
-    for (let i = 3; i <= reply.length + 2; i += 3) {
-      const cut = Math.min(i, reply.length);
-      q(22, () => this.setMsg(aiId, { text: reply.slice(0, cut) }));
-    }
-    q(50, () => { this.setMsg(aiId, { streaming: false }); this.bumpAgent("claude", 2140, 96); });
-
-    const planItems = [
-      { label: "TokenManager 구조 파악", agent: "claude" },
-      { label: "자동 갱신 스케줄러 구현", agent: "claude" },
-      { label: "옵션 타입 정의 반영", agent: "gpt" },
-      { label: "문서 갱신", agent: "grok" },
-    ];
-    q(250, () => this.setState({ plan: planItems.map((p, i) => ({ id: "p" + i, ...p, st: i === 0 ? "active" as const : "pending" as const })) }));
-
-    q(350, () => { this.setState({ statusKey: "tool" }); this.setAgent("claude", { status: "edit", file: TM }); this.addTool("t1", "claude", "읽기", TM); });
-    q(600, () => { this.setTool("t1", { st: "done", note: "2.1 KB" }); this.bumpAgent("claude", 5240, 0); });
-    q(250, () => this.addTool("t2", "claude", "읽기", TY));
-    q(450, () => { this.setTool("t2", { st: "done", note: "0.6 KB" }); this.bumpAgent("claude", 1830, 0); this.setPlan(0, "done"); });
-
-    // 위임: 페인 분할·락·동시 타이핑 체인
-    q(400, () => {
-      this.setState({ tabs: [[TM], [TY], [MD], []], active: [TM, TY, MD, ""] });
-      this.setPlan(1, "active"); this.setPlan(2, "active"); this.setPlan(3, "active");
-      this.setAgent("gpt", { status: "edit", file: TY });
-      this.setAgent("grok", { status: "edit", file: MD });
-      this.addTool("t3", "claude", "편집", TM);
-      this.addTool("t4", "gpt", "편집", TY);
-      this.addTool("t5", "grok", "편집", MD);
-    });
-
-    const defs = hunkDefs();
-    const typeChain = (cur: { at: number }, hk: string) => {
-      const def = defs[hk];
-      const cq = (d: number, fn: () => void) => { cur.at += d; this.qt(fn, cur.at); };
-      const cqa = (d: number, fn: () => void) => { this.qt(fn, cur.at + d); };
-      if (def.removeId) cq(140, () => this.patchLine(def.path, def.removeId!, { kind: "removed", hunk: hk }));
-      let prev = def.afterId;
-      const ids: string[] = [];
-      def.lines.forEach((full, li) => {
-        const id = hk + "n" + li;
-        ids.push(id);
-        const pid = prev;
-        cq(70, () => this.insertAfter(def.path, pid, { id, text: "", full, kind: "typing", hunk: hk }));
-        for (let c = 2; c < full.length + 2; c += 3) {
-          const cut = Math.min(c, full.length);
-          cq(Math.round(26 / speed), () => this.patchLine(def.path, id, { text: full.slice(0, cut) }));
-          if (c % 12 === 2) cqa(0, () => this.bumpAgent(def.agent, 0, 9));
-        }
-        cq(20, () => this.patchLine(def.path, id, { text: full, kind: "fresh" }));
-        prev = id;
-      });
-      if (def.chip && SHOW_REASONS) {
-        cq(150, () => this.setState(s => ({ chips: { ...s.chips, [hk]: { text: def.chip, op: 1 } } })));
-        cqa(3200, () => this.setState(s => s.chips[hk] ? { chips: { ...s.chips, [hk]: { ...s.chips[hk], op: 0 } } } as any : null));
-        cqa(4400, () => this.setState(s => { const c = { ...s.chips }; delete c[hk]; return { chips: c }; }));
-      }
-      cq(600, () => this.updDoc(def.path, arr => arr.map(l => ids.includes(l.id) && l.kind === "fresh" ? { ...l, kind: "pending" } : l)));
-    };
-
-    const t0 = at + 500;
-    const curC = { at: t0 }, curG = { at: t0 + 900 }, curK = { at: t0 + 1600 };
-    typeChain(curC, "A"); typeChain(curC, "C"); typeChain(curC, "B");
-    this.qt(() => { this.setTool("t3", { st: "done", note: "+13 −1" }); this.addFile(TM, 13, 1, "claude"); this.setPlan(1, "done"); this.setAgent("claude", { status: "review", file: null }); this.bumpAgent("claude", 0, 262); }, curC.at += 250);
-    typeChain(curG, "T");
-    this.qt(() => { this.setTool("t4", { st: "done", note: "+4 −0" }); this.addFile(TY, 4, 0, "gpt"); this.setPlan(2, "done"); this.setAgent("gpt", { status: "review", file: null }); this.bumpAgent("gpt", 1620, 96); }, curG.at += 250);
-    typeChain(curK, "D");
-    this.qt(() => { this.setTool("t5", { st: "done", note: "+6 −0" }); this.addFile(MD, 6, 0, "grok"); this.setPlan(3, "done"); this.setAgent("grok", { status: "review", file: null }); this.bumpAgent("grok", 980, 118); }, curK.at += 250);
-
-    const endAt = Math.max(curC.at, curG.at, curK.at) + 500;
-    const doneId = "a" + (this._uid++);
-    this.qt(() => this.setState(s => ({
-      running: false, statusKey: "review",
-      messages: [...s.messages, { id: doneId, role: "ai" as const, who: "Claude · 관리자", text: "세 에이전트의 작업이 모두 끝났습니다. 3개 파일 +23 −1, 충돌 없음. 변경 검토에서 파일별 diff를 확인하고 처리해 주세요." }],
-    })), endAt);
-  }
 
   /** 특정 에이전트만 중지 */
   stopAgent(id: string) {
@@ -2311,48 +2200,16 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       running: false, statusKey: "stopped",
       plan: stopPlan(s.plan),
       tools: s.tools.map(t => t.st === "run" ? { ...t, st: "stopped" as const, note: "중지" } : t),
-      docs: Object.fromEntries(Object.entries(s.docs).map(([k, arr]) => [k, arr.map(l => (l.kind === "typing" || l.kind === "fresh") ? { ...l, kind: "pending" as const } : l)])),
       messages: s.messages.map(m => m.streaming ? { ...m, streaming: false } : m),
       agents: Object.fromEntries(Object.entries(s.agents).map(([k, a]) => [k, (a.status === "edit" || a.status === "plan") ? { ...a, status: "stop" as const, file: null } : a])),
     }));
+    // 검토할 것이 남았는지는 제안 목록이 안다 — 예전엔 데모 문서의 줄 상태를 세어 판정했다.
     this.qt(() => this.setState(s => {
       if (s.statusKey !== "stopped") return null;
-      const any = Object.values(s.docs).some(arr => arr.some(l => l.kind === "pending" || l.kind === "removed"));
-      return { statusKey: any ? "review" : "idle" } as any;
+      return { statusKey: s.proposals.some(p => p.status === "pending") ? "review" : "idle" } as any;
     }), 1800);
   }
 
-  resolveHunk(path: string, hk: string, accept: boolean) {
-    this.updDoc(path, arr => {
-      const out: DocLine[] = [];
-      for (const l of arr) {
-        if (l.hunk !== hk) { out.push(l); continue; }
-        if (l.kind === "removed") {
-          if (accept) continue;
-          out.push({ ...l, kind: "base", hunk: null });
-          continue;
-        }
-        if (accept) out.push({ ...l, kind: "accepted" });
-      }
-      return out;
-    });
-    if (accept) this.qt(() => this.updDoc(path, arr => arr.map(l => l.hunk === hk ? { ...l, kind: "base", hunk: null } : l)), 900);
-    this.qt(() => this.setState(s => {
-      const doc = s.docs[path] || [];
-      const open = doc.some(l => l.hunk && (l.kind === "pending" || l.kind === "removed" || l.kind === "typing" || l.kind === "fresh"));
-      if (open) return null;
-      return { files: s.files.map(f => f.path === path && f.status === "pending" ? { ...f, status: (accept ? "accepted" : "rejected") as ReviewFile["status"] } : f) } as any;
-    }), 40);
-  }
-
-  openHunks(path: string): string[] {
-    const doc = this.state.docs[path] || [];
-    const set = new Set<string>();
-    doc.forEach(l => { if (l.hunk && (l.kind === "pending" || l.kind === "removed")) set.add(l.hunk); });
-    return [...set];
-  }
-  resolveFile(path: string, accept: boolean) { this.openHunks(path).forEach(hk => this.resolveHunk(path, hk, accept)); }
-  resolveAll(accept: boolean) { this.state.files.filter(f => f.status === "pending").forEach(f => this.resolveFile(f.path, accept)); }
 
   /** 파일을 포커스된 슬롯의 탭으로 연다 (이미 어느 슬롯에 열려 있으면 그 슬롯을 활성화) */
   /** 편집 위치 기록. "방금 어디 있었더라" 를 되짚는 길이 없어서, 정의로 점프하고 나면
@@ -2765,7 +2622,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       this._closedTabs = [...this._closedTabs.filter(c => c.rel !== rel), { slot, rel }].slice(-20);
     }
     // 탭을 곧바로 제거하지 않고 szTabOut 재생 후 언마운트.
-    // 전용 타이머 — clearTimers()(startRun/stopRun) 가 이 닫기 타이머를 지워 좀비탭(닫힘 상태 영구 고착)이 되지 않도록 _timers 풀 밖에 둔다.
+    // 전용 타이머 — clearTimers()(stopRun) 가 이 닫기 타이머를 지워 좀비탭(닫힘 상태 영구 고착)이 되지 않도록 _timers 풀 밖에 둔다.
     this.setState(s => ({ closingTabs: [...s.closingTabs, key] }));
     const tid = setTimeout(() => {
       this._closeTabTimers.delete(key);
@@ -3061,10 +2918,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     // runReal/runCliTurn 이 조용히 return 해서, 사용자가 모아둔 첨부가 통째로 날아갔다.
     if (this.state.running || this.state.cliBusy) { this.toast("info", t2("chat.busyHint")); return; }
     const hasAttach = this.state.attach.length > 0;
-    // 데스크톱: 빈 입력 + 첨부 없음이면 아무것도 보내지 않는다 (데모 프롬프트가 실제 AI로 나가는 것 방지).
-    // 데모 문자열은 웹 프리뷰 자동재생 전용.
-    if (!rawIn && !hasAttach && window.schutz) return;
-    const t = rawIn || (hasAttach ? "첨부한 컨텍스트를 참고해서 진행해줘." : "TokenManager에 자동 갱신을 추가하고, 타입과 문서도 같이 맞춰줘");
+    // 빈 입력 + 첨부 없음이면 아무것도 보내지 않는다.
+    if (!rawIn && !hasAttach) return;
+    const t = rawIn || "첨부한 컨텍스트를 참고해서 진행해줘.";
     const { block, summary, images } = await this.consumeAttachments();
     const display = summary ? t + "\n📎 " + summary : t;
     // 1순위: 앱 내 연결된 계정(OAuth) 또는 API 키 — Schutz 통합 에이전트 루프
@@ -3075,8 +2931,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       if (ca.claude?.ok) { this.runCliTurn("claude", t + block); return; }
       if (ca.codex?.ok) { this.runCliTurn("codex", t + block); return; }
     }
-    // 데스크톱 앱: 데모 대신 연결 안내 (데모는 웹 프리뷰 전용)
-    if (window.schutz) {
+    // 붙은 에이전트가 없다 — 무엇을 해야 하는지 말해 준다.
+    {
       this.setState(s => ({
         input: "",
         messages: [...s.messages,
@@ -3085,9 +2941,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
           // (이 문구가 마지막까지 한국어로 굳어 있던 이유가 그거였다.)
           { id: "a" + (this._uid++), role: "ai" as const, who: "Schutz", text: t2("sc3.noAiConnected") }],
       }), () => this.saveSession());
-      return;
     }
-    this.startRun(t);
   }
 
   /** 설정된 프로바이더 id 목록 */
@@ -3301,8 +3155,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     if (!ws || !window.schutz) return "오류: 워크스페이스가 열려 있지 않습니다.";
     const toolId = "rt" + (this._uid++);
     try {
-      // 계획 패널을 채우는 유일한 실제 경로. 이게 없던 동안 패널은 데모 스크립트
-      // (startRun)에서만 찼고, 실제 AI 가 붙으면 영원히 빈 칸이었다 — README 가
+      // 계획 패널을 채우는 유일한 경로. 예전엔 브라우저 프리뷰의 데모 스크립트에서만
+      // 찼고, 실제 AI 가 붙으면 영원히 빈 칸이었다 — README 가
       // "지금 하는 일과 다음" 을 보여준다고 적어 둔 바로 그 패널이다.
       if (call.name === "set_plan") {
         const steps = normalizeSteps(call.input?.steps);
@@ -5540,16 +5394,6 @@ ${(r.output || "").slice(0, 2000)}`;
       }
       this.onChatScroll(); // 버튼 노출은 스크롤 위치 하나로 판단 (도착·스크롤 공통)
     }
-    this.allOpen().forEach(path => {
-      const el = this._paneRefs[path];
-      if (!el) return;
-      const doc = this.state.docs[path] || [];
-      const i = doc.findIndex(l => l.kind === "typing");
-      if (i >= 0) {
-        const y = Math.max(0, i * 20 - el.clientHeight * 0.55);
-        if (Math.abs(el.scrollTop - y) > 10) el.scrollTop = y;
-      }
-    });
   }
 
   /** 신택스 하이라이트 (프로토타입 hl 포팅) */
@@ -5585,35 +5429,6 @@ ${(r.output || "").slice(0, 2000)}`;
     return f ? this.agDef(f.agent).color : null;
   }
 
-  diffRows(path: string) {
-    const doc = this.state.docs[path] || [];
-    const marked = doc.map(l => !!(l.hunk && ["pending", "removed", "typing", "fresh", "accepted"].includes(l.kind)));
-    if (!marked.some(Boolean)) return [];
-    const include = doc.map((_, i) => {
-      for (let j = Math.max(0, i - 2); j <= Math.min(doc.length - 1, i + 2); j++) if (marked[j]) return true;
-      return false;
-    });
-    const rows: any[] = [];
-    let oldN = 0, newN = 0, prevIncluded = true;
-    doc.forEach((l, i) => {
-      const isOld = l.kind === "base" || l.kind === "removed";
-      const isNew = l.kind !== "removed";
-      if (isOld) oldN++;
-      if (isNew) newN++;
-      if (!include[i]) { prevIncluded = false; return; }
-      if (!prevIncluded && rows.length) rows.push({ key: "sep" + i, sep: true });
-      prevIncluded = true;
-      let sign = " ", bg = "transparent", color = "var(--fg-sub2)", signColor = "transparent";
-      if (l.kind === "removed") { sign = "−"; bg = "rgba(201,123,123,.1)"; color = "var(--err)"; signColor = "var(--err-hi)"; }
-      else if (marked[i]) { sign = "+"; bg = "color-mix(in srgb, var(--ok) 9%, transparent)"; color = "#B7CBBA"; signColor = "var(--ok)"; }
-      rows.push({
-        key: "d" + i, sep: false,
-        oldN: isOld ? String(oldN) : "", newN: isNew ? String(newN) : "",
-        sign, signColor, bg, color, text: l.text || " ",
-      });
-    });
-    return rows;
-  }
 
   render() {
     const s = this.state;
@@ -6514,8 +6329,8 @@ ${(r.output || "").slice(0, 2000)}`;
 
   renderTree() {
     const s = this.state;
-    // 데스크톱 앱 + 워크스페이스 없음 → 빈 상태 (데모 트리는 웹 프리뷰 전용)
-    if (window.schutz && !s.workspace) {
+    // 아직 프로젝트를 안 열었다
+    if (!s.workspace) {
       return (
         <div style={{ flex: 1.15, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, borderBottom: "1px solid var(--w06)", padding: "0 20px" }}>
           <span style={{ fontSize: 12, color: "var(--fg-dim)", textAlign: "center", lineHeight: 1.7 }}>{t("flowtree.noProject")}</span>
@@ -6524,8 +6339,7 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
       );
     }
-    // 실제 워크스페이스가 열려 있으면 실파일 트리
-    if (s.workspace) {
+    {
       const ws = s.workspace;
       const collapsed = s.collapsed;
       // 접힘 판정 — 항목의 조상 경로만 검사(O(depth))해 O(N·M) 전체 스캔 회피
@@ -6606,53 +6420,6 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
       );
     }
-    const lockOf = (path: string) => AGDEF.find(d => s.agents[d.id].file === path);
-    const pendOf = (path: string) => s.files.find(f => f.path === path && f.status === "pending");
-    const fileRow = (path: string, name: string, pad: number) => {
-      const lock = lockOf(path);
-      const pend = pendOf(path);
-      const inPane = this.isOpen(path, s);
-      return (
-        <div key={path} className="hv04" onClick={() => this.openFile(path)}
-          style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent" }}>
-          <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}></span>
-          <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-          <div style={{ flex: 1 }} />
-          {lock && (
-            <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, color: lock.color, border: `1px solid ${lock.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: lock.color, animation: "szPulse 1.1s ease-in-out infinite" }} />{lock.name}
-            </span>
-          )}
-          {!lock && pend && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: this.agDef(pend.agent).color }} />}
-        </div>
-      );
-    };
-    const dirRow = (key: string, name: string, pad: number) => (
-      <div key={key} style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "default" }}>
-        <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8 }}>▾</span>
-        <span style={{ fontSize: 12, color: "var(--fg-sub2)" }}>{name}</span>
-      </div>
-    );
-    const plainRow = (key: string, name: string, pad: number) => (
-      <div key={key} style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 16px 0 ${pad}px`, cursor: "default" }}>
-        <span style={{ flex: "none", fontSize: 9, width: 8 }}></span>
-        <span style={{ fontSize: 12, fontFamily: MONO, color: "#6E776F" }}>{name}</span>
-      </div>
-    );
-    return (
-      <div style={{ flex: 1.15, minHeight: 0, overflowY: "auto", padding: "2px 0 14px", borderBottom: "1px solid var(--w06)" }}>
-        <div style={{ padding: "4px 16px 6px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>SCHUTZ-CORE</div>
-        {dirRow("d1", "src", 16)}
-        {dirRow("d2", "auth", 30)}
-        {fileRow(TM, "token-manager.ts", 44)}
-        {fileRow(TY, "types.ts", 44)}
-        {plainRow("f1", "client.ts", 44)}
-        {plainRow("f2", "index.ts", 44)}
-        {dirRow("d3", "docs", 16)}
-        {fileRow(MD, "auth.md", 30)}
-        {plainRow("f3", "package.json", 16)}
-      </div>
-    );
   }
 
   /** 현재 탭에 보여줄 메시지. 레거시(agent 없음)는 전체 탭에서만 보인다 —
@@ -7545,7 +7312,7 @@ ${(r.output || "").slice(0, 2000)}`;
         );
       }
       const diffMeta = this.parseDiffKey(activeRel);
-      const realFile = !!(s.workspace && !s.docs[activeRel] && !diffMeta);
+      const realFile = !!(s.workspace && !diffMeta);
       const isImg = realFile && isImage(activeRel);
       const isMdPrev = realFile && activeRel.endsWith(".md") && !!s.mdPreview[activeRel];
       const isReal = realFile && !isImg && !isMdPrev;
@@ -7584,7 +7351,12 @@ ${(r.output || "").slice(0, 2000)}`;
               onToggleBreakpoint={this.toggleBreakpoint}
               gitVer={s.gitVer}
             />
-          ) : this.renderDemoBody(activeRel)}
+          ) : (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--fg-dim2)" }}>
+              <span style={{ fontSize: 20 }}>▢</span>
+              <span style={{ fontSize: 11 }}>{t("misc.emptyEditorHint")}</span>
+            </div>
+          )}
         </div>
       );
     });
@@ -7738,63 +7510,6 @@ ${(r.output || "").slice(0, 2000)}`;
     );
   }
 
-  /** 데모(웹 프리뷰)·에이전트 diff 문서 본문 렌더 */
-  renderDemoBody(path: string) {
-    const s = this.state;
-    const lineColors = this._lineColors;
-    const doc = s.docs[path] || [];
-    const isMd = path.endsWith(".md");
-    const agColor = this.agentColorFor(path) || "#7D9183";
-    const hunkInfo: Record<string, { active: boolean; open: boolean }> = {};
-    doc.forEach(l => {
-      if (!l.hunk) return;
-      const h = hunkInfo[l.hunk] || (hunkInfo[l.hunk] = { active: false, open: false });
-      if (l.kind === "typing" || l.kind === "fresh") h.active = true;
-      if (l.kind === "pending" || l.kind === "removed") h.open = true;
-    });
-    const headSeen: Record<string, boolean> = {};
-    let num = 0;
-    return (
-      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-        <div ref={el => { this._paneRefs[path] = el; }} style={{ position: "absolute", inset: 0, overflow: "auto", padding: "10px 0 50px", fontFamily: MONO }}>
-          {doc.map(l => {
-            const removed = l.kind === "removed";
-            if (!removed) num++;
-            const colorDef = lineColors[l.kind] || lineColors.base;
-            const rowBg = colorDef[0];
-            const barColor = (l.kind === "typing" || l.kind === "pending") ? agColor : colorDef[1];
-            const marked = ["pending", "removed", "fresh", "typing"].includes(l.kind);
-            const isHead = l.hunk && marked && !headSeen[l.hunk];
-            if (isHead) headSeen[l.hunk!] = true;
-            const chip = isHead && s.chips[l.hunk!] ? s.chips[l.hunk!] : null;
-            const info = l.hunk ? hunkInfo[l.hunk] : null;
-            const actions = !!(isHead && info && info.open && !info.active);
-            const hk = l.hunk!;
-            return (
-              <div key={l.id} style={{ position: "relative", display: "flex", alignItems: "flex-start", minHeight: 20, background: rowBg, transition: "background .7s ease", animation: l.kind === "fresh" ? "szFlash .7s var(--ease)" : undefined }}>
-                <div style={{ flex: "none", width: 46, textAlign: "right", paddingRight: 10, fontSize: 10.5, lineHeight: "20px", color: l.kind === "base" ? "var(--fg-dim3)" : "var(--fg-sub2)", userSelect: "none" }}>{removed ? "" : String(num)}</div>
-                <div style={{ flex: "none", width: 2.5, borderRadius: 2, alignSelf: "stretch", margin: "1px 0", background: barColor }} />
-                <div style={{ paddingLeft: 14, whiteSpace: "pre", lineHeight: "20px", fontSize: 12, color: "var(--fg-code)", textDecoration: removed ? "line-through" : "none", opacity: removed ? 0.5 : 1 }}>
-                  {this.hl(l.text, isMd)}
-                  {l.kind === "typing" && <span style={{ display: "inline-block", width: 2, height: 13, marginLeft: 1, background: agColor, verticalAlign: -2, animation: "szBlink 1s steps(1) infinite" }} />}
-                  {chip && (
-                    <span style={{ marginLeft: 14, fontFamily: SUIT, fontSize: 10, color: "#93A896", background: "rgba(125,145,131,.12)", borderRadius: 3, padding: "1px 6px", opacity: chip.op, transition: "opacity .9s ease", whiteSpace: "nowrap", verticalAlign: 1 }}>{chip.text}</span>
-                  )}
-                </div>
-                {actions && (
-                  <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
-                    <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--ok-hi)", background: "transparent", border: "none" }}>{t("sc4.accept")}</button>
-                    <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
-                    <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--err)", background: "transparent", border: "none" }}>{t("sc4.reject")}</button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
 
   // ── 우 패널: 에이전트 ──
   renderAgents() {
@@ -8352,86 +8067,9 @@ ${(r.output || "").slice(0, 2000)}`;
 
   // ── 우 패널: 변경 검토 ──
   renderReview() {
-    const s = this.state;
-    if (s.workspace || window.schutz) return this.renderProposals();
-    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "var(--warn)"], accepted: [t("sc5.reviewAccepted"), "var(--ok)"], rejected: [t("sc5.reviewRejected"), "var(--err)"] };
-    const pendingFiles = s.files.filter(f => f.status === "pending").length;
-    return (
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div onClick={() => this.setState(st => ({ reviewOpen: !st.reviewOpen }))}
-          style={{ flex: "none", height: 36, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", cursor: "pointer", userSelect: "none" }}>
-          <span style={{ fontSize: 8.5, width: 10, color: "var(--fg-dim)" }}>{s.reviewOpen ? "▾" : "▸"}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)" }}>{t("agent.review")}</span>
-          {s.files.length > 0 && <span style={{ fontSize: 10.5, color: "var(--fg-sub2)", background: "var(--w06)", borderRadius: 8, padding: "0 7px", lineHeight: "16px" }}>{s.files.length}</span>}
-        </div>
-        {s.reviewOpen && (
-          <div style={{ flex: 1, overflowY: "auto", padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {s.files.length === 0 && <div style={{ fontSize: 12, color: "var(--fg-dim2)", padding: "6px 2px" }}>{t("sc5.reviewEmpty")}</div>}
-            {pendingFiles > 0 && (
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="hvAccent" onClick={() => this.resolveAll(true)} style={{ flex: 1, height: 30, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--bg-root)", background: "var(--accent)", border: "none" }}>{t("sc5.acceptAll")}</button>
-                <button className="hv05" onClick={() => this.resolveAll(false)} style={{ flex: 1, height: 30, fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("sc5.rejectAll")}</button>
-              </div>
-            )}
-            {s.files.map(f => {
-              const [sl, sc] = fstMap[f.status];
-              const d = this.agDef(f.agent);
-              const seg = f.path.split("/"); const name = seg.pop();
-              const tot = Math.max(f.add + f.del, 1);
-              const expanded = s.expanded === f.path;
-              return (
-                <div key={f.path} style={{ position: "relative", background: "var(--bg-card)", border: `1px solid ${expanded ? d.color + "60" : "var(--w07)"}`, borderRadius: 10, overflow: "hidden" }}>
-                  <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: d.color, zIndex: 2 }} />
-                  <div className="hv02" onClick={() => this.setState(st => ({ expanded: st.expanded === f.path ? null : f.path }))} style={{ padding: "11px 13px 11px 16px", cursor: "pointer" }}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                      <span style={{ fontSize: 9, color: "var(--fg-dim)" }}>{expanded ? "▾" : "▸"}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--fg)", whiteSpace: "nowrap" }}>{name}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-dim2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{seg.join("/") + "/"}</span>
-                      <div style={{ flex: 1 }} />
-                      <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--ok)" }}>+{f.add}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--err)" }}>−{f.del}</span>
-                      <div style={{ flex: 1, display: "flex", gap: 2, height: 4, borderRadius: 2, overflow: "hidden" }}>
-                        <span style={{ height: "100%", background: "var(--ok)", opacity: .75, width: Math.round((f.add / tot) * 60) + "%" }} />
-                        <span style={{ height: "100%", background: "#C97B7B", opacity: .75, width: Math.round((f.del / tot) * 60) + "%" }} />
-                        <span style={{ height: "100%", background: "var(--w07)", flex: 1 }} />
-                      </div>
-                      <span style={{ fontSize: 10.5, whiteSpace: "nowrap", color: sc }}>{sl}</span>
-                    </div>
-                  </div>
-                  {expanded && (
-                    <div style={{ borderTop: "1px solid var(--w06)", background: "var(--bg-editor)", maxHeight: 300, overflow: "auto" }}>
-                      {this.diffRows(f.path).map(dd => dd.sep
-                        ? <div key={dd.key} style={{ fontFamily: MONO, fontSize: 10, lineHeight: "18px", color: "var(--fg-dim2)", background: "#12151340", textAlign: "center", borderTop: "1px solid var(--w04)", borderBottom: "1px solid var(--w04)" }}>· · ·</div>
-                        : (
-                          <div key={dd.key} style={{ display: "flex", fontFamily: MONO, fontSize: 10.5, lineHeight: "19px", background: dd.bg }}>
-                            <span style={{ flex: "none", width: 30, textAlign: "right", paddingRight: 5, color: "#49524B", userSelect: "none" }}>{dd.oldN}</span>
-                            <span style={{ flex: "none", width: 30, textAlign: "right", paddingRight: 5, color: "#49524B", userSelect: "none" }}>{dd.newN}</span>
-                            <span style={{ flex: "none", width: 14, textAlign: "center", color: dd.signColor, userSelect: "none" }}>{dd.sign}</span>
-                            <span style={{ whiteSpace: "pre", color: dd.color }}>{dd.text}</span>
-                          </div>
-                        ))}
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 12px", borderTop: "1px solid var(--w05)" }}>
-                        <button className="hv05" onClick={e => { e.stopPropagation(); this.openFile(f.path); }} style={{ height: 23, padding: "0 10px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w12)" }}>{t("sc5.openInEditor")}</button>
-                        <div style={{ flex: 1 }} />
-                        {f.status === "pending" && (
-                          <>
-                            <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("sc5.accept")}</button>
-                            <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--err)", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("sc5.reject")}</button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
+    // 예전엔 이 아래로 데모용 파일 카드 격자가 80여 줄 더 있었다. 첫 줄에서 늘
+    // 갈라져 나가 **데스크톱에서는 한 번도 그려지지 않는** 코드였다.
+    return this.renderProposals();
   }
 
   // ── 터미널 독 (xterm 멀티 탭 + AI 로그) ──
