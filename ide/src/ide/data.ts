@@ -1,10 +1,6 @@
-/** Schutz IDE — 상태 모델·데모 데이터 (디자인 핸드오프 프로토타입의 상태 모델을 그대로 포팅) */
+/** Schutz IDE — 상태 모델과 정적 표(에이전트 정의·메뉴·프로젝트 목록). */
 
 import { t } from "../i18n";
-
-export const TM = "src/auth/token-manager.ts";
-export const TY = "src/auth/types.ts";
-export const MD = "docs/auth.md";
 
 export interface AgentDef {
   id: string;
@@ -20,16 +16,6 @@ export const AGDEF: AgentDef[] = [
   { id: "grok", name: "Grok", model: "4.1", mgr: false, color: "#C4A882" },
   { id: "glm", name: "GLM", model: "4.6", mgr: false, color: "#A99BC0" },
 ];
-
-export type LineKind = "base" | "typing" | "fresh" | "pending" | "removed" | "accepted";
-
-export interface DocLine {
-  id: string;
-  text: string;
-  full?: string;
-  kind: LineKind;
-  hunk: string | null;
-}
 
 export interface AgentState {
   status: "idle" | "plan" | "edit" | "review" | "stop";
@@ -77,128 +63,6 @@ export interface ChatMsg {
   agent?: string;
   text: string;
   streaming?: boolean;
-}
-
-export interface HunkDef {
-  path: string;
-  agent: string;
-  afterId: string;
-  removeId?: string;
-  lines: string[];
-  chip: string;
-}
-
-const mk = (pref: string, arr: string[]): DocLine[] =>
-  arr.map((t, i) => ({ id: pref + i, text: t, kind: "base", hunk: null }));
-
-export function freshDocs(): Record<string, DocLine[]> {
-  return {
-    [TM]: mk("tm", [
-      'import { AuthClient } from "./client";',
-      'import type { TokenPair, TokenManagerOptions } from "./types";',
-      "",
-      "/** Manages access/refresh token lifecycle. */",
-      "export class TokenManager {",
-      "  private tokens: TokenPair | null = null;",
-      "",
-      "  constructor(",
-      "    private readonly client: AuthClient,",
-      "    private readonly options: TokenManagerOptions = {},",
-      "  ) {}",
-      "",
-      "  async getAccessToken(): Promise<string> {",
-      "    if (!this.tokens || this.isExpired()) {",
-      "      this.tokens = await this.client.refresh();",
-      "    }",
-      "    return this.tokens.accessToken;",
-      "  }",
-      "",
-      "  private isExpired(): boolean {",
-      "    return this.tokens !== null && Date.now() >= this.tokens.expiresAt;",
-      "  }",
-      "}",
-    ]),
-    [TY]: mk("ty", [
-      "export interface TokenPair {",
-      "  accessToken: string;",
-      "  refreshToken: string;",
-      "  expiresAt: number;",
-      "}",
-      "",
-      "export interface TokenManagerOptions {",
-      "  storage?: TokenStorage;",
-      "}",
-    ]),
-    [MD]: mk("md", [
-      "# Auth",
-      "",
-      "## TokenManager",
-      "",
-      "액세스/리프레시 토큰의 수명 주기를 관리합니다.",
-      "",
-      "### Options",
-      "",
-      "| Option | Description |",
-      "| ------ | ----------- |",
-      "| `storage` | 커스텀 토큰 저장소 백엔드 |",
-    ]),
-  };
-}
-
-export function hunkDefs(): Record<string, HunkDef> {
-  return {
-    A: {
-      path: TM, agent: "claude", afterId: "tm5",
-      lines: ["  private refreshTimer: ReturnType<typeof setTimeout> | null = null;"],
-      chip: t("data.chipAddRefreshTimer"),
-    },
-    C: {
-      path: TM, agent: "claude", removeId: "tm14", afterId: "tm14",
-      lines: [
-        "      this.tokens = await this.client.refresh();",
-        "      this.scheduleRefresh();",
-      ],
-      chip: t("data.chipWireRefreshSchedule"),
-    },
-    B: {
-      path: TM, agent: "claude", afterId: "tm17",
-      lines: [
-        "",
-        "  /**",
-        "   * Schedules a token refresh shortly before expiry.",
-        "   * Threshold: `options.refreshThreshold` (default 60_000 ms).",
-        "   */",
-        "  private scheduleRefresh(): void {",
-        "    const threshold = this.options.refreshThreshold ?? 60_000;",
-        "    const delay = this.tokens!.expiresAt - Date.now() - threshold;",
-        "    this.refreshTimer = setTimeout(() => void this.getAccessToken(), Math.max(delay, 0));",
-        "  }",
-      ],
-      chip: t("data.chipAutoRefreshScheduler"),
-    },
-    T: {
-      path: TY, agent: "gpt", afterId: "ty7",
-      lines: [
-        "  /** Ms before expiry to trigger auto refresh. Default: 60_000. */",
-        "  refreshThreshold?: number;",
-        "  /** Invoked after every successful refresh. */",
-        "  onRefresh?: (tokens: TokenPair) => void;",
-      ],
-      chip: t("data.chipExtendOptionsType"),
-    },
-    D: {
-      path: MD, agent: "grok", afterId: "md10",
-      lines: [
-        "| `refreshThreshold` | 만료 전 자동 갱신 시점(ms), 기본 60초 |",
-        "| `onRefresh` | 갱신 성공 시 호출되는 콜백 |",
-        "",
-        "### Auto refresh",
-        "",
-        "토큰은 만료 60초 전에 자동으로 갱신됩니다.",
-      ],
-      chip: t("data.chipUpdateDocs"),
-    },
-  };
 }
 
 /** 무엇 위에 서 있는지. 정보 창과 오프닝이 **같은 문자열**을 쓴다 —
