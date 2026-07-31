@@ -21,6 +21,8 @@ export default defineConfig({
       "src/review/**/*.test.ts",
       "src/ai/retry.test.ts",
       "src/keymap.test.ts",
+      "src/overlays.test.ts",
+      "src/theme.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",

@@ -6,6 +6,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "flowtree.done": { ko: "완료", en: "Done", de: "Fertig", ja: "完了" },
   "flowtree.noProject": { ko: "아직 열린 프로젝트가 없습니다.", en: "No project is open yet.", de: "Noch kein Projekt geöffnet.", ja: "まだ開いているプロジェクトはありません。" },
   "flowtree.openProject": { ko: "프로젝트 열기…", en: "Open project…", de: "Projekt öffnen…", ja: "プロジェクトを開く…" },
+  "flowtree.empty": { ko: "빈 폴더입니다. 위의 + 로 처음 파일을 만드세요.", en: "This folder is empty. Use + above to create the first file.", de: "Dieser Ordner ist leer. Mit + oben die erste Datei anlegen.", ja: "このフォルダーは空です。上の + から最初のファイルを作成してください。" },
   "flowtree.truncated": { ko: "… 항목이 많아 일부만 표시합니다", en: "… too many items, showing only some", de: "… zu viele Einträge, es wird nur ein Teil angezeigt", ja: "… 項目が多いため一部のみ表示しています" },
   // 트리 인라인 새 파일/폴더
   "tree.newFile": { ko: "새 파일", en: "New file", de: "Neue Datei", ja: "新しいファイル" },

@@ -191,6 +191,7 @@ ipcMain.handle("schutz:readTree", async (_e, root) => {
       if (entries.length >= MAX_ENTRIES) return;
       if (it.name.startsWith(".") && it.isDirectory() && it.name !== ".github") continue;
       if (it.isDirectory() && IGNORE_DIRS.has(it.name)) continue;
+      if (it.name.endsWith(".schutz-tmp")) continue;   // 원자적 쓰기 중의 임시 파일 — 트리에 잠깐 나타나면 안 된다
       const rel = relBase ? relBase + "/" + it.name : it.name;
       if (it.isDirectory()) {
         entries.push({ rel, name: it.name, dir: true, depth });
@@ -220,12 +221,15 @@ ipcMain.handle("schutz:readFile", async (_e, root, rel) => {
   return await fs.readFile(abs, "utf8");
 });
 
-ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
-  const abs = safeJoin(root, rel);
+/** 원자적 쓰기 — 같은 디렉터리에 임시 파일로 쓴 뒤 rename. 도중에 죽어도 반쪽짜리 파일이 남지 않는다.
+ *
+ *  임시 이름에 pid 와 일련번호를 넣는다. 예전엔 "<파일>.schutz-tmp" 하나로 고정이라, 같은 파일을
+ *  두 곳(창 두 개, 또는 저장과 일괄 치환)이 동시에 쓰면 서로의 임시 파일을 덮고 rename 해서
+ *  **한쪽 내용이 통째로 사라졌다.** */
+let tmpSeq = 0;
+async function writeAtomic(abs, content) {
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  // 원자적 쓰기 — 같은 디렉터리에 임시 파일로 쓴 뒤 rename.
-  // 도중에 프로세스가 죽어도 반쪽짜리 파일이 남지 않는다(mcp.cjs 의 설정 저장과 같은 방식).
-  const tmp = abs + ".schutz-tmp";
+  const tmp = abs + "." + process.pid + "." + (++tmpSeq) + ".schutz-tmp";
   try {
     await fs.writeFile(tmp, content, "utf8");
     await fs.rename(tmp, abs);
@@ -233,6 +237,10 @@ ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
     try { await fs.rm(tmp, { force: true }); } catch { /* 임시 파일 정리 실패는 무시 */ }
     throw e;
   }
+}
+
+ipcMain.handle("schutz:writeFile", async (_e, root, rel, content) => {
+  await writeAtomic(safeJoin(root, rel), content);
   return true;
 });
 
@@ -768,7 +776,7 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
       re.lastIndex = 0;
       // 정규식 모드만 $1/$& 등 지원; 리터럴 모드는 $ 를 이스케이프해 교체문자열의 $ 오해석로 인한 손상 방지
       const next = text.replace(re, rx ? replacement : replacement.replace(/\$/g, "$$$$"));
-      await fs.writeFile(abs, next, "utf8");
+      await writeAtomic(abs, next);   // 여기만 비원자적이었다 — 중간에 죽으면 반쪽 파일이 남았다
       changed += matches.length; files++;
     }
   }
@@ -1326,6 +1334,7 @@ ipcMain.on("schutz:watchStart", (e, root) => {
       if (filename) {
         const parts = String(filename).replace(/\\/g, "/").split("/");
         if (parts.some(seg => IGNORE_DIRS.has(seg))) return; // node_modules/.git 등 무시
+        if (parts[parts.length - 1].endsWith(".schutz-tmp")) return; // 우리가 방금 만든 임시 파일 — 새로고침을 유발할 이유가 없다
       }
       dirty = true;
       const cur = watchers.get(wid);

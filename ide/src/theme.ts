@@ -11,6 +11,15 @@ export interface ThemeTokens {
   /** 시맨틱 — 추가/수락/성공. 브랜드 액센트(세이지)와 색상을 20°+ 벌려
    *  "탈색된 세이지 = 크롬, 선명한 초록 = 실제 의미"가 되도록 분리한다. */
   ok: string; okHi: string;
+  /** 시맨틱 — 오류/실패/거부/삭제, 경고/충돌, 미저장.
+   *  예전엔 이 셋이 App.tsx 에 하드코딩된 헥사(#CE9A9A / #C4A882 / #CCB491)로 흩어져 있었다.
+   *  다크에서 고른 색이라 Paper(흰 카드) 위에서는 대비가 2.0~3.2 에 그쳤고,
+   *  **하필 오류 메시지가 가장 안 읽혔다.** 밝은 테마는 같은 뜻을 어두운 쪽으로 잡는다. */
+  err: string; errHi: string;
+  warn: string; warnHi: string;
+  dirty: string;
+  /** 텍스트가 아니라 줄·배지 배경용 — 대비 규칙 대상이 아니다. */
+  errSoft: string; warnSoft: string;
   /** 헤어라인/호버 오버레이 (다크=흰 알파, 라이트=검정 알파) */
   w03: string; w04: string; w05: string; w06: string; w07: string;
   w08: string; w10: string; w12: string; w14: string;
@@ -31,6 +40,10 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     accent: "#8FA893", accentHi: "#A9BCA9",
     onAccent: "#0C0E0D",
     ok: "#5CB98A", okHi: "#7ACCA2",
+    err: "#D99A9A", errHi: "#E8AFAF",
+    warn: "#D6B98A", warnHi: "#E3C99C",
+    dirty: "#C9B48F",
+    errSoft: "rgba(217,154,154,.14)", warnSoft: "rgba(214,185,138,.14)",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
     w10: "rgba(255,255,255,.1)", w12: "rgba(255,255,255,.12)", w14: "rgba(255,255,255,.14)",
@@ -46,6 +59,10 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     fgDim: "#868A93", fgDim2: "#71757D", fgDim3: "#5A5D65",
     accent: "#9AA3B2", accentHi: "#B4BCC9",
     ok: "#5CB98A", okHi: "#7ACCA2",
+    err: "#D99A9A", errHi: "#E8AFAF",
+    warn: "#D6B98A", warnHi: "#E3C99C",
+    dirty: "#C9B48F",
+    errSoft: "rgba(217,154,154,.14)", warnSoft: "rgba(214,185,138,.14)",
     onAccent: "#0F1013",
     w03: "rgba(255,255,255,.03)", w04: "rgba(255,255,255,.04)", w05: "rgba(255,255,255,.05)",
     w06: "rgba(255,255,255,.06)", w07: "rgba(255,255,255,.07)", w08: "rgba(255,255,255,.08)",
@@ -63,6 +80,10 @@ export const THEME_TOKENS: Record<string, ThemeTokens> = {
     fgDim: "#6A7166", fgDim2: "#828978", fgDim3: "#9AA091",
     // 라이트에선 흰 배경 대비를 위해 어둡게(4.5+), 호버(okHi)는 더 어두운 방향
     ok: "#227A53", okHi: "#1A6544",
+    err: "#A3312F", errHi: "#8A2523",
+    warn: "#7A5A12", warnHi: "#63490D",
+    dirty: "#6B5A2E",
+    errSoft: "rgba(163,49,47,.10)", warnSoft: "rgba(122,90,18,.10)",
     accent: "#3F6B4E", accentHi: "#2E5A3D",
     onAccent: "#FFFFFF",
     w03: "rgba(30,40,25,.035)", w04: "rgba(30,40,25,.05)", w05: "rgba(30,40,25,.065)",
@@ -111,6 +132,13 @@ export function applyTheme(id: string): void {
   r.setProperty("--accent", t.accent);
   r.setProperty("--ok", t.ok);
   r.setProperty("--ok-hi", t.okHi);
+  r.setProperty("--err", t.err);
+  r.setProperty("--err-hi", t.errHi);
+  r.setProperty("--warn", t.warn);
+  r.setProperty("--warn-hi", t.warnHi);
+  r.setProperty("--dirty", t.dirty);
+  r.setProperty("--err-soft", t.errSoft);
+  r.setProperty("--warn-soft", t.warnSoft);
   r.setProperty("--accent-hi", t.accentHi);
   r.setProperty("--on-accent", t.onAccent);
   r.setProperty("--w03", t.w03); r.setProperty("--w04", t.w04); r.setProperty("--w05", t.w05);

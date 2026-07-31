@@ -125,7 +125,42 @@ export interface CheckpointHeader {
   bytes: number;
   /** 아직 도는 실행 — 절대 버리지 않는다. */
   open: boolean;
+  /** 이 실행을 돌리는 창의 id. 옛 형식이면 "". */
+  owner?: string;
+  /** 주인이 마지막으로 살아 있다고 알린 시각(ms). 옛 형식이면 0/없음. */
+  beatAt?: number;
 }
+
+/** 열린 채 남은 체크포인트 중 **이 창이 닫아도 되는** 것.
+ *
+ *  실행 도중에 앱이 죽으면 체크포인트가 open 인 채 남는다. 그러면 목록에도 안 뜨고
+ *  보관 상한에서도 빠져 영영 안 지워지므로 누군가는 치워야 한다. 문제는 창이 둘일 때다 —
+ *  예전엔 주인 개념이 없어서 **놀고 있는 창이 옆 창에서 돌고 있는 실행의 체크포인트를
+ *  닫고, 이어서 보관 상한이 그걸 지웠다.** 그 실행은 되돌릴 수 없게 된다.
+ *
+ *  그래서 두 경우만 청소한다:
+ *   - 내 것이고, 내가 지금 아무것도 안 돌리고 있다 (예전 동작 그대로)
+ *   - 남의 것인데 오래 조용하다 = 그 창은 죽었다 (heartbeat 가 끊겼다)
+ *
+ *  주인을 모르는 옛 형식(owner "")은 heartbeat 도 없으므로 나이로만 판단한다. */
+export function sweepableRuns(
+  headers: readonly CheckpointHeader[],
+  o: { ownerId: string; now: number; staleMs: number; selfBusy: boolean },
+): string[] {
+  const out: string[] = [];
+  for (const h of headers) {
+    if (!h.open) continue;
+    const mine = !!h.owner && h.owner === o.ownerId;
+    if (mine) { if (!o.selfBusy) out.push(h.rootRunId); continue; }
+    const last = h.beatAt || h.startedAt || 0;
+    if (o.now - last >= o.staleMs) out.push(h.rootRunId);
+  }
+  return out;
+}
+
+/** heartbeat 가 이만큼 끊기면 그 창은 죽은 것으로 본다. 턴 하나가 길어도 15초마다
+ *  신호를 보내므로 넉넉하다. */
+export const CHECKPOINT_STALE_MS = 90_000;
 
 /** 보관 상한. 되돌리기는 "방금 한 일" 을 위한 것이지 이력 보관이 아니다 —
  *  넉넉하되 userData 를 무한히 불리지 않을 만큼만. */

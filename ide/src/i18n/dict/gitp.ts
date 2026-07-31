@@ -47,5 +47,6 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "gitp.stashPop": { ko: "꺼내기", en: "Pop", de: "Anwenden", ja: "取り出す" },
   "gitp.stashDrop": { ko: "버리기", en: "Drop", de: "Verwerfen", ja: "破棄" },
   "gitp.stashDropConfirm": { ko: "감춰둔 변경을 버립니다. 되돌릴 수 없습니다.\n\n{subject}", en: "This discards the stash. It cannot be undone.\n\n{subject}", de: "Der Stash wird verworfen. Das kann nicht rückgängig gemacht werden.\n\n{subject}", ja: "スタッシュを破棄します。元に戻せません。\n\n{subject}" },
+  "gitp.busy": { ko: "이전 git 작업이 아직 끝나지 않았습니다.", en: "A previous git operation is still running.", de: "Ein vorheriger Git-Vorgang läuft noch.", ja: "前の git 操作がまだ終わっていません。" },
   "gitp.stashDropped": { ko: "감춰둔 변경을 버렸습니다.", en: "Stash dropped.", de: "Stash verworfen.", ja: "スタッシュを破棄しました。" },
 };

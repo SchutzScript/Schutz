@@ -61,11 +61,16 @@ function makeLineParser(onMessage) {
 /** 본문이 JSON 이든 SSE 든 우리 id 의 RPC 메시지를 꺼낸다. */
 function pickRpc(text, id) {
   const t = String(text || "").trim();
-  if (t.startsWith("{")) { try { return JSON.parse(t); } catch { return null; } }
+  // **우리 id 만** 받는다. 예전엔 id 가 없는 프레임(알림·진행 상황)도 통과시켰는데,
+  // 알림에는 result 가 없으니 httpRequest 가 undefined 를 "성공한 빈 결과" 로 돌려줬다.
+  // tools/list 가 그러면 도구 0개짜리 서버로 조용히 연결된다 — 실패가 아니라 빈 성공으로
+  // 보여서 왜 도구가 안 뜨는지 알 길이 없었다.
+  const mine = (j) => j && typeof j === "object" && j.id === id;
+  if (t.startsWith("{")) { try { const j = JSON.parse(t); return mine(j) ? j : null; } catch { return null; } }
   for (const line of t.split(/\r?\n/)) {
     const m = /^data:\s*(.+)$/.exec(line.trim());
     if (!m) continue;
-    try { const j = JSON.parse(m[1]); if (j && (j.id === id || j.id == null)) return j; } catch { /* 다음 줄 */ }
+    try { const j = JSON.parse(m[1]); if (mine(j)) return j; } catch { /* 다음 줄 */ }
   }
   return null;
 }
@@ -132,8 +137,37 @@ function killServer(name) {
 }
 
 /** 서버 시작 + 핸드셰이크(initialize → initialized → tools/list). 반환: {ok, tools} | {ok:false, reason} */
+/** initialize → notifications/initialized → tools/list. 결과를 s.starting 에 걸어 두어
+ *  핸드셰이크 도중 들어온 두 번째 startServer 가 **끝날 때까지 기다리게** 한다.
+ *  예전엔 servers.set 이 핸드셰이크보다 먼저라, 그 사이의 호출이 아직 비어 있는 s.tools 로
+ *  `{ok:true, tools:[]}` 를 돌려받았다 — 시작 버튼을 두 번 누르면 "연결됨, 도구 0개" 가 됐다. */
+function handshake(s, name) {
+  s.starting = (async () => {
+    try {
+      await request(s, "initialize", {
+        protocolVersion: "2024-11-05", capabilities: {},
+        clientInfo: { name: "Schutz", version: app.getVersion() },
+      }, 20000);
+      sendRpc(s, "notifications/initialized", {}, true);
+      const listed = await request(s, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
+      s.tools = Array.isArray(listed && listed.tools) ? listed.tools : [];
+      return { ok: true, tools: s.tools };
+    } catch (err) {
+      killServer(name);   // 맵에서 지운다 → 다시 시도할 수 있다
+      return { ok: false, reason: String(err && err.message || err) };
+    } finally {
+      s.starting = null;
+    }
+  })();
+  return s.starting;
+}
+
 async function startServer(name) {
-  if (servers.has(name)) { const s = servers.get(name); return { ok: true, tools: s.tools }; }
+  if (servers.has(name)) {
+    const s = servers.get(name);
+    if (s.starting) return s.starting;   // 아직 악수 중 — 빈 도구 목록을 성공으로 돌려주지 않는다
+    return { ok: true, tools: s.tools };
+  }
   let cfg;
   try { cfg = readCfg().mcpServers[name]; } catch { return { ok: false, reason: "설정 파일(mcp.json) 손상" }; }
   if (!cfg) return { ok: false, reason: "설정 없음" };
@@ -143,21 +177,9 @@ async function startServer(name) {
     let u;
     try { u = new URL(cfg.url); } catch { return { ok: false, reason: "잘못된 URL" }; }
     if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "http(s) 주소만 지원합니다" };
-    const hs = { kind: "http", url: u.toString(), headers: cfg.headers || {}, tools: [], seq: 0, pending: new Map(), name };
+    const hs = { kind: "http", url: u.toString(), headers: cfg.headers || {}, tools: [], seq: 0, pending: new Map(), name, starting: null };
     servers.set(name, hs);
-    try {
-      await request(hs, "initialize", {
-        protocolVersion: "2024-11-05", capabilities: {},
-        clientInfo: { name: "Schutz", version: "0.0.6" },
-      }, 20000);
-      sendRpc(hs, "notifications/initialized", {}, true);
-      const listed = await request(hs, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
-      hs.tools = Array.isArray(listed && listed.tools) ? listed.tools : [];
-      return { ok: true, tools: hs.tools };
-    } catch (err) {
-      killServer(name);
-      return { ok: false, reason: String(err && err.message || err) };
-    }
+    return handshake(hs, name);
   }
 
   if (!cfg.command) return { ok: false, reason: "설정 없음" };
@@ -171,7 +193,7 @@ async function startServer(name) {
     });
   } catch (err) { return { ok: false, reason: String(err && err.message || err) }; }
 
-  const s = { child, tools: [], seq: 0, pending: new Map(), name };
+  const s = { child, tools: [], seq: 0, pending: new Map(), name, starting: null };
   const parser = makeLineParser((msg) => {
     if (msg.id != null && s.pending.has(msg.id)) {
       const p = s.pending.get(msg.id); s.pending.delete(msg.id); clearTimeout(p.timer);
@@ -191,21 +213,7 @@ async function startServer(name) {
   child.on("exit", () => { if (servers.get(name) === s) killServer(name); });
   child.on("error", () => { if (servers.get(name) === s) killServer(name); });
   servers.set(name, s);
-
-  try {
-    await request(s, "initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "Schutz", version: "0.0.3" },
-    }, 20000);
-    sendRpc(s, "notifications/initialized", {}, true);
-    const listed = await request(s, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
-    s.tools = Array.isArray(listed && listed.tools) ? listed.tools : [];
-    return { ok: true, tools: s.tools };
-  } catch (err) {
-    killServer(name);
-    return { ok: false, reason: String(err && err.message || err) };
-  }
+  return handshake(s, name);
 }
 
 // ── config.toml 최소 파서 ([mcp_servers.NAME] 섹션만) ──

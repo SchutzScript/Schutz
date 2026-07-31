@@ -57,7 +57,9 @@ contextBridge.exposeInMainWorld("schutz", {
   mkdir: (root, rel) => ipcRenderer.invoke("schutz:mkdir", root, rel),
   /** 체크포인트 — AI 실행 하나가 손댄 파일의 원본을 잡아 두고 통째로 되돌린다.
    *  해시는 전부 메인에서 계산한다(렌더러와 인코딩이 어긋나면 가짜 드리프트가 난다). */
-  cpCapture: (root, runId, rel, kind, startedAt) => ipcRenderer.invoke("schutz:cp:capture", root, runId, rel, kind, startedAt),
+  cpCapture: (root, runId, rel, kind, startedAt, ownerId) => ipcRenderer.invoke("schutz:cp:capture", root, runId, rel, kind, startedAt, ownerId),
+  /** 이 실행이 살아 있다는 신호 — 다른 창이 고아 체크포인트로 오인해 닫는 것을 막는다. */
+  cpBeat: (root, runId) => ipcRenderer.invoke("schutz:cp:beat", root, runId),
   cpMark: (root, runId, rel) => ipcRenderer.invoke("schutz:cp:mark", root, runId, rel),
   cpClose: (root, runId) => ipcRenderer.invoke("schutz:cp:close", root, runId),
   cpList: (root) => ipcRenderer.invoke("schutz:cp:list", root),

@@ -3,7 +3,7 @@ import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
   getStoredKey, getOAuth, freshOAuth, getModelOverride,
 } from "./provider";
-import { getLang } from "../i18n";
+import { getLang, t } from "../i18n";
 import { retryPlan, sleep } from "./retry";
 
 export type { ToolCall } from "./provider";
@@ -139,10 +139,14 @@ export class ClaudeProvider implements AIProvider, AgentProvider {
         case "content_block_stop": {
           const tb = toolBuf[evt.index];
           if (tb) {
-            let input: any = {};
-            try { input = tb.json ? JSON.parse(tb.json) : {}; } catch { /* 빈 입력 */ }
-            yield { type: "tool_call", call: { id: tb.id, name: tb.name, input } };
             delete toolBuf[evt.index];
+            // 인자 JSON 이 깨졌으면 **건너뛴다.** 예전엔 {} 로 삼켰는데, 그러면 경로가 빈
+            // propose_edit 이 만들어지는 식으로 모델이 하려던 것과 다른 일이 조용히 실행됐다.
+            // openaiCompat 은 처음부터 이렇게 하고 있었다 — 여기만 달랐다.
+            let input: any;
+            try { input = tb.json ? JSON.parse(tb.json) : {}; }
+            catch { yield { type: "error", message: t("oai.badToolArgs", { name: tb.name }) }; break; }
+            yield { type: "tool_call", call: { id: tb.id, name: tb.name, input } };
           }
           break;
         }

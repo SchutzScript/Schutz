@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   planUndo, actionable, mergeCapture, applyAfter, summarize, pruneCheckpoints,
+  sweepableRuns,
   type CheckpointEntry, type DiskState, type CheckpointHeader,
 } from "./checkpoints";
 
@@ -170,5 +171,55 @@ describe("pruneCheckpoints", () => {
   it("열린 것만 있으면 버릴 게 없다 — 상한을 넘겨도", () => {
     const drop = pruneCheckpoints([H("x", 1, 9999, true)], { maxRuns: 0, maxBytes: 0 });
     expect(drop).toEqual([]);
+  });
+});
+
+describe("sweepableRuns — 창이 둘일 때 남의 체크포인트를 닫지 않는다", () => {
+  const H = (o: Partial<CheckpointHeader> & { rootRunId: string }): CheckpointHeader =>
+    ({ startedAt: 1000, bytes: 0, open: true, ...o });
+  const base = { ownerId: "A", now: 1_000_000, staleMs: 90_000, selfBusy: false };
+
+  it("닫힌 것은 대상이 아니다", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", open: false, owner: "A" })], base)).toEqual([]);
+  });
+
+  it("내 것이고 내가 놀고 있으면 치운다 — 죽었다 살아난 뒤의 고아 정리", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", owner: "A", beatAt: base.now })], base)).toEqual(["r"]);
+  });
+
+  it("내 것이어도 내가 돌고 있으면 안 치운다", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", owner: "A" })], { ...base, selfBusy: true })).toEqual([]);
+  });
+
+  it("남의 것이 방금 신호를 보냈으면 손대지 않는다 — 이게 실제 데이터 유실 경로였다", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", owner: "B", beatAt: base.now - 1000 })], base)).toEqual([]);
+  });
+
+  it("내가 바쁘든 말든 남의 살아 있는 실행은 그대로 둔다", () => {
+    const hs = [H({ rootRunId: "r", owner: "B", beatAt: base.now })];
+    expect(sweepableRuns(hs, { ...base, selfBusy: true })).toEqual([]);
+  });
+
+  it("남의 것이라도 신호가 끊긴 지 오래면 치운다 — 그 창은 죽었다", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", owner: "B", beatAt: base.now - 90_000 })], base)).toEqual(["r"]);
+  });
+
+  it("경계에서 1ms 모자라면 아직 살아 있는 것으로 본다", () => {
+    expect(sweepableRuns([H({ rootRunId: "r", owner: "B", beatAt: base.now - 89_999 })], base)).toEqual([]);
+  });
+
+  it("주인·신호가 없는 옛 형식은 시작 시각으로 판단한다", () => {
+    expect(sweepableRuns([H({ rootRunId: "old", startedAt: base.now - 200_000 })], base)).toEqual(["old"]);
+    expect(sweepableRuns([H({ rootRunId: "new", startedAt: base.now - 1000 })], base)).toEqual([]);
+  });
+
+  it("섞여 있어도 각각 따로 판단한다", () => {
+    const hs = [
+      H({ rootRunId: "mine", owner: "A" }),
+      H({ rootRunId: "live", owner: "B", beatAt: base.now }),
+      H({ rootRunId: "dead", owner: "C", beatAt: base.now - 120_000 }),
+      H({ rootRunId: "done", owner: "B", open: false }),
+    ];
+    expect(sweepableRuns(hs, base)).toEqual(["mine", "dead"]);
   });
 });

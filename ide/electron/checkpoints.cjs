@@ -61,10 +61,11 @@ async function readMeta(dir) {
   }
 }
 
+let tmpSeq = 0;
 /** 원자적 쓰기 — 도중에 죽어도 반쪽 meta 가 남지 않는다(main.cjs 의 writeFile 과 같은 방식). */
 async function writeAtomic(abs, data) {
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  const tmp = abs + ".schutz-tmp";
+  const tmp = abs + "." + process.pid + "." + (++tmpSeq) + ".schutz-tmp";   // 고정 이름이면 동시 쓰기가 서로를 덮는다
   try {
     await fs.writeFile(tmp, data);
     await fs.rename(tmp, abs);
@@ -85,12 +86,15 @@ function init(ipcMain, deps) {
   safeJoinRef = safeJoin;
 
   // 파일을 건드리기 **직전** 에 원본을 잡아 둔다. 같은 파일을 여러 번 고쳐도 처음 것이 원본이다.
-  ipcMain.handle("schutz:cp:capture", async (_e, root, runId, rel, kind, startedAt) => {
+  ipcMain.handle("schutz:cp:capture", async (_e, root, runId, rel, kind, startedAt, ownerId) => {
     const abs = safeJoinRef(root, rel);      // 워크스페이스 밖은 여기서 막힌다
     const dir = dirOf(root, runId);
     const meta = (await readMeta(dir)) || {
       rootRunId: String(runId), root: path.resolve(root),
       startedAt: Number(startedAt) || 0, open: true, entries: [],
+      // 어느 창이 이 실행을 돌리고 있는가. 창을 두 개 띄우면 둘 다 같은 보관함을 보는데,
+      // 예전엔 주인 표시가 없어서 **놀고 있는 창이 남의 실행 중인 체크포인트를 닫고 지웠다.**
+      owner: String(ownerId || ""), beatAt: Date.now(),
     };
     const already = meta.entries.find(e => e.rel === rel);
     if (already) return { beforeHash: already.beforeHash, oversize: !!already.oversize, first: false };
@@ -115,8 +119,19 @@ function init(ipcMain, deps) {
       }
     }
     meta.entries.push(entry);
+    meta.beatAt = Date.now();
     await saveMeta(dir, meta);
     return { beforeHash: entry.beforeHash, oversize: !!entry.oversize, first: true };
+  });
+
+  // 살아 있다는 신호. 긴 턴이라 한동안 파일을 안 건드려도 이 실행이 살아 있음을 남긴다 —
+  // 이게 없으면 다른 창이 "오래 조용하다 = 죽었다" 로 오판해 남의 체크포인트를 닫는다.
+  ipcMain.handle("schutz:cp:beat", async (_e, root, runId) => {
+    const meta = await readMeta(dirOf(root, runId));
+    if (!meta || !meta.open) return false;
+    meta.beatAt = Date.now();
+    await saveMeta(dirOf(root, runId), meta);
+    return true;
   });
 
   // 우리가 쓴 직후의 내용을 기록한다. 이게 나중에 "그 뒤로 누가 고쳤나" 의 기준이 된다.
@@ -129,6 +144,7 @@ function init(ipcMain, deps) {
     if (!entry) return { afterHash: null };   // 캡처 안 된 것은 만들지 않는다
     const d = await diskState(abs);
     entry.afterHash = d.exists ? d.hash : null;
+    meta.beatAt = Date.now();
     await saveMeta(dir, meta);
     return { afterHash: entry.afterHash };
   });
@@ -226,6 +242,8 @@ async function listOf(root) {
       rootRunId: meta.rootRunId,
       startedAt: meta.startedAt || 0,
       open: !!meta.open,
+      owner: meta.owner || "",
+      beatAt: meta.beatAt || 0,
       bytes: meta.entries.reduce((n, e) => n + (e.bytes || 0), 0),
       files: meta.entries.length,
       created: meta.entries.filter(e => e.kind === "create").length,

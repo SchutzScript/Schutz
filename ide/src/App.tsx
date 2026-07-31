@@ -15,7 +15,7 @@ import {
 } from "./ai/claude";
 import { PROVIDERS_MAP, testProvider, getManagerId, setManagerId } from "./ai/registry";
 import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, ModelOpt } from "./ai/models";
-import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, getModelOverride, setModelOverride } from "./ai/provider";
+import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, freshOAuth, getModelOverride, setModelOverride } from "./ai/provider";
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
 import { PreviewPane } from "./editor/PreviewPane";
@@ -27,8 +27,12 @@ import { buildHunks, composeFromHunks, allSelected, changeCount, hunkStats, type
 import {
   planUndo, actionable, pruneCheckpoints, CHECKPOINT_LIMITS,
   type UndoVerdict, type DiskState,
+  sweepableRuns, CHECKPOINT_STALE_MS,
 } from "./engine/checkpoints";
 import { resolveRenameTarget, isMove } from "./engine/movePath";
+import { applyProposal } from "./engine/editApply";
+import { shouldProbeQuota } from "./engine/quotaPoll";
+import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction } from "./overlays";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
   rosterLines, personaSystem, type SubagentDef,
@@ -1641,11 +1645,27 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   /** 쓰기 **직전** 에 원본을 잡아 둔다. 실패해도 편집은 그대로 진행한다 —
    *  안전망을 못 깔았다고 편집을 막으면 더 나쁘다. 대신 목록에 안 뜨므로 조용하지 않다. */
+  /** 이 창의 id. 체크포인트 주인 표시에 쓴다 — 저장하지 않는다(창이 죽으면 같이 죽어야 한다). */
+  private _cpOwner = "w" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  private _cpBeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** 열린 체크포인트에 "살아 있다" 를 주기적으로 남긴다. 이게 없으면 다른 창이 조용한
+   *  실행을 죽은 것으로 오인해 닫고, 뒤이어 보관 상한이 지워 버린다. */
+  private startCpHeartbeat() {
+    if (this._cpBeatTimer) return;
+    this._cpBeatTimer = setInterval(() => {
+      const root = this.state.workspace?.root;
+      if (!root || !window.schutz?.cpBeat || !this._cpOpen.size) return;
+      for (const id of this._cpOpen) void window.schutz.cpBeat(root, id).catch(() => { /* 부가 정보 */ });
+    }, 15_000);
+  }
+
   private async captureBefore(root: string, p: Proposal) {
     if (!p.rootRunId || !window.schutz) return;
     try {
-      await window.schutz.cpCapture(root, p.rootRunId, p.rel, p.find === "" ? "create" : "modify", Date.now());
+      await window.schutz.cpCapture(root, p.rootRunId, p.rel, p.find === "" ? "create" : "modify", Date.now(), this._cpOwner);
       this._cpOpen.add(p.rootRunId);
+      this.startCpHeartbeat();
     } catch { /* 체크포인트 실패가 편집을 막으면 안 된다 */ }
   }
 
@@ -1662,6 +1682,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     if (!root || !window.schutz || !this._cpOpen.size) return;
     const ids = [...this._cpOpen];
     this._cpOpen.clear();
+    if (this._cpBeatTimer) { clearInterval(this._cpBeatTimer); this._cpBeatTimer = null; }
     let headers: CheckpointInfo[] = [];
     try {
       for (const id of ids) headers = await window.schutz.cpClose(root, id);
@@ -1685,8 +1706,12 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       //
       // 그 청소는 **지금 도는 게 없을 때만** 해야 한다. 실행 중에 열린 것을 닫으면 그 실행이
       // 아직 파일을 더 건드릴 참인데 보관 상한이 그걸 지워 버릴 수 있다.
-      if (!this._cpOpen.size && !this.engine.runs.hasActiveAgentRuns()) {
-        for (const h of headers.filter(x => x.open)) headers = await window.schutz.cpClose(root, h.rootRunId);
+      // 창이 둘이면 이 판단이 어려워진다 — 예전엔 주인 개념이 없어서 **놀고 있는 창이
+      // 옆 창에서 돌고 있는 실행의 체크포인트를 닫았고**, 이어서 보관 상한이 그걸 지웠다.
+      // 무엇을 치워도 되는지는 sweepableRuns(순수 함수)가 정한다.
+      const selfBusy = this._cpOpen.size > 0 || this.engine.runs.hasActiveAgentRuns();
+      for (const id of sweepableRuns(headers, { ownerId: this._cpOwner, now: Date.now(), staleMs: CHECKPOINT_STALE_MS, selfBusy })) {
+        headers = await window.schutz.cpClose(root, id);
       }
       for (const id of pruneCheckpoints(headers, CHECKPOINT_LIMITS)) {
         await window.schutz.cpDrop(root, id);
@@ -1726,7 +1751,17 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       const r = await window.schutz.cpRestore(root, ask.runId, acts);
       // 디스크가 바뀌었으니 열린 모델을 디스크 기준으로 다시 맞춘다 — 안 하면
       // 되돌린 파일이 에디터에서는 예전 그대로 보이고, 저장하는 순간 도로 덮인다.
-      await projectModels.reloadAll(root, (rt, rel) => window.schutz!.readFile(rt, rel), () => false);
+      //
+      // **되돌린 파일만** 건드린다. 예전엔 reloadAll(…, () => false) 이었는데,
+      // 그 상수 false 는 "미저장 여부를 묻지 마라" 라서 되돌리기와 무관한 파일의
+      // 미저장 버퍼까지 전부 디스크로 덮었다 — askUndoRun 이 화면에 "저장 안 한
+      // 편집은 건드리지 않는다" 고 적어 놓고 실행이 그 약속을 어기고 있었다.
+      const deleted = new Set(acts.filter(a => a.action === "delete").map(a => a.rel));
+      for (const rel of r.done) {
+        if (deleted.has(rel)) { projectModels.drop(root, rel); continue; } // 남기면 다음 저장이 되살린다
+        try { projectModels.reload(root, rel, await window.schutz.readFile(root, rel), false); }
+        catch { projectModels.drop(root, rel); }
+      }
       const tree = await window.schutz.readTree(root);
       this.setState({ workspace: tree, undoAsk: null });
       if (r.failed.length) {
@@ -1770,29 +1805,20 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         // 빈 파일 → 전체 내용. 파일이 열리며 코드가 타이핑되는 장면이 여기서 나온다
         editStart = 0; editEnd = 0;
       } else {
-        const cur = await window.schutz.readFile(ws.root, p.rel);
-        let start = -1, end = -1;
-        if (p.range) {
-          // 인라인 편집: 정확 범위로 적용(흔한/중복 라인 선택도 정상). 단 범위의 현재 내용이 선택과 동일할 때만(파일 변경 스테일 방지).
-          const off = (line: number, col: number) => { const ls = cur.split("\n"); let o = 0; for (let i = 0; i < line - 1 && i < ls.length; i++) o += ls[i].length + 1; return o + (col - 1); };
-          const s0 = off(p.range.startLineNumber, p.range.startColumn), e0 = off(p.range.endLineNumber, p.range.endColumn);
-          if (s0 >= 0 && e0 >= s0 && e0 <= cur.length && cur.slice(s0, e0) === p.find) { start = s0; end = e0; }
-        }
-        if (start >= 0) {
-          newContent = cur.slice(0, start) + eff + cur.slice(end);
-        } else {
-          // 범위 없음 또는 스테일 → 텍스트 유일성 매칭 폴백
-          const idx = cur.indexOf(p.find);
-          if (idx < 0) throw new Error(t("sc1.orig_not_found"));
-          if (cur.indexOf(p.find, idx + 1) >= 0) throw new Error(t("sc1.orig_multiple"));
-          // 함수 replacer — 교체 내용의 $ 시퀀스($&, $1 등)가 오해석되어 파일이 손상되는 것 방지
-          newContent = cur.replace(p.find, () => eff);
-        }
+        // 기준은 **열린 버퍼**다(미저장이면). 디스크를 기준으로 잡고 쓰면 그 write 가
+        // 사용자의 미저장 편집을 통째로 지우는데, 뒤이어 markSaved 까지 걸려 dirty 표시도
+        // 같이 사라진다 — 무엇을 잃었는지조차 알 수 없게 된다. 버퍼 위에 얹으면 편집이
+        // 살아남고 기준선도 정직해진다. 버퍼에서 find 를 못 찾으면 아래 오류가 뜨는데,
+        // 그게 맞는 결과다("안전하게 못 하겠다").
+        const cur = this.baseTextFor(ws.root, p.rel) ?? await window.schutz.readFile(ws.root, p.rel);
+        const res = applyProposal({ base: cur, find: p.find, replace: eff, range: p.range });
+        if (res.ok === false) throw new Error(t(res.error === "multiple" ? "sc1.orig_multiple" : "sc1.orig_not_found"));
+        newContent = res.text;
         await this.captureBefore(ws.root, p);
         await window.schutz.writeFile(ws.root, p.rel, newContent);
         await this.markAfter(ws.root, p);
-        editStart = start >= 0 ? start : cur.indexOf(p.find);
-        editEnd = editStart + p.find.length;
+        editStart = res.start;
+        editEnd = res.end;
       }
       this._proposalsById.set(id, { ...p, status: "accepted" }); // 동기 레지스트리도 갱신 — 자동수락 호출측이 결과를 즉시 읽는다
       this.setState(s => ({
@@ -1837,13 +1863,21 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       // 범위를 믿을 수 없으므로 애니메이션 없이 최종본으로 맞춘다.
       const canAnimate = start >= 0 && end >= start && m.getValueLength() >= end
         && m.getValue().slice(start, end) === find;
-      if (!canAnimate) { if (m.getValue() !== finalText) m.setValue(finalText); return; }
+      if (!canAnimate) { this.forceModelText(m, finalText); return; }
       await typeEdit(m, start, end, replacement, { reveal: true, slow: this._demoTyping ? DEMO_TYPE_SLOWDOWN : 1 });
       // 애니메이션 중 다른 편집이 끼어들었을 수 있다 — 최종본과 다르면 맞춘다
-      if (m.getValue() !== finalText) m.setValue(finalText);
+      this.forceModelText(m, finalText);
     } catch {
-      if (!m.isDisposed() && m.getValue() !== finalText) m.setValue(finalText);
+      if (!m.isDisposed()) this.forceModelText(m, finalText);
     }
+  }
+
+  /** 모델을 최종본으로 맞춘다 — **undo 스택에 남게.**
+   *  setValue 는 undo 이력을 통째로 날려서, 여기서 덮인 사용자 편집을 Ctrl+Z 로도 못 찾는다.
+   *  pushEditOperations 는 결과가 같고 되돌릴 수 있다. */
+  private forceModelText(m: monaco.editor.ITextModel, finalText: string) {
+    if (m.getValue() === finalText) return;
+    m.pushEditOperations([], [{ range: m.getFullModelRange(), text: finalText }], () => null);
   }
 
   /** 자동 수락 결과를 도구 반환 문자열로 — 실패를 성공으로 보고하지 않기 위해 호출측이 반드시 이걸 쓴다 */
@@ -1898,14 +1932,47 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   /** 켤 때 잔여 할당량 조회 — 헤더는 요청을 보내야 오므로 1토큰짜리 최소 요청을 한 번 던진다.
    *  실패해도 조용히 넘어간다(대화에는 영향 없음). */
+  /** 잔여량이 마지막으로 갱신된 시각. 실요청 헤더(onQuota)와 이 조회가 함께 갱신한다. */
+  private _lastQuotaAt = 0;
+  private _quotaTimer: ReturnType<typeof setInterval> | null = null;
+  private _quotaProbing = false;
+  /** 이보다 오래된 값이면 다시 조회한다. 벤더 창이 5시간·7일 단위라 분 단위로 볼 이유는 없고,
+   *  조회 한 번이 실제 요청 한 번(1토큰)이라 짧게 잡을수록 그냥 낭비다. */
+  private static QUOTA_STALE_MS = 10 * 60_000;
+
+  /** 주기 틱과 창 복귀에서 부른다. 낡았고, 보이고, 이미 조회 중이 아닐 때만 실제로 나간다. */
+  private maybeProbeQuotas = () => {
+    // 창이 가려져 있으면 아무도 안 본다 — 다시 보일 때 visibilitychange 로 어차피 한 번 더 온다.
+    const go = shouldProbeQuota({
+      now: Date.now(),
+      lastAt: this._lastQuotaAt,
+      hidden: document.visibilityState === "hidden",
+      probing: this._quotaProbing,
+      staleMs: App.QUOTA_STALE_MS,
+    });
+    if (go) void this.probeQuotas();
+  };
+
   private async probeQuotas() {
     if (!window.schutz?.quotaProbe) return;
+    this._quotaProbing = true;
+    try { await this._probeQuotasInner(); } finally { this._quotaProbing = false; }
+  }
+
+  private async _probeQuotasInner() {
     for (const id of ["claude", "gpt"]) {
-      const tok = getOAuth(id === "gpt" ? "codex" : id);
+      // **freshOAuth** 다. getOAuth 는 저장된 토큰을 그대로 주는데, 액세스 토큰 수명이
+      // 한 시간쯤이라 마지막 사용 뒤 한 참 있다가 켜면 거의 항상 만료돼 있다. 그러면 이
+      // 조회만 401 로 튕기고(대화 경로는 둘 다 freshOAuth 를 쓰니 멀쩡하다) 헤더가 안 와서,
+      // **켤 때마다 잔여량이 아예 안 보이다가 첫 메시지를 보내야 나타났다.**
+      const tok = await freshOAuth(id === "gpt" ? "codex" : id);
       if (!tok?.access) continue;
       try {
-        const r = await window.schutz.quotaProbe({ provider: id, access: tok.access, accountId: tok.accountId ?? null });
-        if (r.ok && r.quota) this.setState(st => ({ quota: { ...st.quota, [id]: r.quota! } }));
+        const r = await window.schutz!.quotaProbe({ provider: id, access: tok.access, accountId: tok.accountId ?? null });
+        if (r.ok && r.quota) {
+          this._lastQuotaAt = Date.now();
+          this.setState(st => ({ quota: { ...st.quota, [id]: r.quota! } }));
+        }
       } catch { /* 무시 */ }
     }
   }
@@ -2794,10 +2861,11 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         this.openO({ keysOpen: true, input: "" });
         return true;
       case "/vim": {
-        const ed = getEditorPrefs();
-        const next = ed.keymap === "vim" ? "intellij" : "vim";
-        setEditorPrefs({ keymap: next });
-        this.forceUpdate();
+        const next = getEditorPrefs().keymap === "vim" ? "intellij" : "vim";
+        // 설정 모달과 **같은 경로**로 보낸다. 예전엔 setEditorPrefs + forceUpdate 라
+        // 저장은 됐는데 이미 열려 있는 에디터는 그대로였다 — 키맵이 바뀌었다고 말해 놓고
+        // 실제로는 다음에 그 파일을 다시 열어야 적용됐다.
+        this.applyEditorPref({ keymap: next });
         this.schutzSay(raw, next === "vim" ? t("sc2.vimOn") : t("sc2.vimOff"));
         return true;
       }
@@ -4261,8 +4329,8 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this.anyDirty()) { this.toast("error", t("sc3.unsavedChanges")); return; }
     const ok = await this.gitDo("checkout", { branch });
     this.setState({ branchOpen: false });
-    if (ok) { this.toast("ok", t("sc3.branchSwitched", { branch })); await this.syncFromDisk({ bulk: true }); }
-    else this.toast("error", t("sc3.switchFailed") + (this.state.gitError || ""));
+    if (ok === true) { this.toast("ok", t("sc3.branchSwitched", { branch })); await this.syncFromDisk({ bulk: true }); }
+    else if (ok === false) this.toast("error", t("sc3.switchFailed") + (this.state.gitError || ""));
   }
   /** 새 브랜치 생성+전환 */
   async gitCreateBranch() {
@@ -4270,15 +4338,15 @@ ${(r.output || "").slice(0, 2000)}`;
     if (!name) return;
     const ok = await this.gitDo("createBranch", { branch: name });
     this.setState({ branchOpen: false, newBranch: "" });
-    if (ok) { this.toast("ok", t("sc3.newBranchCreated", { name })); await this.syncFromDisk({ bulk: true }); }
-    else this.toast("error", t("sc3.branchCreateFailed") + (this.state.gitError || ""));
+    if (ok === true) { this.toast("ok", t("sc3.newBranchCreated", { name })); await this.syncFromDisk({ bulk: true }); }
+    else if (ok === false) this.toast("error", t("sc3.branchCreateFailed") + (this.state.gitError || ""));
   }
 
   /** 단순 git 액션(스태시/풀/페치) + 토스트 */
   async gitSimple(action: string, okMsg: string) {
     const ok = await this.gitDo(action, action === "stash" ? { includeUntracked: true } : undefined);
-    if (ok) { this.toast("ok", okMsg); if (action === "pull" || action === "stashPop") await this.syncFromDisk({ bulk: true }); }
-    else this.toast("error", (this.state.gitError || t("sc3.failed")));
+    if (ok === true) { this.toast("ok", okMsg); if (action === "pull" || action === "stashPop") await this.syncFromDisk({ bulk: true }); }
+    else if (ok === false) this.toast("error", (this.state.gitError || t("sc3.failed")));
   }
   /** 현재 포커스 파일·라인의 blame을 토스트로 */
   async gitBlameLine() {
@@ -4299,7 +4367,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 충돌을 한쪽으로 통째로 해결한다. 파일이 바뀌므로 디스크에서 다시 읽는다. */
   async resolveConflict(path: string, side: "ours" | "theirs") {
     const ok = await this.gitDo("resolveConflict", { path, side });
-    if (ok) { this.toast("ok", t("gitp.conflictResolved", { path: path.split("/").pop() ?? path })); await this.syncFromDisk({ bulk: true }); }
+    if (ok === true) { this.toast("ok", t("gitp.conflictResolved", { path: path.split("/").pop() ?? path })); await this.syncFromDisk({ bulk: true }); }
   }
 
   /** 마커를 손으로 정리한 파일을 해결됨으로 표시. 마커가 남아 있으면 막는다 —
@@ -4313,7 +4381,7 @@ ${(r.output || "").slice(0, 2000)}`;
       } catch { /* 읽지 못하면 git 판단에 맡긴다 */ }
     }
     const ok = await this.gitDo("markResolved", { path });
-    if (ok) this.toast("ok", t("gitp.conflictResolved", { path: path.split("/").pop() ?? path }));
+    if (ok === true) this.toast("ok", t("gitp.conflictResolved", { path: path.split("/").pop() ?? path }));
   }
 
   /** 감춰둔 변경을 꺼내 온다(pop — 꺼내면 목록에서 사라진다). 파일이 통째로 바뀌므로
@@ -4321,7 +4389,7 @@ ${(r.output || "").slice(0, 2000)}`;
   async stashApply(ref: string) {
     if (this.anyDirty()) { this.toast("error", t("sc3.unsavedChanges")); return; }
     const ok = await this.gitDo("stashApply", { ref });
-    if (ok) { this.toast("ok", t("sc1.toast_stash_popped")); await this.syncFromDisk({ bulk: true }); }
+    if (ok === true) { this.toast("ok", t("sc1.toast_stash_popped")); await this.syncFromDisk({ bulk: true }); }
   }
 
   /** 감춰둔 변경을 버린다 — 되돌릴 수 없으므로 반드시 묻는다. */
@@ -4329,15 +4397,18 @@ ${(r.output || "").slice(0, 2000)}`;
     const k = this.state.gitStashes.find(x => x.ref === ref);
     if (!window.confirm(t("gitp.stashDropConfirm", { subject: k?.subject ?? ref }))) return;
     const ok = await this.gitDo("stashDrop", { ref });
-    if (ok) this.toast("ok", t("gitp.stashDropped"));
+    if (ok === true) this.toast("ok", t("gitp.stashDropped"));
   }
 
   /** git 액션 실행 후 상태 갱신 (+ 열린 diff/페인 리로드) */
   private _gitOpInFlight = false; // 동기 재진입 가드 — setState 는 async 라 state.gitBusy 만으론 rapid double-fire(이중 커밋/index.lock) 못 막음
-  private async gitDo(action: string, payload?: any): Promise<boolean> {
+  /** "차단됨" 을 실패와 구분해 돌려준다. 예전엔 둘 다 false 라, 버튼을 빠르게 두 번 누르면
+   *  두 번째가 **"전환 실패"** 같은 오류 토스트를 띄웠다 — 아무 일도 안 일어난 것이 진실인데
+   *  사용자에게는 git 이 깨진 것처럼 보였다. */
+  private async gitDo(action: string, payload?: any): Promise<boolean | "busy"> {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return false;
-    if (this._gitOpInFlight) return false; // 진행 중이면 동시 git 변경 차단
+    if (this._gitOpInFlight) { this.toast("info", t("gitp.busy")); return "busy"; } // 진행 중이면 동시 git 변경 차단
     this._gitOpInFlight = true;
     this.setState({ gitBusy: true, gitError: "" });
     try {
@@ -4369,7 +4440,7 @@ ${(r.output || "").slice(0, 2000)}`;
     // 커밋 전 자동 리뷰 — 켰을 때만. 짚은 게 있으면 승인 바로 진행/취소를 묻는다.
     if (getAutonomy().reviewOnCommit && !(await this.reviewGateBeforeCommit())) return;
     const ok = await this.gitDo("commit", { message: msg, amend });
-    if (ok) { this.setState({ gitMsg: "", gitAmend: false }); void this.refreshWorkspace(); }
+    if (ok === true) { this.setState({ gitMsg: "", gitAmend: false }); void this.refreshWorkspace(); }
   }
 
   /** amend 를 켜면 HEAD 메시지를 채워 준다 — 빈 칸에서 다시 쓰게 하면 원래 메시지를 날린다. */
@@ -4639,10 +4710,16 @@ ${(r.output || "").slice(0, 2000)}`;
       this._quotaOff = window.schutz.onQuota(line => {
         try {
           const q = JSON.parse(line) as QuotaInfo;
+          this._lastQuotaAt = Date.now(); // 실요청이 방금 갱신했다 → 주기 조회는 그만큼 미뤄진다
           this.setState(st => ({ quota: { ...st.quota, [q.provider]: q } }));
         } catch { /* 부가 정보 — 실패해도 무시 */ }
       });
       void this.probeQuotas();
+      // 켠 뒤로도 늙지 않게. 1분마다 두드리되 실제로 나가는 건 값이 낡았고 창이 보일 때뿐이다.
+      this._quotaTimer = setInterval(this.maybeProbeQuotas, 60_000);
+      // 다른 창·다른 클라이언트에서 쓰다 돌아온 순간이 가장 어긋나 있을 때다.
+      document.addEventListener("visibilitychange", this.maybeProbeQuotas);
+      window.addEventListener("focus", this.maybeProbeQuotas);
       // 재로드 후 고아 PTY 정리 — 이 렌더러의 현재 터미널 탭에 없는 셸을 메인이 종료(리로드 시 누수 방지)
       try { window.schutz.termReconcile?.(this.state.terms.map(t => t.id)); } catch { /* */ }
       // LSP 초기화 + Monaco 프로바이더 등록 (Python 등)
@@ -4713,6 +4790,10 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this._sessionT) { clearTimeout(this._sessionT); this._sessionT = undefined; } // 언마운트 후 _scanMarkers setState 방지(_timers 풀 밖)
     for (const k of Object.keys(this._closeTimers)) clearTimeout(this._closeTimers[k]);
     this._toastTimers.forEach(clearTimeout); this._toastTimers.clear(); // 토스트 전용 타이머(_timers 풀 밖)
+    if (this._quotaTimer) { clearInterval(this._quotaTimer); this._quotaTimer = null; }
+    if (this._cpBeatTimer) { clearInterval(this._cpBeatTimer); this._cpBeatTimer = null; }
+    document.removeEventListener("visibilitychange", this.maybeProbeQuotas);
+    window.removeEventListener("focus", this.maybeProbeQuotas);
     this._cliOff?.();
     this._cliOff = null;
     this._oauthOff?.();
@@ -4748,31 +4829,19 @@ ${(r.output || "").slice(0, 2000)}`;
     // Escape — 열린 오버레이/모달을 닫는다 (웹/데모 모드에서도 동작)
     if (!mod && e.key === "Escape") {
       const s = this.state;
-      if (s.tourOpen) { this.endTour(); return; }
-      // 가져오기는 시트보다 위에 뜬다 — 열려 있으면 Esc 는 이걸 먼저 닫아야 한다.
-      if (s.impOpen) { this.closeImport(); return; }
-      if (s.sheetOpen) { this.closeSheet(); return; }
-      if (s.cmdOpen) this.closeOverlay("cmd", { cmdOpen: false });
-      else if (s.quickOpen) this.closeOverlay("quick", { quickOpen: false });
-      else if (s.symOpen) this.closeOverlay("sym", { symOpen: false });
-      else if (s.searchOpen) this.closeOverlay("search", { searchOpen: false });
-      else if (s.aboutOpen) this.closeOverlay("about", { aboutOpen: false });
-      else if (s.commandsOpen) this.closeOverlay("commands", { commandsOpen: false });
-      else if (s.mcpOpen) this.closeOverlay("mcp", { mcpOpen: false });
-      else if (s.usageOpen) this.closeOverlay("usage", { usageOpen: false });
-      else if (s.keysOpen) this.closeOverlay("keys", { keysOpen: false });
-      else if (s.settingsOpen) this.closeOverlay("settings", { settingsOpen: false });
-      else if (s.extDetail) this.closeOverlay("extDetail", { extDetail: null });
-      else if (s.extPanel) this.closeOverlay("extPanel", { extPanel: null });
-      else if (s.askClose) this.closeOverlay("askClose", { askClose: null });
-      else if (s.openMenu || s.projOpen) this.setState({ openMenu: null, projOpen: false });
-      else if (this.engine.runs.activeRuns(["inline"]).length > 0) {
+      // 손으로 쓴 else-if 사슬이던 자리. 사슬은 새 모달을 만들 때마다 갱신을 잊었고
+      // (되돌리기·번들 설치·커밋 보기가 Esc 로 안 닫혔다), 순서가 z-index 와 무관해
+      // **밑에 깔린 것이 먼저 닫혔다**(askClose 220 이 settings 195 뒤에 있었다).
+      // 이제 표(overlays.ts)가 "무엇이 위인가" 를 정하고, 여기는 최상위 하나만 닫는다.
+      const top = topOverlay(this.openOverlayIds());
+      if (top) { if (top.escapable) this.closeOverlayById(top.id); return; } // 모달은 Esc 를 삼킨다
+      if (s.openMenu || s.projOpen) { this.setState({ openMenu: null, projOpen: false }); return; }
+      if (this.engine.runs.activeRuns(["inline"]).length > 0) {
         // 진행 중 인라인 편집(Ctrl+K)을 Escape 로 취소 — 도달 가능한 유일한 트리거.
         // 예전엔 abortCtls 키의 "__inline" 접두어를 스니핑했다.
         this.engine.runs.cancelAll(["inline"]);
       }
-      else return; // 닫을 오버레이 없음 → 다른 핸들러에 위임
-      return;
+      return; // 닫을 오버레이 없음 → 다른 핸들러에 위임
     }
     if (!window.schutz) return;
     // 키바인딩 재정의 중이면 그 화면이 키를 먹는다 — 안 그러면 Ctrl+S 를 새 화음으로
@@ -4782,6 +4851,10 @@ ${(r.output || "").slice(0, 2000)}`;
     // 키바인딩 화면이 함께 쓰므로, 화면에 적힌 것과 실제 동작이 어긋날 수 없다.
     const action = this._keymap.get(chordOf(e));
     if (!action) return;
+    // 모달이 떠 있으면 그 모달 자신의 단축키만 통과한다. 이 줄이 없어서 설정 모달 위의
+    // Ctrl+W 가 **뒤에 가려진 탭**을 닫고, Ctrl+P 가 보이지 않는 팔레트를 열어 포커스를
+    // 훔치고, 승인 모달 위의 F5 가 디버그를 시작했다.
+    if (suppressesAction(topOverlay(this.openOverlayIds()), action)) { e.preventDefault(); return; }
     this.runKeyAction(action, e);
   };
 
@@ -5079,6 +5152,13 @@ ${(r.output || "").slice(0, 2000)}`;
    *  projectModels.reload 를 isDirty=false 로 부르면 setValue 로 통째로 덮어써서
    *  **편집이 조용히 사라진다.** 미저장 여부를 묻는 자리는 전부 이 술어를 쓴다. */
   private isDirtyRel = (rel: string): boolean => !!this.state.paneDirty[rel] || projectModels.isDirty(rel);
+  /** 이 파일에 편집을 얹을 **기준 텍스트** — 미저장 버퍼가 있으면 그 내용, 없으면 null(호출측이 디스크를 읽는다).
+   *  디스크를 기준으로 쓰면 그 write 가 미저장 편집을 조용히 덮는다. */
+  private baseTextFor(root: string, rel: string): string | null {
+    if (!this.isDirtyRel(rel)) return null;
+    const m = projectModels.getByRel(rel);
+    return m && !m.isDisposed() ? m.getValue() : null;
+  }
   /** 어디든 미저장이 있는가 (종료·브랜치 전환 가드용) */
   private anyDirty(): boolean {
     return Object.values(this.state.paneDirty).some(Boolean) || projectModels.dirtyRels().length > 0;
@@ -5349,6 +5429,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this.props.playOpening && !_pp?.playOpening && this.state.openingPhase === "off") {
       this.setState({ openingPhase: "intro" });
     }
+    if (_ps) this._restoreClosedFocus(_ps);
     // 모드가 바뀌면 Monaco 를 다시 재어준다. automaticLayout 은 display:none 안에서
     // 0×0 으로 측정하고, 다시 보일 때 ResizeObserver 가 뒤늦게 따라오면서 한 프레임
     // 어긋난 크기가 보인다. 명시적으로 한 번 재면 그 깜빡임이 없어진다.
@@ -5450,7 +5531,7 @@ ${(r.output || "").slice(0, 2000)}`;
       if (!prevIncluded && rows.length) rows.push({ key: "sep" + i, sep: true });
       prevIncluded = true;
       let sign = " ", bg = "transparent", color = "var(--fg-sub2)", signColor = "transparent";
-      if (l.kind === "removed") { sign = "−"; bg = "rgba(201,123,123,.1)"; color = "#C99A9A"; signColor = "#C97B7B"; }
+      if (l.kind === "removed") { sign = "−"; bg = "rgba(201,123,123,.1)"; color = "var(--err)"; signColor = "var(--err-hi)"; }
       else if (marked[i]) { sign = "+"; bg = "color-mix(in srgb, var(--ok) 9%, transparent)"; color = "#B7CBBA"; signColor = "var(--ok)"; }
       rows.push({
         key: "d" + i, sep: false,
@@ -5600,7 +5681,7 @@ ${(r.output || "").slice(0, 2000)}`;
           // 항목 하나 = 라벨 + 할 일. 다섯 줄이 같은 여섯 개 속성을 반복하고 있어서 묶었다.
           const item = (label: string, run: (rel: string) => void, danger?: boolean) => (
             <div key={label} className="hvMenuItem" onClick={() => { this.setState({ ctxMenu: null }); run(ctx.rel); }}
-              style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: danger ? "#CE9A9A" : "var(--fg-code)" }}>{label}</div>
+              style={{ padding: "6px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer", color: danger ? "var(--err)" : "var(--fg-code)" }}>{label}</div>
           );
           const sep = <div key={"sep" + Math.random()} style={{ height: 1, background: "var(--w06)", margin: "4px 6px" }} />;
           return (
@@ -5919,30 +6000,34 @@ ${(r.output || "").slice(0, 2000)}`;
         {(s.termOpen || this._termMounted) && this.renderTerm()}
 
         {/* ══ Status bar ══ */}
-        <div className="vtStatus" style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", background: "var(--bg-panel)", borderTop: "1px solid var(--w06)", fontSize: 11, color: "var(--fg-dim)" }}>
+        <div className="vtStatus" style={{ flex: "none", height: 25, display: "flex", alignItems: "center", gap: 13, padding: "0 12px", overflow: "hidden", background: "var(--bg-panel)", borderTop: "1px solid var(--w06)", fontSize: 11, color: "var(--fg-dim)" }}>
           {(s.git?.branch || s.workspace?.branch) && (
             <button className="hv08" onClick={() => { this.setState({ leftTab: "git" }); void this.loadGit(); }}
-              style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)", background: "transparent", border: "none", cursor: "pointer", height: 18, padding: "0 5px", borderRadius: 4 }}>
-              <GitBranchIcon size={10} sw={1.6} />{s.git?.branch ?? s.workspace?.branch}
+              title={s.git?.branch ?? s.workspace?.branch ?? ""}
+              style={{ display: "flex", alignItems: "center", gap: 5, flex: "none", maxWidth: 180, minWidth: 0, fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub2)", background: "transparent", border: "none", cursor: "pointer", height: 18, padding: "0 5px", borderRadius: 4 }}>
+              <GitBranchIcon size={10} sw={1.6} />
+              {/* 브랜치 이름만 줄어든다. 길이 제한이 없던 시절엔 `feature/…-2026-07` 하나로
+                  오른쪽 끝의 언어·Ln:Col 이 상태바 밖으로 밀려났다. */}
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.git?.branch ?? s.workspace?.branch}</span>
               {s.git?.upstream && (s.git.behind > 0 || s.git.ahead > 0) && (
                 <span style={{ color: "var(--fg-dim)" }}>{s.git.behind > 0 ? " ↓" + s.git.behind : ""}{s.git.ahead > 0 ? " ↑" + s.git.ahead : ""}</span>
               )}
             </button>
           )}
           {(() => { const c = (s.git?.staged.length ?? 0) + (s.git?.unstaged.length ?? 0) + (s.git?.untracked.length ?? 0); return c > 0
-            ? <span style={{ color: "#CCB491" }}>{t("status.changes", { n: c })}</span>
-            : <span style={{ color: pendingFiles > 0 ? "#CCB491" : "var(--fg-dim)" }}>{pendingFiles > 0 ? t("status.pendingReview", { n: pendingFiles }) : t("status.noChanges")}</span>; })()}
+            ? <span style={{ color: "var(--dirty)" }}>{t("status.changes", { n: c })}</span>
+            : <span style={{ color: pendingFiles > 0 ? "var(--dirty)" : "var(--fg-dim)" }}>{pendingFiles > 0 ? t("status.pendingReview", { n: pendingFiles }) : t("status.noChanges")}</span>; })()}
           <div style={{ flex: 1 }} />
           <span>{t("status.agentsActive", { active: AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length, total: AGDEF.length })}</span>
           {quotaSummary && (() => {
             const left = this.quotaTightest(getManagerId()) ?? this.quotaTightest("claude") ?? this.quotaTightest("gpt") ?? 100;
-            return <span title={t("status.quotaTitle")} style={{ fontFamily: MONO, color: left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : "var(--fg-dim)" }}>{quotaSummary}</span>;
+            return <span title={t("status.quotaTitle")} style={{ fontFamily: MONO, color: left <= 10 ? "var(--err)" : left <= 25 ? "var(--warn)" : "var(--fg-dim)" }}>{quotaSummary}</span>;
           })()}
           {ag && s.workspace && (
-            <span style={{ fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.workspace.name}</span>
+            <span title={s.workspace.name} style={{ flex: "none", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.workspace.name}</span>
           )}
           {ag && s.cliModel && (
-            <span style={{ fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.cliModel}</span>
+            <span title={s.cliModel} style={{ flex: "none", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, color: "var(--fg-dim2)" }}>{s.cliModel}</span>
           )}
           {/* 언어 모드 — 활성 파일에서 자동으로 읽어 늘 맞게 보인다(포커스 불필요). 클릭하면 바꾼다. */}
           {(!ag || sheet) && activeLang && (
@@ -5989,8 +6074,8 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 좌 패널: 소스 컨트롤 (Git) ──
   private gitCodeColor(code: string): string {
     if (code === "A" || code === "?") return "var(--ok)";
-    if (code === "M") return "#CCB491";
-    if (code === "D") return "#C97B7B";
+    if (code === "M") return "var(--dirty)";
+    if (code === "D") return "var(--err)";
     if (code === "R" || code === "C") return "#8FA8C0";
     return "var(--fg-sub2)";
   }
@@ -6106,7 +6191,7 @@ ${(r.output || "").slice(0, 2000)}`;
               {t("gitp.amend")}
             </button>
           </div>
-          {s.gitError && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 6, lineHeight: 1.5 }}>⚠️ {s.gitError}</div>}
+          {s.gitError && <div style={{ fontSize: 10.5, color: "var(--err)", marginTop: 6, lineHeight: 1.5 }}>⚠️ {s.gitError}</div>}
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingBottom: 10 }}>
@@ -6116,15 +6201,18 @@ ${(r.output || "").slice(0, 2000)}`;
           {conflicted.length > 0 && (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 14px 3px" }}>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "#CE9A9A" }}>{t("gitp.conflicts")}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: "var(--err)" }}>{t("gitp.conflicts")}</span>
                 <span style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{conflicted.length}</span>
               </div>
+              {/* 줄바꿈을 허용한다. 좌 패널은 200px 까지 좁아지는데 버튼 셋이 전부 flex:none 이라,
+                  좁히거나 독일어("Gelöst")·일본어("解決済み")로 두면 마지막 버튼이 패널 밖으로
+                  잘려 나갔다 — 가로 스크롤도 없어서 **충돌을 해결할 방법 자체가 사라졌다.**
+                  이름은 줄어들고, 버튼은 자리가 모자라면 아랫줄로 내려간다. */}
               {conflicted.map(e => (
-                <div key={e.path} className="hv04" style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 14px", minWidth: 0 }}>
-                  <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "#CE9A9A", width: 18 }}>{e.code}</span>
+                <div key={e.path} className="hv04" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "3px 14px", minWidth: 0 }}>
+                  <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "var(--err)", width: 18 }}>{e.code}</span>
                   <span onClick={() => this.openFile(e.path)} title={e.path}
-                    style={{ fontSize: 11.5, color: "var(--fg-sub)", cursor: "pointer", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.path.split("/").pop()}</span>
-                  <div style={{ flex: 1 }} />
+                    style={{ flex: "1 1 60px", fontSize: 11.5, color: "var(--fg-sub)", cursor: "pointer", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.path.split("/").pop()}</span>
                   <button className="hv08" disabled={s.gitBusy} title={t("gitp.takeOurs")} onClick={() => void this.resolveConflict(e.path, "ours")}
                     style={{ flex: "none", border: "1px solid var(--w10)", background: "transparent", color: "var(--fg-sub2)", cursor: s.gitBusy ? "default" : "pointer", fontSize: 10, fontFamily: SUIT, borderRadius: 5, padding: "1px 6px" }}>{t("gitp.ours")}</button>
                   <button className="hv08" disabled={s.gitBusy} title={t("gitp.takeTheirs")} onClick={() => void this.resolveConflict(e.path, "theirs")}
@@ -6216,7 +6304,7 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 좌 패널: 작업 흐름 ──
   renderFlow() {
     const s = this.state;
-    const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "var(--ok)"], stopped: ["–", "#C97B7B"] };
+    const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "var(--ok)"], stopped: ["–", "var(--err)"] };
     const doneLabel = t("flowtree.done"); // 아래 s.tools.map(t => …) 에서 t 가 섀도잉되므로 미리 계산
     const editVerb = t("sc3.verbEdit"); // verb 는 번역값(1973) → 편집 하이라이트 비교를 리터럴 대신 번역값으로
     return (
@@ -6260,7 +6348,7 @@ ${(r.output || "").slice(0, 2000)}`;
               <span style={{ position: "absolute", left: 5, top: 5, width: 6, height: 6, borderRadius: "50%", background: d.color }} />
               <div style={{ marginLeft: 22, display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
-                <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, padding: "0 6px", lineHeight: "16px", borderRadius: 3, color: t.verb === editVerb ? "#CCB491" : "#A3B5A6", background: t.verb === editVerb ? "rgba(196,168,130,.1)" : "rgba(125,145,131,.12)" }}>{t.verb}</span>
+                <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, padding: "0 6px", lineHeight: "16px", borderRadius: 3, color: t.verb === editVerb ? "var(--dirty)" : "#A3B5A6", background: t.verb === editVerb ? "rgba(196,168,130,.1)" : "rgba(125,145,131,.12)" }}>{t.verb}</span>
                 <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--fg-sub)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.path.split("/").pop()}</span>
                 <div style={{ flex: 1 }} />
                 {t.st === "run"
@@ -6269,7 +6357,7 @@ ${(r.output || "").slice(0, 2000)}`;
                      span 으로 노드가 갈리므로 이 애니메이션은 완료되는 그 순간 한 번 돈다.
                      예전엔 스피너가 사라지고 글자가 제자리에 툭 나타나서 "끝나는 과정" 이
                      안 보였다. */
-                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "#C97B7B" : "#535B55", animation: "szFadeUp .32s var(--ease) both" }}>{t.note || doneLabel}</span>}
+                  : <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, whiteSpace: "nowrap", color: t.st === "stopped" ? "var(--err)" : "#535B55", animation: "szFadeUp .32s var(--ease) both" }}>{t.note || doneLabel}</span>}
               </div>
               {/* 명령 출력 — 있으면 도구 줄 밑에 그대로 편다. 에디터 모드에서 도구는 이 flow
                   패널에만 뜨는데(대화 옆 renderToolRow 는 에이전트 모드용) 여기엔 출력이 안
@@ -6314,7 +6402,7 @@ ${(r.output || "").slice(0, 2000)}`;
   private renderTreeInput(depth: number, isFolder: boolean) {
     const te = this.state.treeEdit;
     if (!te) return null;
-    const pad = 16 + depth * 14;
+    const pad = 16 + Math.min(depth, 8) * 14;
     return (
       <div key="__treeEdit" className="sz-row-in" style={{ display: "flex", alignItems: "center", gap: 7, height: 26, padding: `0 8px 0 ${pad}px` }}>
         {isFolder
@@ -6361,7 +6449,7 @@ ${(r.output || "").slice(0, 2000)}`;
       const te = s.treeEdit;
       const rows: React.ReactNode[] = [];
       for (const en of ws.entries) {
-        const pad = 16 + en.depth * 14;
+        const pad = 16 + Math.min(en.depth, 8) * 14;   // 상한 없이 밀면 깊은 경로의 이름 칸이 0 이 된다
         // 이름변경 중인 대상은 그 자리에서 입력칸으로 바꾼다.
         if (te && te.kind === "rename" && te.rel === en.rel) {
           rows.push(this.renderTreeInput(en.depth, en.dir));
@@ -6379,7 +6467,7 @@ ${(r.output || "").slice(0, 2000)}`;
               onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: true } }); }}
               style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 8px 0 ${pad}px`, cursor: "pointer" }}>
               <span style={{ flex: "none", fontSize: 9, color: "var(--fg-dim)", width: 8, display: "inline-block", transform: isCollapsed ? "rotate(0deg)" : "rotate(90deg)", transition: "transform var(--dur) var(--ease)" }}>▸</span>
-              <span style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+              <span title={en.rel} style={{ fontSize: 12, color: "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
               <div style={{ flex: 1 }} />
               {/* 폴더에 마우스 올리면 새 파일·폴더 아이콘 — 클릭은 폴더 접힘과 겹치지 않게 stopPropagation */}
               <div className="treeAct" style={{ flex: "none", display: "flex", gap: 1 }}>
@@ -6401,9 +6489,9 @@ ${(r.output || "").slice(0, 2000)}`;
             onContextMenu={e => { e.preventDefault(); this.setState({ ctxMenu: { x: e.clientX, y: e.clientY, rel: en.rel, isDir: false } }); }}
             style={{ display: "flex", alignItems: "center", gap: 7, height: 24, padding: `0 8px 0 ${pad}px`, cursor: "pointer", background: inPane ? "rgba(125,145,131,.08)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
             <FileIcon rel={en.rel} size={14} />
-            <span style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
+            <span title={en.rel} style={{ fontSize: 12, fontFamily: MONO, color: inPane ? "var(--fg)" : "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{en.name}</span>
             <div style={{ flex: 1 }} />
-            {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
+            {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--dirty)" }} />}
           </div>
         );
       }
@@ -6421,6 +6509,9 @@ ${(r.output || "").slice(0, 2000)}`;
           {/* 루트에 새로 만드는 중이면 헤더 바로 아래 입력칸 */}
           {te && te.kind !== "rename" && te.rel === "" && this.renderTreeInput(0, te.kind === "newFolder")}
           {rows}
+          {rows.length === 0 && !te && (
+            <div style={{ padding: "14px 16px", fontSize: 11, color: "var(--fg-dim2)", lineHeight: 1.6 }}>{t("flowtree.empty")}</div>
+          )}
           {ws.truncated && <div style={{ padding: "6px 16px", fontSize: 10.5, color: "var(--fg-dim2)" }}>{t("flowtree.truncated")}</div>}
         </div>
       );
@@ -6684,7 +6775,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className="sz-backdrop" onClick={() => this.answerRun(false)}
         style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("run.askTitle"))} className="sz-pop" onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("run.askTitle"), "askRun")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 460, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: d.color, flex: "none" }} />
@@ -6877,7 +6968,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className="sz-backdrop" onClick={close}
         style={{ position: "fixed", inset: 0, zIndex: 240, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("imp.title"))} className="sz-pop" onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("imp.title"), "import")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 620, maxWidth: "94%", height: 520, maxHeight: "86vh", display: "flex", flexDirection: "column",
             background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
 
@@ -7096,7 +7187,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {/* 실행 중엔 같은 자리가 중지 버튼이 된다 — 멈추려고 다른 곳을 찾을 이유가 없다 */}
         {s.running ? (
           <button className="hvRed2" onClick={() => this.stopRun()} title={t("chat.stop")}
-            style={{ height: 34, width: 34, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit", cursor: "pointer", borderRadius: 17, color: "#CE9A9A", background: "rgba(201,123,123,.10)", border: "1px solid rgba(201,123,123,.3)" }}>
+            style={{ height: 34, width: 34, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit", cursor: "pointer", borderRadius: 17, color: "var(--err)", background: "rgba(201,123,123,.10)", border: "1px solid rgba(201,123,123,.3)" }}>
             <span style={{ width: 9, height: 9, borderRadius: 2, background: "#C98A8A" }} />
           </button>
         ) : (
@@ -7327,9 +7418,9 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 에디터 그리드 (슬롯 × 탭) ──
   private _lineColors: Record<string, [string, string]> = {
     typing: ["rgba(125,145,131,.1)", ""],
-    fresh: ["rgba(196,168,130,.16)", "#C4A882"],
+    fresh: ["var(--warn-soft)", "var(--warn)"],
     pending: ["rgba(125,145,131,.07)", ""],
-    removed: ["rgba(201,123,123,.08)", "#C97B7B"],
+    removed: ["var(--err-soft)", "var(--err)"],
     accepted: ["color-mix(in srgb, var(--ok) 13%, transparent)", "var(--ok)"],
     base: ["transparent", "transparent"],
   };
@@ -7497,7 +7588,7 @@ ${(r.output || "").slice(0, 2000)}`;
                   : pv ? <span style={{ flex: "none", fontSize: 11, lineHeight: 1, color: on ? "var(--ok)" : "var(--fg-dim2)" }}>◉</span>
                   : <FileIcon rel={rel} size={13} />}
                 <span style={{ fontFamily: MONO, fontSize: 11.5, color: on ? "var(--fg)" : "var(--fg-sub2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-                {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "#CCB491" }} />}
+                {dirty && <span style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--dirty)" }} />}
                 <button className="hvDim" title={t("sc4.closeTab")}
                   onMouseDown={e => { e.stopPropagation(); this.closeTab(si, rel); }}
                   style={{ flex: "none", width: 17, height: 17, fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 4, color: "var(--fg-dim)", background: "transparent", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
@@ -7603,7 +7694,7 @@ ${(r.output || "").slice(0, 2000)}`;
                   <div style={{ position: "absolute", right: 14, top: -26, display: "flex", alignItems: "center", gap: 2, zIndex: 8, fontFamily: SUIT, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 8, padding: "2px 3px", boxShadow: "var(--shadow-soft)" }}>
                     <button className="hvGreen" onClick={() => this.resolveHunk(path, hk, true)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--ok-hi)", background: "transparent", border: "none" }}>{t("sc4.accept")}</button>
                     <div style={{ width: 1, height: 12, background: "var(--w10)" }} />
-                    <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "#CE9A9A", background: "transparent", border: "none" }}>{t("sc4.reject")}</button>
+                    <button className="hvRed" onClick={() => this.resolveHunk(path, hk, false)} style={{ height: 21, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--err)", background: "transparent", border: "none" }}>{t("sc4.reject")}</button>
                   </div>
                 )}
               </div>
@@ -7617,7 +7708,7 @@ ${(r.output || "").slice(0, 2000)}`;
   // ── 우 패널: 에이전트 ──
   renderAgents() {
     const s = this.state;
-    const astMap: Record<string, [string, string]> = { idle: [t("agent.statusIdle"), "var(--fg-dim)"], plan: [t("agent.statusPlan"), "#A3B5A6"], edit: [t("agent.statusEdit"), "#A3B5A6"], review: [t("agent.statusReview"), "#C4A882"], stop: [t("agent.statusStop"), "#C98A8A"] };
+    const astMap: Record<string, [string, string]> = { idle: [t("agent.statusIdle"), "var(--fg-dim)"], plan: [t("agent.statusPlan"), "#A3B5A6"], edit: [t("agent.statusEdit"), "#A3B5A6"], review: [t("agent.statusReview"), "var(--warn)"], stop: [t("agent.statusStop"), "#C98A8A"] };
     return (
       <div style={{ flex: "none", borderBottom: "1px solid var(--w06)" }}>
         <div className="hvHead" onClick={() => this.setState(st => ({ agentsOpen: !st.agentsOpen }))}
@@ -7637,10 +7728,12 @@ ${(r.output || "").slice(0, 2000)}`;
               const [stText, stColor] = astMap[a.status];
               return (
                 <div key={d.id} style={{ background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 10, padding: "9px 12px", borderLeft: `3px solid ${d.color}` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
+                  {/* 모델 이름이 길면(gpt-5.6-terra-preview 등) 상태 배지가 카드 밖으로 밀려났다.
+                      이름은 줄어들고 모델 칩도 상한을 갖는다 — 상태는 절대 안 밀린다. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    <span title={d.name} style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{d.name}</span>
                     {(() => { const m = this.modelOf(d.id); return m
-                      ? <span style={{ fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{m}</span>
+                      ? <span title={m} style={{ flex: "0 1 auto", minWidth: 0, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10, color: "var(--fg-sub2)", background: "var(--w05)", borderRadius: 3, padding: "0 5px", lineHeight: "15px" }}>{m}</span>
                       : <span style={{ fontSize: 9.5, color: "var(--fg-dim2)", border: "1px solid var(--w08)", borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{t("agent.notConnected")}</span>; })()}
                     {(() => {
                       const isMgr = getManagerId() === d.id;
@@ -7698,8 +7791,8 @@ ${(r.output || "").slice(0, 2000)}`;
    *  wide: 창 폭을 다 쓰는 자리용 — break-all 은 진짜 코드를 글자 단위로 찢는다. */
   renderProposalCard(p: Proposal, opts?: { wide?: boolean }) {
     const pstMap: Record<string, [string, string]> = {
-      pending: [t("misc.statusPending"), "#C4A882"], accepted: [t("misc.statusAccepted"), "var(--ok)"],
-      rejected: [t("misc.statusRejected"), "#C97B7B"], failed: [t("misc.statusFailed"), "#C97B7B"],
+      pending: [t("misc.statusPending"), "var(--warn)"], accepted: [t("misc.statusAccepted"), "var(--ok)"],
+      rejected: [t("misc.statusRejected"), "var(--err)"], failed: [t("misc.statusFailed"), "var(--err)"],
     };
         const [sl, sc] = pstMap[p.status];
         return (
@@ -7730,7 +7823,7 @@ ${(r.output || "").slice(0, 2000)}`;
                   : <span key={p.status} style={{ fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", color: sc, background: sc + "1F", borderRadius: 5, padding: "1.5px 8px", animation: "szScaleIn .3s var(--ease-emph) both" }}>{sl}</span>}
               </div>
               <div style={{ fontSize: opts?.wide ? 12.5 : 11, lineHeight: opts?.wide ? 1.65 : 1.4, color: "var(--fg-sub2)", marginTop: opts?.wide ? 6 : 4, fontFamily: SUIT }}>{p.auto ? t("misc.autoAcceptedPrefix") + p.rationale : p.rationale}</div>
-              {p.error && <div style={{ fontSize: 10.5, color: "#CE9A9A", marginTop: 4 }}>⚠️ {p.error}</div>}
+              {p.error && <div style={{ fontSize: 10.5, color: "var(--err)", marginTop: 4 }}>⚠️ {p.error}</div>}
             </div>
             {/* diff 는 접었다 펼친다. 예전엔 maxHeight 180 + 중첩 스크롤이라 아래 코드가 안 보이는데
                 스크롤 대신 드래그 선택이 됐고, 수락/거절 버튼까지 그 잘린 영역 안에 있어 손이 안 닿았다. */}
@@ -7778,7 +7871,7 @@ ${(r.output || "").slice(0, 2000)}`;
                           <span style={{ flex: "none", width: 11, height: 11, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, border: `1px solid ${on ? "var(--accent)" : "var(--w14)"}`, background: on ? "var(--accent)" : "transparent", color: "var(--on-accent)" }}>{on ? "✓" : ""}</span>
                           <span style={{ fontSize: 9.5, color: "var(--fg-dim)", fontFamily: SUIT }}>{t("hunk.n", { n: r.index + 1 })}</span>
                           <span style={{ fontFamily: MONO, fontSize: 9.5, color: "var(--ok)" }}>+{r.add}</span>
-                          <span style={{ fontFamily: MONO, fontSize: 9.5, color: "#C97B7B" }}>−{r.del}</span>
+                          <span style={{ fontFamily: MONO, fontSize: 9.5, color: "var(--err)" }}>−{r.del}</span>
                           {!on && <span style={{ fontSize: 9.5, color: "var(--fg-dim2)", fontFamily: SUIT }}>{t("hunk.skipped")}</span>}
                         </div>
                       );
@@ -7787,7 +7880,7 @@ ${(r.output || "").slice(0, 2000)}`;
                     return (
                       <div key={r.k + i} className={p.status === "pending" && r.k === "+" ? "sz-in" : undefined}
                         style={{ display: "flex", background: ctx ? "transparent" : r.k === "-" ? "rgba(201,123,123,.1)" : "color-mix(in srgb, var(--ok) 9%, transparent)", animationDelay: Math.min(i, 14) * 22 + "ms" }}>
-                        <span style={{ flex: "none", width: 16, textAlign: "center", color: ctx ? "var(--fg-dim3)" : r.k === "-" ? "#C97B7B" : "var(--ok)", userSelect: "none" }}>{ctx ? " " : r.k === "-" ? "−" : "+"}</span>
+                        <span style={{ flex: "none", width: 16, textAlign: "center", color: ctx ? "var(--fg-dim3)" : r.k === "-" ? "var(--err)" : "var(--ok)", userSelect: "none" }}>{ctx ? " " : r.k === "-" ? "−" : "+"}</span>
                         <span style={{ ...(opts?.wide ? { whiteSpace: "pre" as const, overflowX: "auto" as const } : { whiteSpace: "pre-wrap" as const, wordBreak: "break-all" as const }), color: ctx ? "var(--fg-dim)" : r.k === "-" ? "#C99A9A" : "#B7CBBA" }}>{r.l || " "}</span>
                       </div>
                     );
@@ -7810,7 +7903,7 @@ ${(r.output || "").slice(0, 2000)}`;
                     style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("mode.openInSheet")}</button>
                 )}
                 <button className="hvGreen2" onClick={() => void this.acceptProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("misc.accept")}</button>
-                <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
+                <button className="hvRed2" onClick={() => this.rejectProposal(p.id)} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--err)", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.reject")}</button>
               </div>
             )}
           </div>
@@ -7820,7 +7913,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 리뷰 발견 카드 한 장 — 제안(Proposal)과 달리 편집 패치가 없다. 심각도 색 + 닫기만. */
   renderFindingCard(f: Finding) {
     const sev: Record<Finding["severity"], [string, string]> = {
-      high: [t("review.sevHigh"), "#C97B7B"], med: [t("review.sevMed"), "#C4A882"], low: [t("review.sevLow"), "var(--fg-sub2)"],
+      high: [t("review.sevHigh"), "var(--err)"], med: [t("review.sevMed"), "var(--warn)"], low: [t("review.sevLow"), "var(--fg-sub2)"],
     };
     const [sl, sc] = sev[f.severity];
     return (
@@ -7886,7 +7979,7 @@ ${(r.output || "").slice(0, 2000)}`;
           <span style={{ fontSize: 10.5, color: "var(--fg-sub2)" }}>{t("chg.total", { files: tot.files })}</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--ok)" }}>+{tot.add}</span>
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: "#C97B7B" }}>−{tot.del}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--err)" }}>−{tot.del}</span>
         </div>
         {files.map(f => {
           const d = this.agDef(f.agents[0]);
@@ -7901,7 +7994,7 @@ ${(r.output || "").slice(0, 2000)}`;
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}>{f.rel}</span>
               <div style={{ flex: 1 }} />
               <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "var(--ok)" }}>+{f.add}</span>
-              <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "#C97B7B" }}>−{f.del}</span>
+              <span style={{ flex: "none", fontFamily: MONO, fontSize: 10, color: "var(--err)" }}>−{f.del}</span>
               {/* 파일 사이의 변경 크기를 눈으로 견주는 막대 — 가장 큰 파일이 100% */}
               <span style={{ flex: "none", width: 46, height: 3, borderRadius: 2, background: "var(--w07)", overflow: "hidden", display: "flex" }}>
                 <span style={{ width: w + "%", height: "100%", display: "flex" }}>
@@ -7962,13 +8055,13 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className="sz-backdrop" onClick={() => { if (!ask.busy) this.setState({ undoAsk: null }); }}
         style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("cp.title"))} className="sz-pop" onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("cp.title"), "undoAsk")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>{t("cp.title")}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 220, overflowY: "auto", marginBottom: 10 }}>
             {doing.map(v => row(v.rel, v.action === "delete" ? t("cp.willDelete") : t("cp.willRestore"), false))}
             {keeping.length > 0 && (
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: "#C4A882", marginTop: 8 }}>{t("cp.keepHead")}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--warn)", marginTop: 8 }}>{t("cp.keepHead")}</div>
             )}
             {keeping.map(v => row(v.rel, why((v as { why: string }).why), true))}
             {skipped.length > 0 && (
@@ -8009,7 +8102,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className="sz-backdrop" onClick={() => { if (!b.busy) this.closeBundle(); }}
         style={{ position: "fixed", inset: 0, zIndex: 232, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("mcpb.title"))} className="sz-pop" onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("mcpb.title"), "mcpb")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 540, maxWidth: "94%", maxHeight: "86%", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>{t("mcpb.title")}</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 10 }}>
@@ -8020,10 +8113,10 @@ ${(r.output || "").slice(0, 2000)}`;
           {m.description && <div style={{ fontSize: 12, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 12 }}>{m.description}</div>}
 
           {b.exists && (
-            <div style={{ fontSize: 11, color: "#C4A882", marginBottom: 10, lineHeight: 1.5 }}>⚠ {t("mcpb.willReplace", { name: m.name })}</div>
+            <div style={{ fontSize: 11, color: "var(--warn)", marginBottom: 10, lineHeight: 1.5 }}>⚠ {t("mcpb.willReplace", { name: m.name })}</div>
           )}
           {m.warnings.includes("cmd-shell") && (
-            <div style={{ fontSize: 11, color: "#CE9A9A", marginBottom: 10, lineHeight: 1.5 }}>⚠ {t("mcpb.warnShell")}</div>
+            <div style={{ fontSize: 11, color: "var(--err)", marginBottom: 10, lineHeight: 1.5 }}>⚠ {t("mcpb.warnShell")}</div>
           )}
 
           <div style={label}>{t("mcpb.willRun")}</div>
@@ -8053,14 +8146,14 @@ ${(r.output || "").slice(0, 2000)}`;
                 {m.userConfig.map(f => (
                   <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                     <span style={{ fontSize: 11, color: "var(--fg-sub)" }}>
-                      {f.title}{f.required && <span style={{ color: "#CE9A9A" }}> *</span>}
+                      {f.title}{f.required && <span style={{ color: "var(--err)" }}> *</span>}
                     </span>
                     {f.description && <span style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{f.description}</span>}
                     <input
                       type={f.sensitive ? "password" : "text"}
                       value={b.values[f.key] ?? ""}
                       onChange={e => { const v = e.target.value; this.setState(s => (s.mcpb ? { mcpb: { ...s.mcpb, values: { ...s.mcpb.values, [f.key]: v } } } : null)); }}
-                      style={{ height: 28, background: "var(--bg-root)", border: "1px solid " + (missing.includes(f.key) ? "#CE9A9A" : "var(--w10)"), borderRadius: 6, padding: "0 9px", color: "var(--fg)", fontSize: 12, fontFamily: f.sensitive ? MONO : "inherit", outline: "none" }} />
+                      style={{ height: 28, background: "var(--bg-root)", border: "1px solid " + (missing.includes(f.key) ? "var(--err)" : "var(--w10)"), borderRadius: 6, padding: "0 9px", color: "var(--fg)", fontSize: 12, fontFamily: f.sensitive ? MONO : "inherit", outline: "none" }} />
                   </label>
                 ))}
               </div>
@@ -8090,13 +8183,13 @@ ${(r.output || "").slice(0, 2000)}`;
     const colorOf = (ln: string) =>
       ln.startsWith("+++") || ln.startsWith("---") ? "var(--fg-dim)"
       : ln.startsWith("+") ? "var(--ok)"
-      : ln.startsWith("-") ? "#C97B7B"
+      : ln.startsWith("-") ? "var(--err)"
       : ln.startsWith("@@") ? "var(--accent)"
       : ln.startsWith("diff --git") ? "var(--fg-sub)" : "var(--fg-sub2)";
     return (
       <div className="sz-backdrop" onClick={() => this.setState({ commitView: null })}
         style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(cv.hash)} className="sz-pop" onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(cv.hash, "commitView")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 820, maxWidth: "94%", height: "78%", display: "flex", flexDirection: "column", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16 }}>
           <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--accent)" }}>{cv.hash}</span>
@@ -8111,7 +8204,7 @@ ${(r.output || "").slice(0, 2000)}`;
             {!cv.loading && lines.map((ln, i) => (
               <div key={i} style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.55, whiteSpace: "pre", color: colorOf(ln) }}>{ln || " "}</div>
             ))}
-            {cv.truncated && <div style={{ fontSize: 11, color: "#C4A882", marginTop: 8 }}>{t("gitp.commitTruncated")}</div>}
+            {cv.truncated && <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 8 }}>{t("gitp.commitTruncated")}</div>}
           </div>
         </div>
       </div>
@@ -8170,7 +8263,7 @@ ${(r.output || "").slice(0, 2000)}`;
   renderReview() {
     const s = this.state;
     if (s.workspace || window.schutz) return this.renderProposals();
-    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "#C4A882"], accepted: [t("sc5.reviewAccepted"), "var(--ok)"], rejected: [t("sc5.reviewRejected"), "#C97B7B"] };
+    const fstMap: Record<string, [string, string]> = { pending: [t("sc5.reviewPending"), "var(--warn)"], accepted: [t("sc5.reviewAccepted"), "var(--ok)"], rejected: [t("sc5.reviewRejected"), "var(--err)"] };
     const pendingFiles = s.files.filter(f => f.status === "pending").length;
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -8208,7 +8301,7 @@ ${(r.output || "").slice(0, 2000)}`;
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
                       <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--ok)" }}>+{f.add}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: "#C97B7B" }}>−{f.del}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--err)" }}>−{f.del}</span>
                       <div style={{ flex: 1, display: "flex", gap: 2, height: 4, borderRadius: 2, overflow: "hidden" }}>
                         <span style={{ height: "100%", background: "var(--ok)", opacity: .75, width: Math.round((f.add / tot) * 60) + "%" }} />
                         <span style={{ height: "100%", background: "#C97B7B", opacity: .75, width: Math.round((f.del / tot) * 60) + "%" }} />
@@ -8235,7 +8328,7 @@ ${(r.output || "").slice(0, 2000)}`;
                         {f.status === "pending" && (
                           <>
                             <button className="hvGreen2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, true); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--ok-hi)", background: "color-mix(in srgb, var(--ok) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--ok) 30%, transparent)" }}>{t("sc5.accept")}</button>
-                            <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("sc5.reject")}</button>
+                            <button className="hvRed2" onClick={e => { e.stopPropagation(); this.resolveFile(f.path, false); }} style={{ height: 23, padding: "0 11px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--err)", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("sc5.reject")}</button>
                           </>
                         )}
                       </div>
@@ -8276,11 +8369,15 @@ ${(r.output || "").slice(0, 2000)}`;
         transition: "height var(--dur-med) var(--ease), border-color var(--dur-med) var(--ease)",
       }}>
         <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 2, padding: "0 8px 0 10px", borderBottom: "1px solid var(--w05)" }}>
+          {/* 터미널 탭만 스크롤한다. 예전엔 이 줄 전체가 한 flex 라, 터미널을 예닐곱 개 열면
+              문제·AI로그·접기(⌄)가 오른쪽으로 밀려 **화면 밖으로 나갔다** — 가로 스크롤이
+              없어서 도크를 접을 방법조차 없었다. 바로 위 에디터 탭 줄은 이미 이렇게 돼 있다. */}
+          <div style={{ flex: "0 1 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2, overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none" }}>
           {s.terms.map(t => {
             const on = s.termTab === t.id;
             return (
               <div key={t.id} className="hvTermTab" onMouseDown={() => this.setState({ termTab: t.id, termOpen: true })}
-                style={{ height: 24, padding: "0 6px 0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
+                style={{ flex: "none", height: 24, padding: "0 6px 0 11px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: on ? "var(--fg)" : "var(--fg-dim)", background: on ? "var(--w06)" : "transparent", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
                 {t2("sc1.terminal_prefix") + t.n}
                 {s.terms.length > 1 && (
                   <button className="hvDim" title={termCloseTitle} onMouseDown={e => { e.stopPropagation(); this.closeTerm(t.id); }}
@@ -8289,20 +8386,21 @@ ${(r.output || "").slice(0, 2000)}`;
               </div>
             );
           })}
+          </div>
           <button className="hvDim" title={t("misc.newTerminal")} onClick={() => this.addTerm()}
-            style={{ width: 22, height: 22, fontSize: 13, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>＋</button>
-          <div style={{ width: 1, height: 14, background: "var(--w07)", margin: "0 4px" }} />
+            style={{ flex: "none", width: 22, height: 22, fontSize: 13, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>＋</button>
+          <div style={{ flex: "none", width: 1, height: 14, background: "var(--w07)", margin: "0 4px" }} />
           <button className="hvTermTab" onMouseDown={() => this.setState({ termTab: "problems", termOpen: true })}
-            style={{ height: 24, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onProblems ? "var(--fg)" : "var(--fg-dim)", background: onProblems ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
+            style={{ flex: "none", height: 24, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onProblems ? "var(--fg)" : "var(--fg-dim)", background: onProblems ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>
             {t("misc.problems")}
             {(errs > 0 || warns > 0) && (
-              <span style={{ fontSize: 9.5, fontWeight: 700, color: errs > 0 ? "#CE9A9A" : "#CCB491", background: errs > 0 ? "rgba(201,123,123,.14)" : "rgba(196,168,130,.14)", borderRadius: 7, padding: "0 6px", lineHeight: "14px" }}>{errs + warns}</span>
+              <span style={{ fontSize: 9.5, fontWeight: 700, color: errs > 0 ? "var(--err)" : "var(--warn)", background: errs > 0 ? "var(--err-soft)" : "var(--warn-soft)", borderRadius: 7, padding: "0 6px", lineHeight: "14px" }}>{errs + warns}</span>
             )}
           </button>
           <button className="hvTermTab" onMouseDown={() => this.setState({ termTab: "ai", termOpen: true })}
-            style={{ height: 24, padding: "0 11px", display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onAi ? "var(--fg)" : "var(--fg-dim)", background: onAi ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>{t("misc.aiLog")}</button>
+            style={{ flex: "none", height: 24, padding: "0 11px", display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, cursor: "pointer", borderRadius: 6, color: onAi ? "var(--fg)" : "var(--fg-dim)", background: onAi ? "var(--w06)" : "transparent", border: "none", transition: "background var(--dur) var(--ease), color var(--dur-fast) var(--ease)" }}>{t("misc.aiLog")}</button>
           <div style={{ flex: 1 }} />
-          <button className="hvDim" onClick={() => this.setState({ termOpen: false })} title={t("misc.collapseDock")} style={{ width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>⌄</button>
+          <button className="hvDim" onClick={() => this.setState({ termOpen: false })} title={t("misc.collapseDock")} style={{ flex: "none", width: 22, height: 22, fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 5, color: "var(--fg-dim)", background: "transparent", border: "none" }}>⌄</button>
         </div>
 
         {/* 본문 — 터미널들은 셸 유지를 위해 모두 마운트, 비활성은 숨김 */}
@@ -8343,7 +8441,7 @@ ${(r.output || "").slice(0, 2000)}`;
             {s.problems.slice(0, 500).map((p, i) => (
               <div key={"pb" + i} className="hv04" onMouseDown={() => this.openProblem(p)}
                 style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "3px 16px", cursor: "pointer", fontFamily: MONO, fontSize: 11.5 }}>
-                <span style={{ flex: "none", color: p.severity >= 8 ? "#CE9A9A" : p.severity >= 4 ? "#CCB491" : DIM }}>{p.severity >= 8 ? "✕" : p.severity >= 4 ? "▲" : "·"}</span>
+                <span style={{ flex: "none", color: p.severity >= 8 ? "var(--err)" : p.severity >= 4 ? "var(--dirty)" : DIM }}>{p.severity >= 8 ? "✕" : p.severity >= 4 ? "▲" : "·"}</span>
                 <span style={{ flex: "none", color: TXT, minWidth: 0, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.rel.split("/").pop()}</span>
                 <span style={{ flex: "none", color: DIM }}>:{p.line}:{p.col}</span>
                 <span style={{ color: SUB, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.message}</span>
@@ -8389,7 +8487,7 @@ ${(r.output || "").slice(0, 2000)}`;
   renderToasts() {
     const s = this.state;
     if (!s.toasts.length) return null;
-    const col = { info: "var(--accent)", ok: "var(--ok)", error: "#CE9A9A" };
+    const col = { info: "var(--accent)", ok: "var(--ok)", error: "var(--err)" };
     return (
       // 토스트는 조용한 실패를 표면화하려고 만든 채널이다 — 화면을 못 보는 사람에게도
       // 도착해야 뜻이 있다. polite: 진행 중인 낭독을 자르지 않고 뒤에 붙는다.
@@ -8415,7 +8513,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeAsk}
         style={{ position: "fixed", inset: 0, zIndex: 220, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("misc.unsavedTitle"))} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("misc.unsavedTitle"), "askClose")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
           style={{ width: 380, maxWidth: "90%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{t("misc.unsavedTitle")}</div>
           <div style={{ fontSize: 12, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 16 }}>
@@ -8425,7 +8523,7 @@ ${(r.output || "").slice(0, 2000)}`;
             <button className="hv05" onClick={closeAsk}
               style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w14)" }}>{t("misc.cancel")}</button>
             <button className="hvRed2" onClick={() => this.confirmCloseDiscard()}
-              style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "#CE9A9A", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.dontSave")}</button>
+              style={{ height: 32, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--err)", background: "rgba(201,123,123,.08)", border: "1px solid rgba(201,123,123,.28)" }}>{t("misc.dontSave")}</button>
             <button className="hvAccent" onClick={() => void this.confirmCloseSave()}
               style={{ height: 32, padding: "0 16px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 8, color: "var(--on-accent)", background: "var(--accent)", border: "none" }}>{t("misc.saveAndClose")}</button>
           </div>
@@ -8460,12 +8558,12 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSearch}
         style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 80 }}>
-        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("sc1.cmd_global_search"), "search")} className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
           style={{ width: 640, maxWidth: "92%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "70vh" }}>
           <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid var(--w08)" }}>
             <button className="hvDim" title={s.replaceOpen ? t("palette.replaceClose") : t("palette.replaceOpen")} onClick={() => this.setState(st => ({ replaceOpen: !st.replaceOpen }))}
               style={{ flex: "none", width: 26, height: 44, fontSize: 11, fontFamily: "inherit", cursor: "pointer", color: "var(--fg-dim)", background: "transparent", border: "none" }}>{s.replaceOpen ? "▾" : "▸"}</button>
-            <input autoFocus value={s.searchQuery}
+            <input data-szfocus value={s.searchQuery}
               onChange={e => this.onSearchInput(e.target.value)}
               onKeyDown={e => {
                 if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ searchSel: (sel + 1) % Math.max(1, hits.length) }); }
@@ -8552,9 +8650,9 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeCmd}
         style={{ position: "fixed", inset: 0, zIndex: 190, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 80 }}>
-        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("palette.cmdPlaceholder"), "cmd")} className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
           style={{ width: 580, maxWidth: "92%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
-          <input autoFocus value={s.cmdQuery}
+          <input data-szfocus value={s.cmdQuery}
             onChange={e => this.setState({ cmdQuery: e.target.value, cmdSel: 0 })}
             onKeyDown={e => {
               if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ cmdSel: (sel + 1) % Math.max(1, list.length) }); }
@@ -8591,9 +8689,9 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeQuick}
         style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 90 }}>
-        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("palette.quickPlaceholder"), "quick")} className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
           style={{ width: 560, maxWidth: "90%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
-          <input autoFocus value={s.quickQuery}
+          <input data-szfocus value={s.quickQuery}
             onChange={e => this.setState({ quickQuery: e.target.value, quickSel: 0 })}
             onKeyDown={e => {
               if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ quickSel: (sel + 1) % Math.max(1, list.length) }); }
@@ -8834,37 +8932,115 @@ ${(r.output || "").slice(0, 2000)}`;
   }
   /** 닫는 애니메이션 중 재열 때 호출 — 대기 중인 닫기 타이머를 취소하고 closing 해제 */
   cancelClose(key: string) {
+    // 닫는 애니메이션 중에 다시 연 것이다 — DOM 노드가 살아 있어 dialogProps 의 "첫 포커스"
+    // 표식이 남아 있다. 세대를 올려 무효화하지 않으면 재열린 모달에 포커스가 안 간다.
+    this._dlgSeq[key] = (this._dlgSeq[key] ?? 0) + 1;
     if (this._closeTimers[key]) { clearTimeout(this._closeTimers[key]); delete this._closeTimers[key]; }
     if (this.isClosing(key)) this.setState(s => ({ closing: s.closing.filter(k => k !== key) }));
   }
-  /** 오버레이 플래그 → closing 키 맵 (재열림 시 pending close 무효화용) */
-  private static OVERLAY_KEY: Record<string, string> = {
-    aboutOpen: "about", usageOpen: "usage", keysOpen: "keys", commandsOpen: "commands",
-    settingsOpen: "settings", mcpOpen: "mcp", engineOpen: "engine", pluginOpen: "plugins", cloudOpen: "cloud", cmdOpen: "cmd", quickOpen: "quick", symOpen: "sym", searchOpen: "search",
-    extDetail: "extDetail", extPanel: "extPanel", askClose: "askClose",
-  };
-  /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지) */
+  /** 오버레이 열기 — 닫는 애니메이션 중이면 취소하고 연다 (닫자마자 다시 닫히는 버그 방지).
+   *  플래그 → closing 키 맵은 overlays.ts 의 표에서 파생된다(손으로 관리하던 사본을 없앴다). */
   private openO(patch: Partial<S>) {
     for (const flag of Object.keys(patch)) {
-      const key = App.OVERLAY_KEY[flag];
+      const key = OVERLAY_KEY[flag];
       if (key && (patch as any)[flag]) this.cancelClose(key);
     }
     this.setState(patch as any);
   }
 
-  /** 모달 접근성 — role/aria + 마운트 시 첫 포커스 + Tab 포커스 트랩 */
-  private dialogProps(title: string): any {
+  /** 지금 실제로 떠 있는 오버레이 id 들. 닫는 애니메이션 중인 것은 뺀다 —
+   *  안 그러면 260ms 동안 이미 사라지는 모달이 Esc 와 단축키를 계속 먹는다. */
+  private openOverlayIds(st: S = this.state): string[] {
+    const s = st as unknown as Record<string, unknown>;
+    const out: string[] = [];
+    for (const o of OVERLAYS) {
+      if (!o.flag || !s[o.flag]) continue;
+      if (o.closeKey && st.closing.includes(o.closeKey)) continue; // st 기준으로 본다 — 이전 상태로도 부른다
+      out.push(o.id);
+    }
+    return out;
+  }
+
+  /** 표의 id → 그 오버레이의 실제 닫기. 실행 중(busy)이면 아무 일도 하지 않는다 —
+   *  호출측이 이미 Esc 를 삼킨 뒤라, 진행 중인 작업을 남기고 창만 사라지는 일은 없다. */
+  private closeOverlayById(id: string): void {
+    const s = this.state;
+    switch (id) {
+      case "sheet": this.closeSheet(); return;
+      case "search": this.closeOverlay("search", { searchOpen: false }); return;
+      case "sym": this.closeOverlay("sym", { symOpen: false }); return;
+      case "quick": this.closeOverlay("quick", { quickOpen: false }); return;
+      case "extPanel": this.closeOverlay("extPanel", { extPanel: null }); return;
+      case "cmd": this.closeOverlay("cmd", { cmdOpen: false }); return;
+      case "about": this.closeOverlay("about", { aboutOpen: false }); return;
+      case "usage": this.closeOverlay("usage", { usageOpen: false }); return;
+      case "keys": this.closeOverlay("keys", { keysOpen: false, keyCapture: null }); return;
+      case "commands": this.closeOverlay("commands", { commandsOpen: false }); return;
+      case "mcp": this.closeOverlay("mcp", { mcpOpen: false }); return;
+      case "engine": this.closeOverlay("engine", { engineOpen: false }); return;
+      case "plugins": this.closeOverlay("plugins", { pluginOpen: false }); return;
+      case "cloud": this.stopCloudPoll(); this.closeOverlay("cloud", { cloudOpen: false }); return;
+      case "extDetail": this.closeOverlay("extDetail", { extDetail: null }); return;
+      case "settings": this.closeOverlay("settings", { settingsOpen: false }); return;
+      // Ctrl 을 떼면 확정되는 게 정상 경로다. Esc 는 **고르지 않고** 물러난다 —
+      // 그러려면 확정용 keyup 리스너부터 떼야 한다(안 떼면 Ctrl 을 놓는 순간 파일이 바뀐다).
+      case "mru": this._mruCommit?.(); this._mruCommit = null; this.setState({ mruOpen: false }); return;
+      case "askClose": this.closeOverlay("askClose", { askClose: null }); return;
+      case "askRun": this.answerRun(false); return;
+      case "undoAsk": if (!s.undoAsk?.busy) this.setState({ undoAsk: null }); return;
+      case "commitView": this.setState({ commitView: null }); return;
+      case "mcpb": if (!s.mcpb?.busy) void this.closeBundle(); return;
+      case "import": this.closeImport(); return;
+      case "tour": this.endTour(); return;
+    }
+  }
+
+  /** 모달을 열기 직전에 포커스가 있던 곳 — 닫을 때 여기로 돌려준다. key 는 오버레이 id. */
+  private _focusReturn: Record<string, HTMLElement | null> = {};
+  /** 모달별 "첫 포커스를 이미 줬다" 표식의 세대 번호. 닫는 애니메이션(260ms) 중에 다시 열면
+   *  React 가 같은 DOM 노드를 재사용해 dataset 이 남아 있는데, 예전엔 그걸 "이미 줬다" 로
+   *  읽어 **포커스가 안 갔다.** cancelClose 가 세대를 올려 표식을 무효화한다. */
+  private _dlgSeq: Record<string, number> = {};
+
+  /** 모달 접근성 — role/aria + 마운트 시 첫 포커스 + Tab 포커스 트랩.
+   *  포커스 되돌리기는 여기가 아니라 componentDidUpdate 가 한다(아래 _restoreClosedFocus 주석 참고). */
+  private dialogProps(title: string, key: string): any {
+    const seq = String(this._dlgSeq[key] ?? 0);
     return {
       role: "dialog", "aria-modal": true, "aria-label": title, tabIndex: -1,
       ref: (el: HTMLElement | null) => {
-        if (el && !el.dataset.szf) {
-          el.dataset.szf = "1";
-          const f = el.querySelector<HTMLElement>('input:not([disabled]),button:not([disabled]),textarea,select,[tabindex]:not([tabindex="-1"])');
-          (f ?? el).focus();
+        if (!el || el.dataset.szf === seq) return;
+        el.dataset.szf = seq;
+        const prev = document.activeElement as HTMLElement | null;
+        if (this._focusReturn[key] === undefined) {
+          this._focusReturn[key] = prev && prev !== document.body && !el.contains(prev) ? prev : null;
         }
+        // data-szfocus 가 있으면 그쪽이 우선이다 — 검색 팔레트는 DOM 순서상 첫 포커스 대상이
+        // 치환 토글 버튼이라, 그냥 "첫 번째" 를 잡으면 정작 입력창에 커서가 안 간다.
+        const f = el.querySelector<HTMLElement>("[data-szfocus]")
+          ?? el.querySelector<HTMLElement>('input:not([disabled]),button:not([disabled]),textarea,select,[tabindex]:not([tabindex="-1"])');
+        (f ?? el).focus();
       },
       onKeyDown: (e: React.KeyboardEvent) => this.trapTab(e),
     };
+  }
+
+  /** 닫힌 모달의 포커스를 원래 자리로 돌린다.
+   *
+   *  ref 콜백의 언마운트(null) 분기에서 하면 안 된다 — dialogProps 는 매 렌더 새 함수를
+   *  돌려주므로 React 가 렌더마다 ref(null)→ref(el) 을 부른다. 그러면 모달이 떠 있는 내내
+   *  포커스가 뒤로 튕긴다. 그래서 "열려 있던 것이 사라졌다" 는 사실을 상태로 본다.
+   *
+   *  이게 없으면 모달을 닫는 순간 포커스가 <body> 로 떨어져, 다음 Tab 이 문서 맨 앞부터
+   *  시작한다(키보드만 쓰는 사람에게는 매번 처음부터 훑는 일이 된다). */
+  private _restoreClosedFocus(prevState: S) {
+    const now = new Set(this.openOverlayIds());
+    for (const id of this.openOverlayIds(prevState)) {
+      if (now.has(id)) continue;
+      const back = this._focusReturn[id];
+      delete this._focusReturn[id];
+      if (back && back.isConnected) { try { back.focus(); } catch { /* 사라진 노드 */ } }
+    }
   }
   private trapTab(e: React.KeyboardEvent) {
     if (e.key !== "Tab") return;
@@ -8881,7 +9057,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const out = this.isClosing(key);
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 195, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(title)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width, maxWidth: "92%", maxHeight: "84%", overflow: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, outline: "none" }}>
+        <div {...this.dialogProps(title, key)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width, maxWidth: "92%", maxHeight: "84%", overflow: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, outline: "none" }}>
           <div style={{ display: "flex", alignItems: "center", padding: "13px 16px", borderBottom: "1px solid var(--w06)", position: "sticky", top: 0, background: "var(--bg-card)" }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{title}</span>
             <button className="hvDim" onClick={onClose} style={{ marginLeft: "auto", width: 24, height: 24, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 15, borderRadius: 5 }}>✕</button>
@@ -8967,7 +9143,7 @@ ${(r.output || "").slice(0, 2000)}`;
                   </div>
                 )}
               </div>
-              <div title={t("status.quotaTitle")} style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: left === null ? "var(--fg-dim3)" : left <= 10 ? "#CE9A9A" : left <= 25 ? "#C4A882" : "var(--ok)" }}>{left === null ? "—" : left + "%"}</div>
+              <div title={t("status.quotaTitle")} style={{ fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: left === null ? "var(--fg-dim3)" : left <= 10 ? "var(--err)" : left <= 25 ? "var(--warn)" : "var(--ok)" }}>{left === null ? "—" : left + "%"}</div>
             </div>
           );
         })}
@@ -9008,7 +9184,7 @@ ${(r.output || "").slice(0, 2000)}`;
               <span style={{ fontSize: 12, color: "var(--fg-sub)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t(b.labelKey)}</span>
               {/* 같은 화음을 둘이 쓰면 앞선 것만 동작한다 — 조용히 두지 않고 말한다 */}
               {clash.length > 0 && <span title={t("key.conflictWith", { other: clash.map(c => t(BINDINGS.find(x => x.id === c)!.labelKey)).join(", ") })}
-                style={{ flex: "none", fontSize: 10, color: "#CE9A9A" }}>⚠</span>}
+                style={{ flex: "none", fontSize: 10, color: "var(--err)" }}>⚠</span>}
               <div style={{ flex: 1 }} />
               {overridden && !on && (
                 <button className="hvDim" title={t("key.resetOne")} onClick={() => { setOverride(b.id, null); this.rebuildKeymap(); this.forceUpdate(); }}
@@ -9739,8 +9915,8 @@ ${(r.output || "").slice(0, 2000)}`;
     const close = () => { this.stopCloudPoll(); this.closeOverlay("cloud", { cloudOpen: false }); };
     const env = this.cloudEnv();
     const stateLabel: Record<string, [string, string]> = {
-      running: [t("cloud.stateRunning"), "#C4A882"], done: [t("cloud.stateDone"), "var(--ok)"],
-      failed: [t("cloud.stateFailed"), "#C97B7B"], applied: [t("cloud.stateApplied"), "var(--accent-hi)"],
+      running: [t("cloud.stateRunning"), "var(--warn)"], done: [t("cloud.stateDone"), "var(--ok)"],
+      failed: [t("cloud.stateFailed"), "var(--err)"], applied: [t("cloud.stateApplied"), "var(--accent-hi)"],
       stopped: [t("cloud.stateStopped"), "var(--fg-dim)"],
     };
     const inputStyle: React.CSSProperties = { width: "100%", background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 8, padding: "8px 11px", color: "var(--fg)", fontSize: 12.5, fontFamily: SUIT, outline: "none" };
@@ -9748,7 +9924,7 @@ ${(r.output || "").slice(0, 2000)}`;
       <button className="hv08" disabled={opts?.busy} onClick={onClick}
         style={{ height: 24, padding: "0 10px", fontSize: 10.5, fontFamily: SUIT, cursor: opts?.busy ? "default" : "pointer", borderRadius: 6,
           border: `1px solid ${opts?.accent ? "transparent" : "var(--w10)"}`, background: opts?.accent ? "var(--accent)" : "transparent",
-          color: opts?.danger ? "#CE9A9A" : opts?.accent ? "var(--on-accent)" : "var(--fg-sub)", opacity: opts?.busy ? 0.6 : 1 }}>{label}</button>
+          color: opts?.danger ? "var(--err)" : opts?.accent ? "var(--on-accent)" : "var(--fg-sub)", opacity: opts?.busy ? 0.6 : 1 }}>{label}</button>
     );
 
     const body = (
@@ -10051,7 +10227,7 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
 
         {s.engineViewErr && (
-          <div style={{ fontSize: 11, color: "#CE9A9A", whiteSpace: "pre-wrap", maxHeight: 72, overflow: "auto",
+          <div style={{ fontSize: 11, color: "var(--err)", whiteSpace: "pre-wrap", maxHeight: 72, overflow: "auto",
             background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 8, padding: "7px 10px" }}>{s.engineViewErr}</div>
         )}
 
@@ -10312,7 +10488,7 @@ ${(r.output || "").slice(0, 2000)}`;
               </div>
               {sv.running && <span style={{ flex: "none", fontSize: 10, color: "var(--accent-hi)" }}>{t("mcpui.toolCount", { n: sv.tools })}</span>}
               <button className="hv08" disabled={busy(sv.name)} onClick={() => sv.running ? this.mcpStopServer(sv.name) : this.mcpStartServer(sv.name)}
-                style={{ flex: "none", padding: "3px 11px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: sv.running ? "#CE9A9A" : "var(--accent-hi)" }}>{busy(sv.name) ? "…" : sv.running ? t("mcpui.stop") : t("mcpui.start")}</button>
+                style={{ flex: "none", padding: "3px 11px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: sv.running ? "var(--err)" : "var(--accent-hi)" }}>{busy(sv.name) ? "…" : sv.running ? t("mcpui.stop") : t("mcpui.start")}</button>
               <button className="hvDim" title={t("mcpui.remove")} onClick={() => this.mcpRemoveServer(sv.name)} style={{ flex: "none", width: 22, height: 22, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 13, borderRadius: 5 }}>✕</button>
             </div>
           ))}
@@ -10438,7 +10614,7 @@ ${(r.output || "").slice(0, 2000)}`;
     );
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeDetail} style={{ position: "fixed", inset: 0, zIndex: 196, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(d.displayName || d.name)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width: 720, maxWidth: "92%", height: "84%", display: "flex", flexDirection: "column", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, overflow: "hidden" }}>
+        <div {...this.dialogProps(d.displayName || d.name, "extDetail")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()} style={{ width: 720, maxWidth: "92%", height: "84%", display: "flex", flexDirection: "column", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", fontFamily: SUIT, overflow: "hidden" }}>
           {/* 헤더 */}
           <div style={{ display: "flex", gap: 14, padding: "18px 20px", borderBottom: "1px solid var(--w06)" }}>
             {d.icon
@@ -10490,7 +10666,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeExtPanel}
         style={{ position: "fixed", inset: 0, zIndex: 190, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(p.title)} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(p.title, "extPanel")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
           style={{ width: 520, maxWidth: "90%", maxHeight: "80%", overflow: "auto", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)" }}>
           <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--w08)" }}>
             <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{p.title}</span>
@@ -10513,9 +10689,9 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSym}
         style={{ position: "fixed", inset: 0, zIndex: 180, background: "rgba(0,0,0,.25)", display: "flex", justifyContent: "center", paddingTop: 90 }}>
-        <div className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("sc1.cmd_goto_ws_symbol"), "sym")} className={out ? "sz-drop-out" : "sz-drop"} onClick={e => e.stopPropagation()}
           style={{ width: 620, maxWidth: "90%", alignSelf: "flex-start", background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
-          <input autoFocus value={s.symQuery}
+          <input data-szfocus value={s.symQuery}
             onChange={e => this.runSymbolSearch(e.target.value)}
             onKeyDown={e => {
               if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ symSel: (sel + 1) % Math.max(1, list.length) }); }
@@ -10570,7 +10746,7 @@ ${(r.output || "").slice(0, 2000)}`;
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSettings}
         style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div {...this.dialogProps(t("settings.title"))} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
+        <div {...this.dialogProps(t("settings.title"), "settings")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
           style={{ width: 480, maxWidth: "92%", maxHeight: "88vh", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
             <span style={{ fontSize: 15, fontWeight: 700 }}>{t("settings.title")}</span>
@@ -10617,7 +10793,7 @@ ${(r.output || "").slice(0, 2000)}`;
                   </div>
                 );
               })}
-              {s.oauthMsg && <div style={{ fontSize: 10.5, color: "#CE9A9A" }}>⚠️ {s.oauthMsg}</div>}
+              {s.oauthMsg && <div style={{ fontSize: 10.5, color: "var(--err)" }}>⚠️ {s.oauthMsg}</div>}
               <div style={{ fontSize: 10, color: "var(--fg-dim2)" }}>{t("settings.noSubNote")}</div>
             </div>
           )}
@@ -10640,7 +10816,7 @@ ${(r.output || "").slice(0, 2000)}`;
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 8 }}>
             {AGDEF.filter(d => s.testMsg[d.id]).map(d => (
-              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "var(--ok)" : s.testMsg[d.id].startsWith("⚠") ? "#CE9A9A" : "var(--fg-sub2)" }}>
+              <div key={d.id} style={{ fontSize: 10.5, color: s.testMsg[d.id].startsWith("✓") ? "var(--ok)" : s.testMsg[d.id].startsWith("⚠") ? "var(--err)" : "var(--fg-sub2)" }}>
                 {d.name}: {s.testMsg[d.id]}
               </div>
             ))}
@@ -10676,32 +10852,32 @@ ${(r.output || "").slice(0, 2000)}`;
           <div style={{ height: 1, background: "var(--w06)", margin: "16px 0 12px" }} />
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "var(--fg-dim)", marginBottom: 8 }}>{t("settings.editor")}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeFont")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeFont")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {Object.entries(CODE_FONTS).map(([k, f]) => (
                   <button key={k} onClick={() => this.applyEditorPref({ codeFont: k })} style={{ ...segBtn(ed.codeFont === k), fontFamily: f.stack }}>{f.name}</button>
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.uiFont")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.uiFont")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {Object.entries(UI_FONTS).map(([k, f]) => (
                   <button key={k} onClick={() => this.applyEditorPref({ uiFont: k })} style={{ ...segBtn(ed.uiFont === k), fontFamily: f.stack }}>{f.name}</button>
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeSize")}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.codeSize")}</span>
               <input type="range" min={11} max={16} step={1} value={ed.fontSize}
                 onChange={e => this.applyEditorPref({ fontSize: +e.target.value })}
                 style={{ flex: 1, accentColor: "var(--accent)", background: "transparent" }} />
               <span style={{ flex: "none", width: 34, textAlign: "right", fontSize: 11.5, fontFamily: MONO, color: "var(--fg-sub2)" }}>{ed.fontSize}px</span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.keymap")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.keymap")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {KEYMAPS.map(([k, name]) => (
                   <button key={k} onClick={() => this.applyEditorPref({ keymap: k })} style={segBtn(ed.keymap === k)}>{name}</button>
                 ))}
@@ -10718,23 +10894,23 @@ ${(r.output || "").slice(0, 2000)}`;
                 </div>
               ))}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.autoSave")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.autoSave")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {([["off", t("settings.autoSaveOff")], ["afterDelay", t("settings.autoSaveDelay")], ["onFocusChange", t("settings.autoSaveFocus")]] as [EditorPrefs["autoSave"], string][]).map(([v, label]) => (
                   <button key={v} onClick={() => this.applyEditorPref({ autoSave: v })} style={segBtn(ed.autoSave === v)}>{label}</button>
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.tabSize")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.tabSize")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {[2, 4, 8].map(n => (<button key={n} onClick={() => this.applyEditorPref({ tabSize: n })} style={segBtn(ed.tabSize === n)}>{n}</button>))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ flex: "none", width: 62, fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.cursor")}</span>
-              <div style={{ flex: 1, display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{t("settings.cursor")}</span>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {([["line", t("settings.cursorLine")], ["block", t("settings.cursorBlock")], ["underline", t("settings.cursorUnderline")]] as [EditorPrefs["cursorStyle"], string][]).map(([v, label]) => (
                   <button key={v} onClick={() => this.applyEditorPref({ cursorStyle: v })} style={segBtn(ed.cursorStyle === v)}>{label}</button>
                 ))}

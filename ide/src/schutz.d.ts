@@ -14,6 +14,10 @@ interface CheckpointInfo {
   startedAt: number;
   /** 아직 도는 실행 — 보관 상한에서 제외된다. */
   open: boolean;
+  /** 이 실행을 돌리는 창의 id. 창을 여럿 띄우면 남의 실행을 닫지 않기 위해 필요하다. */
+  owner: string;
+  /** 주인이 마지막으로 살아 있다고 알린 시각(ms). 0 이면 옛 형식. */
+  beatAt: number;
   bytes: number;
   files: number;
   created: number;
@@ -138,7 +142,7 @@ interface SchutzApi {
   mkdir(root: string, rel: string): Promise<boolean>;
   /** 체크포인트 — 한 실행이 손댄 파일의 원본 바이트를 메인에 잡아 두고 통째로 되돌린다.
    *  해시는 전부 메인이 계산한다. 무엇을 되돌릴지는 engine/checkpoints.ts 가 정한다. */
-  cpCapture(root: string, runId: string, rel: string, kind: "modify" | "create", startedAt: number):
+  cpCapture(root: string, runId: string, rel: string, kind: "modify" | "create", startedAt: number, ownerId: string):
     Promise<{ beforeHash: string | null; oversize: boolean; first: boolean }>;
   cpMark(root: string, runId: string, rel: string): Promise<{ afterHash: string | null }>;
   /** 실행 종료 — 헤더 목록을 돌려준다. 보관 상한은 렌더러(pruneCheckpoints)가 적용한다. */
@@ -151,6 +155,7 @@ interface SchutzApi {
   } | null>;
   cpRestore(root: string, runId: string, actions: { rel: string; action: "restore" | "delete" }[]):
     Promise<{ done: string[]; failed: { rel: string; why: string }[] }>;
+  cpBeat(root: string, runId: string): Promise<boolean>;
   cpDrop(root: string, runId: string): Promise<boolean>;
   /** 끌어다 놓은 File 의 실제 경로 (Electron 32+ 에서 File.path 가 사라졌다). 못 얻으면 "" */
   pathForFile(file: File): string;
