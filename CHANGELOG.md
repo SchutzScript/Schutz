@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [0.1.0] — Nothing new, and that is the point
+
+This release adds no features. Every change here restores behaviour the app already claimed to have. Two of them were ways to lose work you had not saved.
+
+The version number moves to 0.1 because the work planned under that milestone is finished, and because an editor that can silently discard your unsaved edits has no business calling itself anything.
+
+### Your unsaved edits are safe now
+
+- **Undoing an AI run no longer overwrites buffers it never touched.** The undo dialog computes which files have unsaved edits and says on screen that it will leave them alone. The execution step then reloaded *every* open model from disk regardless — including files the run had nothing to do with. The screen and the code now agree: only the files actually restored are re-read.
+- **Accepting a proposal edits your buffer, not the file underneath it.** If you were editing a file and an agent changed another part of it, the accept path read the file from disk, wrote on top of that, and then marked the buffer clean — so your edits vanished *and* the dirty marker vanished with them, leaving nothing to notice. The edit is now applied to the open buffer when there is one. Where the editor still has to be reset, it goes through the undo stack, so `Ctrl+Z` brings your text back.
+
+The offset arithmetic, stale-range detection, uniqueness fallback, and `$`-sequence handling behind all of this moved into a tested module rather than living inline.
+
+### Modals behave like modals
+
+`Escape` and the global shortcuts each had their own idea of what was on screen, and neither matched the z-index.
+
+- **Shortcuts no longer reach through an open dialog.** `Ctrl+W` over Settings was closing the tab hidden behind it; `Ctrl+P` opened a palette you could not see, which then took your keystrokes. A shortcut now passes only if it belongs to the dialog on top.
+- **`Escape` closes what is actually in front.** The chain was hand-written, so newer dialogs — cloud tasks, plugins, engine, run approval, undo, bundle install, commit view, the tab switcher — were never added to it, and a confirmation stacked over Settings closed Settings first.
+- **Focus returns where it came from.** Closing a dialog dropped focus to the document body, so the next `Tab` started over from the top of the page. Reopening a dialog during its closing animation also failed to focus its input.
+- The four palettes (files, commands, symbols, search) are now dialogs proper: labelled, and `Tab` stays inside them.
+
+### Colours mean something on light themes
+
+Error, warning, and unsaved states were hard-coded hex values chosen against a dark background. On Paper, against a white card, they measured 2.41:1, 2.27:1, and 2.00:1 — against a 4.5:1 minimum. The error message was the least readable thing on the screen.
+
+They are theme tokens now, dark on light and light on dark, and a test measures every semantic colour against every surface in every theme so this cannot come back.
+
+### Fixed
+
+- Remaining usage was invisible on every launch. The startup check used the stored access token without refreshing it; those expire in about an hour, so it almost always failed, and the figure only appeared after you sent a message. It also now refreshes while the app is open, without issuing a request unless the number is stale and the window is visible.
+- Merge conflicts could not be resolved at all in a narrow sidebar or in German — the third button was clipped off the edge with no way to scroll to it.
+- With several terminals open, the dock's collapse button was pushed off screen, so the dock could not be collapsed.
+- A long branch name pushed the right-hand end of the status bar out of the window.
+- Settings labels overlapped their controls in German and Japanese.
+- MCP: starting a server twice while its handshake was still running reported success with an empty tool list. A notification arriving before the response on an HTTP connector was read *as* the response, with the same result — a server that connects with no tools and no error.
+- Tool arguments from Claude that failed to parse were swallowed into `{}`, so a truncated call ran as an empty one instead of being reported.
+- Atomic writes used one fixed temporary filename, so two concurrent writes to the same path could destroy one side's content. Replace-in-files was not atomic at all.
+- Rapidly clicking a git action twice reported the blocked second click as a failure.
+- `/vim` saved the setting without applying it to editors already open.
+- Two windows on the same folder: an idle window could close and then delete a checkpoint belonging to a run in progress in the other one.
+- The file tree indents without limit, leaving no room for names in deep paths, and showed nothing at all for an empty folder.
+
 ## [0.0.9] — The hundred small cuts
 
 Nothing here is a headline feature. It is the set of things you hit ten times a day and work around without thinking about, plus one gutter that was quietly lying to you.
