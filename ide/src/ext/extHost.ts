@@ -2,6 +2,7 @@
 // 확장은 신뢰 코드로 간주(VS Code와 동일 모델)하되, 편의 API는 이 표면으로 한정한다.
 // Schutz 네이티브(schutz API) + VS Code 프로그램형(vscode 셰임으로 activate 실행) 둘 다 지원.
 import { makeVscodeApi, disposeShimRegistrations } from "./vscodeShim";
+import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
 import { t } from "../i18n";
 
 export interface ExtCommand { id: string; title: string; run: (...args: any[]) => any; source: string; }
@@ -20,6 +21,7 @@ let activeContexts: { name: string; ctx: any; deactivate?: (...a: any[]) => any 
 
 /** 이전 로드의 확장 정리 — ctx.subscriptions 의 disposable 해제 + 확장의 deactivate() 호출 */
 function teardownExtensions() {
+  clearHooks();   // 리로드마다 핸들러가 쌓이지 않게 — 명령과 같은 수명이다
   for (const { ctx, deactivate } of activeContexts) {
     for (const sub of (ctx?.subscriptions || [])) { try { sub?.dispose?.(); } catch { /* */ } }
     try { deactivate?.(); } catch { /* */ }
@@ -28,6 +30,13 @@ function teardownExtensions() {
 }
 
 export function getExtCommands(): ExtCommand[] { return commands; }
+
+/** IDE 쪽에서 사건을 알린다. 확장 핸들러가 터지면 토스트로 보고하되 흐름은 막지 않는다. */
+export function notifyExtensions(ev: HookEvent, payload: Record<string, unknown>): void {
+  emitHook(ev, payload, (source, err) => {
+    deps?.toast("error", t("exth.commandError", { source, msg: err instanceof Error ? err.message : String(err) }));
+  });
+}
 
 /** 등록된 확장 명령 실행 (vscode 셰임의 executeCommand 위임용).
  *  해석 순서: (1) 정확 일치(전체 id 로 호출) → (2) 호출 확장 자신의 네임스페이스(callerExtId:id).
@@ -57,7 +66,13 @@ function addCommand(id: string, title: string, run: (...args: any[]) => any, sou
   commands.push({ id, title, run: wrapRun(run, source), source });
 }
 
-function makeApi(ext: { id: string; name: string }) {
+/** 로드 세대. loadExtensions 가 겹쳐 돌면(리로드 버튼 연타·StrictMode 이중 마운트)
+ *  앞선 판의 activate 가 뒤늦게 끝나면서 이미 정리된 자리에 다시 등록한다. 그러면
+ *  같은 확장의 핸들러가 두 벌 살아 **훅이 두 번씩 온다**(실제로 그랬다).
+ *  등록 시점에 자기가 아직 최신 판인지 확인하게 해서 막는다. */
+let loadGen = 0;
+
+function makeApi(ext: { id: string; name: string }, gen: number) {
   return {
     extId: ext.id,
     commands: {
@@ -68,6 +83,11 @@ function makeApi(ext: { id: string; name: string }) {
       },
     },
     ui: { showPanel: (title: string, html: string) => deps?.showPanel(title, html) },
+    /** IDE 에서 벌어지는 일을 구독한다. 돌려받은 함수를 부르면 해제된다.
+     *  관찰 전용이다 — 훅은 무엇도 막거나 바꾸지 못한다. 목록은 hooks.ts 의 HOOK_EVENTS. */
+    on: (event: string, fn: (payload: Record<string, unknown>) => void) =>
+      (gen === loadGen ? onHook(event, fn, ext.name) : () => { /* 지난 판의 늦은 등록 — 버린다 */ }),
+    events: HOOK_EVENTS.slice(),
     toast: (kind: "ok" | "error" | "info", msg: string) => deps?.toast(kind, msg),
     getActiveFile: () => deps?.getActiveFile() ?? null,
   };
@@ -128,6 +148,7 @@ function makeHostRequire(vscode: any) {
 
 /** 활성 확장 로드 → 커맨드 등록. 반환: 로드 수·하드 오류·기능 제한 목록 */
 export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; errors: string[]; limited: { id: string; name: string; reason: string }[] }> {
+  const gen = ++loadGen;
   deps = d;
   teardownExtensions();                             // 이전 로드의 ctx.subscriptions·deactivate 정리
   commands = [];
@@ -193,7 +214,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
     try { code = await window.schutz.extReadEntry(ext.id, ext.main || "extension.js"); } catch { errors.push(ext.id + ": " + t("exth.entryReadFailed")); continue; }
     if (typeof code !== "string") { errors.push(ext.id + ": " + (code?.error || t("exth.entryMissing"))); continue; }
     try {
-      const api = makeApi(ext);
+      const api = makeApi(ext, gen);
       const moduleObj = { exports: {} as any };
       // eslint-disable-next-line no-new-func
       const fn = new Function("exports", "module", "schutz", "console", code);

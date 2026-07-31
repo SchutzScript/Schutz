@@ -41,6 +41,9 @@ function ensureSample(app) {
     }, null, 2));
     fs.writeFileSync(path.join(dir, "extension.js"), `// Schutz 확장 엔트리 — activate(schutz) 를 export.
 // schutz API: commands.register(id,title,fn), ui.showPanel(title,html), toast(kind,msg), getActiveFile()
+//   on(event, fn) -> off  — IDE 에서 벌어지는 일을 구독한다(관찰 전용).
+//   사건: schutz.events — workspace.open, file.open, file.save,
+//         proposal.accept, proposal.reject, run.start, run.end
 exports.activate = function (schutz) {
   schutz.commands.register("hello.say", "Hello: 인사하기", function () {
     schutz.toast("ok", "안녕하세요! Schutz 확장이 동작합니다 👋");
