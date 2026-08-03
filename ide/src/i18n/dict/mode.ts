@@ -3,6 +3,8 @@
 // 이름은 **무엇이 화면의 주인공인지**로 지었다. "VS Code 모드 / CLI 모드" 처럼 남의 제품을
 // 빌려 쓰면 그 제품을 모르는 사람에게 아무 뜻이 없고, 우리 것도 아닌 게 된다.
 export const dict: Record<string, Record<string, string>> = {
+  "mode.filtered": { ko: "{who} 의 대화만 보는 중", en: "Showing only {who}", de: "Nur {who} wird angezeigt", ja: "{who} の会話のみ表示中" },
+  "mode.filteredClear": { ko: "전체 보기", en: "Show all", de: "Alle anzeigen", ja: "すべて表示" },
   "mode.editor": { ko: "에디터", en: "Editor", de: "Editor", ja: "エディタ" },
   "mode.agent": { ko: "에이전트", en: "Agent", de: "Agent", ja: "エージェント" },
 
