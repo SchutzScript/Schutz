@@ -160,6 +160,9 @@ contextBridge.exposeInMainWorld("schutz", {
 
   /** 에이전트 명령 실행 (워크스페이스 안, 타임아웃·출력 상한 있음) */
   runCommand: (opts) => ipcRenderer.invoke("schutz:runCommand", opts),
+  /** 실행 도구가 PATH 에 있는지 — 없는 걸 눌렀을 때 셸 오류 대신 안내를 하려고. */
+  whichTool: (name) => ipcRenderer.invoke("schutz:whichTool", name),
+  tmpDir: () => ipcRenderer.invoke("schutz:tmpDir"),
   runStop: (id) => ipcRenderer.send("schutz:runStop", id),
   onRunOutput: (cb) => {
     const h = (_e, line) => cb(line);

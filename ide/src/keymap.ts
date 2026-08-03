@@ -21,7 +21,7 @@ export type ActionId =
   | "find.next" | "find.prev"
   | "search.nextHit" | "search.prevHit"
   | "tabs.close" | "tabs.reopen" | "editor.fontUp" | "editor.fontDown" | "view.sidebar"
-  | "nav.back" | "nav.forward";
+  | "nav.back" | "nav.forward" | "file.run";
 
 /** i18n 키로 라벨을 만든다 — 표가 언어별 문자열을 들고 있지 않게. */
 export interface Binding { id: ActionId; def: string; labelKey: string }
@@ -52,6 +52,8 @@ export const BINDINGS: Binding[] = [
   // 방금 어디 있었더라 — 정의로 점프한 뒤 원래 자리로 돌아오는 길. VS Code 와 같은 화음.
   { id: "nav.back", def: "Alt+Left", labelKey: "key.navBack" },
   { id: "nav.forward", def: "Alt+Right", labelKey: "key.navForward" },
+  // F5 는 디버그다. VS Code 관례대로 실행은 Ctrl+F5.
+  { id: "file.run", def: "Mod+F5", labelKey: "key.runFile" },
   { id: "tabs.mru", def: "Mod+Tab", labelKey: "key.cycleTabs" },
   { id: "tabs.mruBack", def: "Mod+Shift+Tab", labelKey: "key.cycleTabsBack" },
   { id: "editor.fontUp", def: "Mod+=", labelKey: "key.fontUp" },
