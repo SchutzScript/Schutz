@@ -5,6 +5,8 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { parseJsonc } from "../engine/jsonc";
+import { THEME_TOKENS } from "../theme";
+import { monacoWidgetColors } from "./monacoColors";
 
 (self as any).MonacoEnvironment = {
   getWorker(_: unknown, label: string) {
@@ -123,6 +125,48 @@ monaco.editor.defineTheme("feldgrau", {
     { token: "delimiter", foreground: "AEB9AF" },
   ],
   colors: {
+    // 위젯 색을 먼저 깐다 — 아래 본문 색이 그 위를 덮으므로 지금까지의 에디터 모습은 그대로다.
+    ...monacoWidgetColors(THEME_TOKENS.feldgrau!),
+    "editor.background": "#0F1211",
+    "editor.foreground": "#D8DFD8",
+    "editorLineNumber.foreground": "#606A62",
+    "editorLineNumber.activeForeground": "#B4BEB5",
+    "editorCursor.foreground": "#A9C4AD",
+    "editor.selectionBackground": "#7D918355",
+    "editor.lineHighlightBackground": "#181D1B99",
+    "editorIndentGuide.background1": "#232826",
+    "editorWidget.background": "#181C1A",
+    "editorWidget.border": "#2A302C",
+    "scrollbarSlider.background": "#FFFFFF16",
+    "scrollbarSlider.hoverBackground": "#FFFFFF2A",
+  },
+});
+
+/** Graphite — 신택스는 Feldgrau 와 같고 위젯 색만 자기 토큰을 쓴다.
+ *  예전엔 monaco 테마를 feldgrau 와 공유해서, 팝업 바탕이 한 톤 어긋났다. */
+monaco.editor.defineTheme("graphite", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [
+    { token: "", foreground: "D8DFD8" },
+    { token: "keyword", foreground: "E4B67E" },
+    { token: "string", foreground: "9DD3A6" },
+    { token: "number", foreground: "D8A9C8" },
+    { token: "regexp", foreground: "9DD3A6" },
+    { token: "type", foreground: "A6D6C8" },
+    { token: "class", foreground: "A6D6C8" },
+    { token: "function", foreground: "E9E2AC" },
+    { token: "variable", foreground: "D8DFD8" },
+    { token: "constant", foreground: "D8A9C8" },
+    { token: "identifier", foreground: "D8DFD8" },
+    { token: "tag", foreground: "E4B67E" },
+    { token: "attribute.name", foreground: "A6D6C8" },
+    { token: "comment", foreground: "72806F", fontStyle: "italic" },
+    { token: "delimiter", foreground: "AEB9AF" },
+  ],
+  colors: {
+    // 위젯 색을 먼저 깐다 — 아래 본문 색이 그 위를 덮으므로 지금까지의 에디터 모습은 그대로다.
+    ...monacoWidgetColors(THEME_TOKENS.graphite!),
     "editor.background": "#0F1211",
     "editor.foreground": "#D8DFD8",
     "editorLineNumber.foreground": "#606A62",
@@ -150,6 +194,7 @@ monaco.editor.defineTheme("schutz-paper", {
     { token: "comment", foreground: "8A8D86", fontStyle: "italic" },
   ],
   colors: {
+    ...monacoWidgetColors(THEME_TOKENS.paper!),
     "editor.background": "#FFFFFF",
     "editor.foreground": "#232823",
     "editorLineNumber.foreground": "#BEC3B6",
