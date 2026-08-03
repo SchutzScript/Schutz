@@ -1399,7 +1399,10 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   applyEditorTheme(themes: vscodeExt.ImportedTheme[] = this.state.extThemes) {
     const vsx = getActiveVsxTheme();
     if (vsx && themes.some(t => t.id === vsx)) { monaco.editor.setTheme(vsx); return; }
-    if (textmate.isTextMateWired()) monaco.editor.setTheme(textmate.tmThemeId());
+    if (textmate.isTextMateWired()) {
+      textmate.defineTmTheme();   // 위젯 색이 지금 테마를 따라가도록 다시 정의한 뒤 적용
+      monaco.editor.setTheme(textmate.tmThemeId());
+    }
     else monaco.editor.setTheme(monacoThemeOf(getThemeId()));
   }
   /** 가져온 VS Code 에디터 테마 선택 + 영속화 */
