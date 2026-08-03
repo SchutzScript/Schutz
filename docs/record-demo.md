@@ -1,4 +1,14 @@
-# Recording `docs/assets/demo.gif`
+# Recording the README clips
+
+> **Tooling lives in [`scripts/`](../scripts).** `node scripts/record-gif.mjs --list` shows the
+> scenes; `node scripts/record-gif.mjs <name>` drives the app over CDP and writes
+> `docs/assets/<name>.gif`. Set `SCHUTZ_GIF_DEBUG=1` to also drop the last captured frame
+> as a PNG, which is how you check that a scene actually shows what you meant.
+>
+> The first version of this pipeline lived outside the repository and was lost, leaving only
+> the prose below. Keep the tool and the prose together.
+
+## The hero clip — `docs/assets/demo.gif`
 
 The README demo is captured from the running app, not mocked up. Re-record it whenever
 the UI changes enough that the GIF starts lying about what Schutz looks like.
