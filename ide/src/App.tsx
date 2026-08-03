@@ -331,6 +331,13 @@ interface S {
   chatAway: boolean;
   /** 에이전트별 잔여 할당량 (구독 경로에서 금액 대신 보여주는 값) */
   quota: Record<string, QuotaInfo>;
+  /** 되돌리기 어려운 일을 하기 전의 확인. window.confirm 을 대신한다 — OS 대화상자는
+   *  렌더러를 통째로 얼리고, 테마도 따르지 않으며, 무엇을 지우는지 한 줄 이상 못 싣는다. */
+  confirmAsk: {
+    title: string; body: string; okLabel: string; cancelLabel: string;
+    /** 되돌릴 수 없는 일 — 확인 버튼을 오류 색으로. */
+    danger?: boolean;
+  } | null;
   /** 실행 승인 대기 중인 명령 (수동 정책일 때) */
   /** 승인 대기. okLabel/cancelLabel 은 자리에 맞는 문구가 있을 때만 채운다(없으면 기본 허용/거부). */
   askRun: { command: string; rationale: string; agent: string; okLabel?: string; cancelLabel?: string } | null;
@@ -664,7 +671,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
-    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], reviewFindings: [], reviewBusy: false, paneVer: {},
@@ -749,6 +756,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
    *  포커스를 받은 적 없는 흔한 상황에서 Ctrl+S 가 아무 일도 안 하고 아무 말도 안 했다. */
   /** 저장을 확장에 알린다. 저장 경로가 둘(페인·모델)이라 여기 한 곳으로 모은다. */
   private notifySaved = (rel: string) => extHost.notifyExtensions("file.save", { rel });
+  /** 페인에서 부르는 확인 창구 — 화살표로 묶어 this 를 잃지 않게. */
+  private askConfirmProp = (o: { title: string; body: string; okLabel: string; danger?: boolean }) => this.askConfirm(o);
 
   async saveActive() {
     const p = paneRegistry.focused;
@@ -771,7 +780,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       // 외부에서 바뀐 파일은 모두 저장에서 조용히 덮어쓰지 않는다
       const ext = projectModels.externalChangeOf(rel);
       if (ext !== null && ext !== content) {
-        if (silent || !window.confirm(t("sc1.externalChangedOverwrite", { rel }))) { failed.push(rel + " (" + t("sc1.externalChangedSkipped") + ")"); continue; }
+        if (silent || !await this.askConfirm({ title: t("confirm.overwriteTitle"), body: t("sc1.externalChangedOverwrite", { rel }), okLabel: t("confirm.overwriteOk"), danger: true })) { failed.push(rel + " (" + t("sc1.externalChangedSkipped") + ")"); continue; }
       }
       try {
         await window.schutz.writeFile(ws.root, rel, content);
@@ -1085,7 +1094,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   async deleteAt(rel: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    if (!window.confirm(t("sc1.confirm_delete", { rel }))) return;
+    if (!await this.askConfirm({ title: t("confirm.deleteTitle"), body: t("sc1.confirm_delete", { rel }), okLabel: t("confirm.deleteOk"), danger: true })) return;
     try {
       const del = await window.schutz.deleteEntry(ws.root, rel);
       projectModels.dropUnder(ws.root, rel); // 하위 파일 모델까지 dispose(옛 dirty 모델 잔존→Save All 이 삭제 파일 재생성하는 버그 방지)
@@ -1968,6 +1977,28 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   /** 백그라운드 서버 — 프리뷰 탭 rel → runId. 에이전트 중지와 수명을 분리한다. */
   private _bgRuns = new Map<string, string>();
   private _askRunResolve: ((ok: boolean) => void) | null = null;
+  private _confirmResolve: ((ok: boolean) => void) | null = null;
+
+  /** 인앱 확인 — window.confirm 을 대신한다.
+   *
+   *  OS 대화상자는 세 가지가 나쁘다: 렌더러를 통째로 얼려 애니메이션·타이머가 멈추고,
+   *  앱 테마를 따르지 않으며, 문구를 한 덩어리로만 실어 "무엇을" 지우는지 강조할 자리가
+   *  없다. askRunApproval 이 같은 이유로 이미 이 모양을 쓰고 있다.
+   *
+   *  이미 물어보는 중이면 앞선 물음을 취소로 닫는다 — 확인창이 겹쳐 쌓이면 어느 쪽에
+   *  답한 것인지 알 수 없다. */
+  private askConfirm(o: { title: string; body: string; okLabel: string; cancelLabel?: string; danger?: boolean }): Promise<boolean> {
+    this._confirmResolve?.(false);
+    return new Promise<boolean>(resolve => {
+      this._confirmResolve = resolve;
+      this.setState({ confirmAsk: { ...o, cancelLabel: o.cancelLabel ?? t("confirm.cancel") } });
+    });
+  }
+  private answerConfirm(ok: boolean) {
+    const r = this._confirmResolve;
+    this._confirmResolve = null;
+    this.setState({ confirmAsk: null }, () => r?.(ok));
+  }
 
   /** 실행 승인 대기 — window.confirm 은 렌더러를 통째로 얼려서 인앱 모달로 바꿨다.
    *  labels 를 주면 버튼 문구를 갈아끼운다: 커밋 게이트처럼 "허용/거부" 가 어색한 자리를 위해. */
@@ -4350,7 +4381,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 감춰둔 변경을 버린다 — 되돌릴 수 없으므로 반드시 묻는다. */
   async stashDrop(ref: string) {
     const k = this.state.gitStashes.find(x => x.ref === ref);
-    if (!window.confirm(t("gitp.stashDropConfirm", { subject: k?.subject ?? ref }))) return;
+    if (!await this.askConfirm({ title: t("confirm.stashDropTitle"), body: t("gitp.stashDropConfirm", { subject: k?.subject ?? ref }), okLabel: t("confirm.stashDropOk"), danger: true })) return;
     const ok = await this.gitDo("stashDrop", { ref });
     if (ok === true) this.toast("ok", t("gitp.stashDropped"));
   }
@@ -4390,7 +4421,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (this.state.git?.conflicted.length) { this.setState({ gitError: t("gitp.commitBlockedByConflicts", { n: this.state.git.conflicted.length }) }); return; }
     // 이미 올라간 커밋을 고치면 강제 푸시가 필요해진다. 되돌리기 어려운 일이라 미리 말한다.
     if (amend && (this.state.git?.ahead ?? 0) === 0 && this.state.git?.upstream) {
-      if (!window.confirm(t("gitp.amendPushedWarn"))) return;
+      if (!await this.askConfirm({ title: t("confirm.amendTitle"), body: t("gitp.amendPushedWarn"), okLabel: t("confirm.amendOk"), danger: true })) return;
     }
     // 커밋 전 자동 리뷰 — 켰을 때만. 짚은 게 있으면 승인 바로 진행/취소를 묻는다.
     if (getAutonomy().reviewOnCommit && !(await this.reviewGateBeforeCommit())) return;
@@ -4977,7 +5008,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const dirtyOpen = Array.from(new Set([...this.allOpen(), ...projectModels.dirtyRels()]))
       .filter(rel => this.isDirtyRel(rel) && !this.parseDiffKey(rel));
     if (dirtyOpen.length) { this.toast("error", t("sc3.replaceSaveFirst", { files: dirtyOpen.slice(0, 6).join(", ") })); return; }
-    if (!window.confirm(t("sc3.replaceAllConfirm", { q, rep: this.state.replaceVal }))) return;
+    if (!await this.askConfirm({ title: t("confirm.replaceTitle"), body: t("sc3.replaceAllConfirm", { q, rep: this.state.replaceVal }), okLabel: t("confirm.replaceOk"), danger: true })) return;
     try {
       const r = await window.schutz.replaceInFiles(ws.root, q, this.state.replaceVal, this.state.searchOpts);
       // r.error 를 안 읽어서, 정규식이 거부돼도 "0개 파일 · 0곳 변경" 이 성공 토스트로 나가던 자리
@@ -5617,6 +5648,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderCommandPalette()}
         {this.renderSearch()}
         {this.renderAskClose()}
+        {this.renderConfirm()}
         {this.renderAskRun()}
         {this.renderUndoAsk()}
         {this.renderCommitView()}
@@ -6286,7 +6318,7 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   async gitDiscard(path: string, untracked: boolean) {
-    if (!window.confirm(t("sc4.discardConfirm", { path }))) return;
+    if (!await this.askConfirm({ title: t("confirm.discardTitle"), body: t("sc4.discardConfirm", { path }), okLabel: t("confirm.discardOk"), danger: true })) return;
     await this.gitDo("discard", { path, untracked });
     void this.refreshWorkspace();
   }
@@ -6709,6 +6741,30 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   /** 실행 승인 모달 — 명령을 그대로 보여주고 승인/거절. 셸 명령은 되돌릴 수 없어 기본은 확인. */
+  renderConfirm() {
+    const a = this.state.confirmAsk;
+    if (!a) return null;
+    return (
+      <div className="sz-backdrop" onClick={() => this.answerConfirm(false)}
+        style={{ position: "fixed", inset: 0, zIndex: 231, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div {...this.dialogProps(a.title, "confirmAsk")} className="sz-pop" onClick={e => e.stopPropagation()}
+          style={{ width: 440, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8, color: a.danger ? "var(--err)" : "var(--fg)" }}>{a.title}</div>
+          <div style={{ fontSize: 12.5, color: "var(--fg-sub2)", lineHeight: 1.7, marginBottom: 14, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{a.body}</div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button className="hv08" onClick={() => this.answerConfirm(false)}
+              style={{ height: 28, padding: "0 14px", fontSize: 12, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w12)" }}>{a.cancelLabel}</button>
+            <button className={a.danger ? "hvRed2" : "hvAccent"} onClick={() => this.answerConfirm(true)}
+              style={{ height: 28, padding: "0 14px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7,
+                color: a.danger ? "var(--err)" : "var(--on-accent)",
+                background: a.danger ? "var(--err-soft)" : "var(--accent)",
+                border: a.danger ? "1px solid var(--err)" : "none" }}>{a.okLabel}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   renderAskRun() {
     const a = this.state.askRun;
     if (!a) return null;
@@ -7441,6 +7497,7 @@ ${(r.output || "").slice(0, 2000)}`;
               rel={activeRel}
               onDirtyChange={this.handleDirtyChange}
               onSaved={this.notifySaved}
+              onConfirm={this.askConfirmProp}
               onStatus={this.handleStatus}
               onInlineEdit={this.handleInlineEdit}
               breakpoints={s.breakpoints[activeRel]}
@@ -8816,6 +8873,7 @@ ${(r.output || "").slice(0, 2000)}`;
       case "undoAsk": if (!s.undoAsk?.busy) this.setState({ undoAsk: null }); return;
       case "commitView": this.setState({ commitView: null }); return;
       case "mcpb": if (!s.mcpb?.busy) void this.closeBundle(); return;
+      case "confirmAsk": this.answerConfirm(false); return;   // Esc = 취소
       case "import": this.closeImport(); return;
       case "tour": this.endTour(); return;
     }

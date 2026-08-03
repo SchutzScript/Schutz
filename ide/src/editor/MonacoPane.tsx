@@ -14,6 +14,8 @@ interface Props {
   onDirtyChange?: (rel: string, dirty: boolean) => void;
   /** 디스크에 실제로 쓴 뒤. 확장 훅(file.save)이 여기서 나간다 — dirty=false 는 저장 말고도 생긴다. */
   onSaved?: (rel: string) => void;
+  /** 되돌리기 어려운 일 직전의 확인. window.confirm 은 렌더러를 얼리고 테마도 안 따른다. */
+  onConfirm?: (o: { title: string; body: string; okLabel: string; danger?: boolean }) => Promise<boolean>;
   onStatus?: (info: { rel: string; lang: string; line: number; col: number }) => void;
   /** Ctrl+K 인라인 편집 — 선택 영역과 지시를 App으로 전달 */
   onInlineEdit?: (rel: string, selection: string, instruction: string, range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }) => void;
@@ -62,7 +64,7 @@ export const paneRegistry: { panes: Map<string, PaneApi>; focused: PaneApi | nul
 type LoadState = "loading" | "ready" | "error";
 
 /** 실제 파일을 여는 Monaco 편집 페인 (Electron 전용 — window.schutz 필요) */
-function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint, gitVer }: Props) {
+function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onConfirm, onStatus, onInlineEdit, breakpoints, stoppedLine, onToggleBreakpoint, gitVer }: Props) {
   // React.memo 가 부모의 forceUpdate 를 막으므로 언어는 여기서 직접 구독한다.
   const langTick = useLang();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -154,7 +156,12 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onStatus, onInlineE
         const text = editorRef.current.getValue();
         // 내가 편집하는 사이 디스크가 바뀌었으면 그냥 덮어쓰지 않는다 — 외부 편집이 조용히 사라지던 자리
         const ext = projectModels.externalChangeOf(rel);
-        if (ext !== null && ext !== text && !window.confirm(t("sc1.externalChangedOverwrite", { rel }))) return;
+        if (ext !== null && ext !== text) {
+          const ok = onConfirm
+            ? await onConfirm({ title: t("confirm.overwriteTitle"), body: t("sc1.externalChangedOverwrite", { rel }), okLabel: t("confirm.overwriteOk"), danger: true })
+            : false;   // 확인 창구가 없으면 덮어쓰지 않는다 — 조용히 남의 편집을 지우느니 저장을 미룬다
+          if (!ok) return;
+        }
         try {
           await window.schutz.writeFile(root, rel, text);
           projectModels.markSaved(root, rel, text);
