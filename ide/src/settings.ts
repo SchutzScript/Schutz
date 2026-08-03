@@ -156,3 +156,38 @@ export function getActiveIconTheme(): ActiveIconTheme | null {
 export function setActiveIconTheme(v: ActiveIconTheme | null): void {
   try { v ? localStorage.setItem(ICON_THEME_KEY, JSON.stringify(v)) : localStorage.removeItem(ICON_THEME_KEY); } catch { /* ignore */ }
 }
+
+/* ── "이 파일 실행" 명령 재정의 ────────────────────────────────────────────
+ * 기본 표(engine/runFile.ts)는 gcc·python 처럼 가장 흔한 이름을 쓴다. 그런데
+ * clang 을 쓰는 사람도, python3 여야 하는 환경도 있다 — 그럴 때 기능을 통째로
+ * 못 쓰게 되는 대신 명령만 갈아끼울 수 있어야 한다. 확장자별로 저장한다. */
+const RUN_KEY = "schutz.runCommands";
+
+export function getRunOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(RUN_KEY);
+    if (!raw) return {};
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && v.trim()) out[k.toLowerCase()] = v;
+    return out;
+  } catch { return {}; }
+}
+
+/** 이 파일에 쓸 재정의 명령. 없으면 null(기본표를 쓴다). */
+export function getRunOverride(rel: string): string | null {
+  const base = rel.split(/[\\/]/).pop() ?? "";
+  const i = base.lastIndexOf(".");
+  if (i <= 0) return null;
+  return getRunOverrides()[base.slice(i + 1).toLowerCase()] ?? null;
+}
+
+export function setRunOverride(ext: string, command: string | null): void {
+  try {
+    const cur = getRunOverrides();
+    const k = ext.toLowerCase();
+    if (command && command.trim()) cur[k] = command.trim(); else delete cur[k];
+    localStorage.setItem(RUN_KEY, JSON.stringify(cur));
+  } catch { /* storage 불가 환경 */ }
+}

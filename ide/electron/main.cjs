@@ -796,6 +796,23 @@ const runProcs = new Map(); // id → child
 const RUN_TIMEOUT_MS = 120_000;
 const RUN_OUTPUT_CAP = 20_000; // 모델 컨텍스트를 잡아먹지 않도록
 
+/** 실행에 필요한 도구가 있는지, 그리고 임시 폴더가 어디인지.
+ *  없는 도구를 눌렀을 때 셸 오류를 그대로 토해내는 대신 "gcc 를 못 찾았습니다" 라고
+ *  말하려면 미리 알아야 한다. 실행이 아니라 조회라 승인 게이트를 태우지 않는다. */
+ipcMain.handle("schutz:whichTool", async (_e, name) => {
+  const n = String(name || "").trim();
+  if (!n || !/^[A-Za-z0-9_.+-]+$/.test(n)) return { ok: false };   // 셸로 넘어가는 값이라 좁게 막는다
+  const { execFile } = require("child_process");
+  const win = process.platform === "win32";
+  return await new Promise((res) => {
+    execFile(win ? "where" : "which", [n], { timeout: 4000, windowsHide: true }, (err, out) => {
+      const path = String(out || "").trim().split(String.fromCharCode(10))[0].trim();
+      res(err || !path ? { ok: false } : { ok: true, path });
+    });
+  });
+});
+
+ipcMain.handle("schutz:tmpDir", () => require("os").tmpdir());
 ipcMain.handle("schutz:runCommand", async (e, opts) => {
   const root = String(opts?.cwd || "");
   const command = String(opts?.command || "").trim();

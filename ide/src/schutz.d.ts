@@ -155,6 +155,9 @@ interface SchutzApi {
   } | null>;
   cpRestore(root: string, runId: string, actions: { rel: string; action: "restore" | "delete" }[]):
     Promise<{ done: string[]; failed: { rel: string; why: string }[] }>;
+  /** 실행 도구가 PATH 에 있는가. 없으면 { ok: false }. */
+  whichTool(name: string): Promise<{ ok: boolean; path?: string }>;
+  tmpDir(): Promise<string>;
   cpBeat(root: string, runId: string): Promise<boolean>;
   cpDrop(root: string, runId: string): Promise<boolean>;
   /** 끌어다 놓은 File 의 실제 경로 (Electron 32+ 에서 File.path 가 사라졌다). 못 얻으면 "" */
