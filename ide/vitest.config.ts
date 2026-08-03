@@ -24,6 +24,7 @@ export default defineConfig({
       "src/overlays.test.ts",
       "src/ext/hooks.test.ts",
       "src/theme.test.ts",
+      "src/editor/monacoColors.test.ts",
       "src/opening/**/*.test.ts",
       "src/uiMode.test.ts",
       "src/agentTimeline.test.ts",

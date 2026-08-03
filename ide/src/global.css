@@ -254,3 +254,35 @@ button:disabled { opacity: .55; cursor: default !important; }
 /* 캡처되는 동안 스스로 움직이는 요소가 있으면 스냅샷이 흔들려 툭툭 끊겨 보인다.
    :active-view-transition 은 전환이 도는 동안만 참이라 따로 뒷정리할 게 없다. */
 html:active-view-transition .szMoving { animation-play-state: paused !important; transition: none !important; }
+
+/* ── Monaco 위젯의 모양 ────────────────────────────────────────────────────
+ * 색은 테마 색 키가 정한다(editor/monacoColors.ts). 여기는 색이 아닌 것만 —
+ * 앱의 다른 팝업은 전부 둥근 모서리에 그림자를 쓰는데 에디터 안쪽 위젯만
+ * 각진 상자로 떠서, 색을 맞춰도 여전히 "붙여 넣은 것" 처럼 보였다. */
+.monaco-editor .find-widget,
+.monaco-editor .suggest-widget,
+.monaco-editor .monaco-hover,
+.monaco-editor .parameter-hints-widget,
+.monaco-editor .rename-box,
+.monaco-menu-container {
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-pop) !important;
+  overflow: hidden;
+}
+
+/* 찾기 위젯은 상단에 붙어 있어 위쪽 모서리를 둥글릴 이유가 없다 — 잘린 것처럼 보인다. */
+.monaco-editor .find-widget {
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+
+/* 위젯 안 입력칸도 앱 입력칸과 같은 둥글기로. */
+.monaco-editor .find-widget .monaco-inputbox,
+.monaco-editor .rename-box .monaco-inputbox {
+  border-radius: 6px !important;
+}
+
+/* 자동완성 목록의 고른 줄 — 색은 테마가 정하고, 모서리만 앱의 목록과 맞춘다. */
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row {
+  border-radius: 6px;
+}

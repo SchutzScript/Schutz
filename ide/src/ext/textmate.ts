@@ -5,7 +5,8 @@ import { loadWASM } from "onigasm";
 import { wireTmGrammars } from "monaco-editor-textmate";
 import monaco from "../editor/monacoSetup";
 import onigasmWasmUrl from "onigasm/lib/onigasm.wasm?url";
-import { getThemeId, isLightTheme } from "../theme";
+import { getThemeId, isLightTheme, THEME_TOKENS } from "../theme";
+import { monacoWidgetColors } from "../editor/monacoColors";
 
 let wasmReady: Promise<void> | null = null;
 function ensureWasm(): Promise<void> {
@@ -59,11 +60,25 @@ function tmRules(p: TmPalette): monaco.editor.ITokenThemeRule[] {
   ];
 }
 
-function defineTmTheme() {
+/** TextMate 테마를 (다시) 정의한다.
+ *
+ *  **위젯 색을 같이 넣는 게 핵심이다.** 문법 확장이 하나라도 있으면 에디터는 여기서
+ *  정의한 테마로 갈아탄다 — 그런데 예전엔 색을 넷(본문·줄번호)만 정해서, 찾기 위젯·
+ *  자동완성·우클릭 메뉴가 전부 Monaco 기본값(#252526 / #3C3C3C)으로 떨어졌다.
+ *  monacoSetup 의 내장 테마에 아무리 색을 채워도 소용이 없던 이유가 이것이다.
+ *
+ *  앱 테마가 바뀌면 다시 불러야 한다 — 위젯 색이 지금 테마의 토큰을 따라가야 하므로. */
+export function defineTmTheme(): void {
+  const tok = THEME_TOKENS[getThemeId()] ?? THEME_TOKENS.feldgrau!;
   for (const [id, p] of [["schutz-tm-dark", TM_DARK], ["schutz-tm-light", TM_LIGHT]] as [string, TmPalette][]) {
+    // 어두운 id 에는 어두운 토큰을, 밝은 id 에는 밝은 토큰을 준다. 지금 고른 테마의
+    // 명암이 그 id 와 맞을 때만 그 토큰을 쓰고, 아니면 같은 명암의 기본 테마를 쓴다.
+    const wantLight = id.endsWith("-light");
+    const t = !!tok.light === wantLight ? tok : (wantLight ? THEME_TOKENS.paper! : THEME_TOKENS.feldgrau!);
     monaco.editor.defineTheme(id, {
       base: p.base, inherit: true, rules: tmRules(p),
       colors: {
+        ...monacoWidgetColors(t),
         "editor.background": p.bg, "editor.foreground": p.editorFg,
         "editorLineNumber.foreground": p.lineNum, "editorLineNumber.activeForeground": p.lineNumActive,
       },
