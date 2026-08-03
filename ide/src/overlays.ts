@@ -67,6 +67,9 @@ export const OVERLAYS: OverlaySpec[] = [
   { id: "undoAsk", flag: "undoAsk", z: 230, escapable: true },
   { id: "commitView", flag: "commitView", z: 230, escapable: true },
   { id: "mcpb", flag: "mcpb", z: 232, escapable: true },
+  // 되돌리기 어려운 일 직전의 확인. 다른 모달 위에서 뜰 수 있어야 한다
+  // (설정·검색 안에서도 삭제·치환을 부른다).
+  { id: "confirmAsk", flag: "confirmAsk", z: 233, escapable: true },
 
   { id: "import", flag: "impOpen", z: 240, escapable: true },
   { id: "tour", flag: "tourOpen", z: 245, escapable: true },
