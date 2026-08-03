@@ -68,14 +68,24 @@ The spotlight tour covers the rest, and can be replayed any time from the Help m
 | `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+F` | Search across the project |
 | `Ctrl+T` | Search workspace symbols |
+| `Ctrl+F5` | Run the file you are looking at |
+| `Alt+←` / `Alt+→` | Back and forward through edit locations |
+| `Ctrl+W` / `Ctrl+Shift+T` | Close a tab, reopen the last closed one |
+| `Ctrl+B` | Hide the sidebar |
+| `Ctrl+Shift+M` | Switch between editor and agent mode |
+
+Every binding is editable in Settings → Keybindings, and the list there is generated from the
+same table the app dispatches from, so it cannot drift from what actually happens.
 
 ## Features
 
-**Editor** — Tabbed editing with 1/2/4 split groups, unsaved-changes guards, project-wide search and replace, TypeScript intelligence, a problems panel, command palette, and symbol outline. Additional languages are supported through LSP (Python via pyright, plus a bridge for custom servers) with formatting, code actions, folding, highlights, and inlay hints.
+**Editor** — Tabbed editing with 1/2/4 split groups, unsaved-changes guards, project-wide search and replace, TypeScript intelligence, a problems panel, command palette, and symbol outline. Additional languages are supported through LSP (Python via pyright, plus a bridge for custom servers) with formatting, code actions, folding, highlights, and inlay hints. `Alt+←` and `Alt+→` walk back and forward through where you have been — the position, not just the file.
+
+**Run a file** — `Ctrl+F5` runs whatever you are looking at: Python, C, C++, Rust, Go, Node, TypeScript, Ruby, Java, shell. It runs in a real terminal rather than an output panel, so `input()` works and `Ctrl+C` stops it. A missing toolchain is reported as a missing toolchain instead of a shell error, and the per-language command is editable in Settings.
 
 **AI** — Claude and Codex accounts, chat with file and selection context, inline edit, per-project conversation history, and per-agent stop control. The autonomy policy decides which low-risk changes apply on their own and which wait for review. Every run is checkpointed, so you can undo everything one turn touched — and a file you edited afterwards is reported, never silently overwritten. Subagents defined in `.claude/agents` become delegation targets with their own instructions and tool limits.
 
-**Git** — Stage, commit, and push from the source control panel; side-by-side diff against `HEAD`; gutter change markers; branch and ahead/behind status; blame and stash.
+**Git** — Stage, commit, and push from the source control panel; side-by-side diff against `HEAD`; gutter change markers; branch and ahead/behind status; blame and stash. The file tree colours what changed, so you can see it without opening the panel.
 
 **Terminal** — A real PTY terminal (xterm.js + node-pty) with ANSI color, scrollback, and multiple tabs, alongside a log tab showing live agent activity.
 
@@ -83,7 +93,7 @@ The spotlight tour covers the rest, and can be replayed any time from the Help m
 
 **Debugging** — Breakpoints, call stack, variables, and stepping via DAP (Python/debugpy today).
 
-**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes.
+**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
 
 **Localization** — The full UI ships in Korean, English, German, and Japanese.
 
@@ -112,7 +122,12 @@ npm run dist:linux # Linux build
 
 - **Phase 1** — validate the core experience *(done)*
 - **Phase 2** — deepen renderer-level visual effects at the editor core *(in progress)*
-- **Phase 3** — more providers (Gemini, local/OpenAI-compatible endpoints), codebase indexing, ecosystem
+- **Phase 3** — more providers (Gemini, local/OpenAI-compatible endpoints) and codebase indexing
+
+The ecosystem work that used to sit in Phase 3 has shipped: VS Code extensions, Claude Code
+skills and subagents, MCP servers over stdio and HTTP, and `.mcpb` bundles are all in the app
+today. What is still thin is how much of the VS Code extension API the shim covers — an
+extension that reads the active editor currently gets nothing back.
 
 ## Contributing
 
