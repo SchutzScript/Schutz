@@ -57,13 +57,23 @@ function createWindow(layout) {
 
   const search = "win=" + winId + (layout ? "&layout=" + layout : "");
   const q = "?" + search;
-  const loadDist = () =>
-    win.loadFile(path.join(__dirname, "..", "dist", "index.html"), { search });
+  // 무엇을 실었는지 남긴다. 개발 중에 dev 서버가 떠 있으면 `electron .` 은 dist 가 아니라
+  // 그쪽을 문다 — 조용히 일어나서, 빌드본을 보고 있다고 착각한 채 개발 전용 동작
+  // (StrictMode 이중 마운트 등)을 배포본 문제로 오진하기 딱 좋다.
+  // did-fail-load 와 loadURL 의 catch 가 둘 다 불려서 dist 를 두 번 실었다.
+  let distLoaded = false;
+  const loadDist = () => {
+    if (distLoaded) return;
+    distLoaded = true;
+    console.log("[schutz] renderer: dist");
+    return win.loadFile(path.join(__dirname, "..", "dist", "index.html"), { search });
+  };
   if (isDev) {
     // dev 서버가 죽어 있으면 빈 창 대신 빌드본으로 폴백
     win.webContents.once("did-fail-load", (_e, code) => {
       if (code === -102 /* CONNECTION_REFUSED */ || code === -105 || code === -106) void loadDist();
     });
+    console.log("[schutz] renderer: " + DEV_URL + " (dev server)");
     win.loadURL(DEV_URL + q).catch(() => void loadDist());
   } else {
     void loadDist();
