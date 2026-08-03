@@ -30,6 +30,8 @@ import {
 } from "./engine/checkpoints";
 import { resolveRenameTarget, isMove } from "./engine/movePath";
 import { applyProposal } from "./engine/editApply";
+import { planRun, langFor, LANGS as RUN_LANGS } from "./engine/runFile";
+import { getRunOverride, getRunOverrides, setRunOverride } from "./settings";
 import { emptyNav, push as navPush, back as navBack, forward as navForward, current as navCurrent, dropMissing as navDropMissing, type NavState } from "./engine/navHistory";
 import { shouldProbeQuota } from "./engine/quotaPoll";
 import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction } from "./overlays";
@@ -1288,6 +1290,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     const cmds: Command[] = [
       { id: "newFile", label: t("sc1.cmd_new_file"), hint: kb("file.new"), run: () => void this.newFileAt("") },
       { id: "save", label: t("sc1.cmd_save"), hint: kb("file.save"), run: () => void this.saveActive() },
+      { id: "runFile", label: t("runfile.cmdRun"), hint: kb("file.run"), run: () => void this.runActiveFile() },
       { id: "saveAll", label: t("sc1.cmd_save_all"), hint: kb("file.saveAll"), run: () => void this.saveAll() },
       { id: "settings", label: t("sc1.cmd_open_settings"), hint: kb("settings.open"), run: () => this.openO({ settingsOpen: true }) },
       { id: "term", label: t("sc1.cmd_toggle_terminal"), hint: kb("terminal.toggle"), run: () => this.toggleTerm() },
@@ -1574,6 +1577,46 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         .map(([name, cmd]) => ({ name, cmd: String(cmd) }));
       this.setState({ tasks });
     } catch { this.setState({ tasks: [] }); }
+  }
+
+  /** 지금 열려 있는 파일 하나를 실행한다.
+   *
+   *  출력 패널이 아니라 **진짜 터미널**에서 돌린다. Code Runner 류가 출력 채널을 쓰다가
+   *  stdin 이 없어 input() 이 멈추는 게 가장 흔한 불만인데, 여기서는 작업 실행이 쓰는
+   *  그 PTY 를 그대로 쓰므로 입력·색·Ctrl+C 가 공짜로 따라온다.
+   *
+   *  자동 실행은 없다 — 남이 준 저장소를 열어보는 일이 흔하고, 키 하나로 임의 코드가
+   *  도는 것과 폴더를 여는 것만으로 도는 것은 전혀 다른 이야기다. */
+  async runActiveFile() {
+    const ws = this.state.workspace;
+    const rel = this.state.active[this._focusSlot];
+    if (!ws || !window.schutz || !rel || this.parseDiffKey(rel) || this.parsePreviewKey(rel)) {
+      this.toast("info", t("runfile.noFile")); return;
+    }
+    const lang = langFor(rel);
+    if (!lang) { this.toast("info", t("runfile.unsupported", { ext: rel.split(".").pop() ?? "" })); return; }
+
+    // 저장하지 않은 채 실행하면 방금 고친 게 아니라 옛 파일이 돈다 — 조용히 저장한다.
+    if (this.isDirtyRel(rel)) {
+      this.toast("info", t("runfile.saveFirst"));
+      const pane = paneRegistry.panes.get(rel);
+      if (pane) await pane.save(); else await this.saveAllDirtyModels(true);
+    }
+
+    // 없는 도구를 눌렀을 때 셸 오류를 그대로 토해내지 않는다.
+    try {
+      const found = await window.schutz.whichTool(lang.requires);
+      if (!found.ok) { this.toast("error", t("runfile.missingTool", { tool: lang.requires })); return; }
+    } catch { /* 조회 실패는 막지 않는다 — 실행해 보고 셸이 말하게 둔다 */ }
+
+    const tmp = await window.schutz.tmpDir().catch(() => "");
+    // 루트가 역슬래시를 쓰면(윈도) 이어 붙이는 쪽도 맞춘다 — copyPath 와 같은 규칙이다.
+    const win = ws.root.includes("\\");
+    const abs = win ? ws.root.replace(/[\\/]+$/, "") + "\\" + rel.replace(/\//g, "\\")
+                    : ws.root.replace(/\/+$/, "") + "/" + rel;
+    const r = planRun({ absFile: abs, platform: win ? "win32" : "posix", tmpDir: tmp, override: getRunOverride(rel) });
+    if (r.ok === false) { this.toast("info", t("runfile.unsupported", { ext: r.ext })); return; }
+    this.addTerm(r.plan.command);
   }
 
   /** 작업 실행 — 새 터미널에서 `npm run <name>`. 터미널에 남으므로 출력·중지가 그대로 된다. */
@@ -4809,6 +4852,8 @@ ${(r.output || "").slice(0, 2000)}`;
       // 위치 기록 이동. 에디터 안에서도 동작해야 한다 — Monaco 는 Alt+←/→ 를 안 쓴다.
       case "nav.back": prevent(); this.navGo(-1); return;
       case "nav.forward": prevent(); this.navGo(1); return;
+
+      case "file.run": prevent(); void this.runActiveFile(); return;
 
       // 글자 크기 — 설정 모달을 열지 않고. wrap·minimap 팔레트 명령과 같은 경로다.
       case "editor.fontUp": prevent(); this.bumpFontSize(1); return;
@@ -10646,6 +10691,23 @@ ${(r.output || "").slice(0, 2000)}`;
               </div>
             </div>
             <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", lineHeight: 1.6 }}>{t("settings.editorNote")}</div>
+          </div>
+
+          {/* ── 실행 명령 ── 기본표는 gcc·python 같은 가장 흔한 이름을 쓴다. clang 을 쓰거나
+                python3 여야 하는 환경에서 기능을 통째로 못 쓰게 되는 대신 여기서 갈아끼운다. */}
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--fg-sub)", marginBottom: 4 }}>{t("runfile.settingsTitle")}</div>
+            <div style={{ fontSize: 10.5, color: "var(--fg-dim2)", lineHeight: 1.6, marginBottom: 8 }}>{t("runfile.settingsNote")}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 190, overflowY: "auto" }}>
+              {RUN_LANGS.map(l => (
+                <div key={l.ext[0]} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ flex: "none", minWidth: 62, whiteSpace: "nowrap", fontSize: 12, color: "var(--fg-sub)" }}>{l.label}</span>
+                  <input spellCheck={false} defaultValue={getRunOverrides()[l.ext[0]] ?? ""} placeholder={l.template}
+                    onBlur={e => { setRunOverride(l.ext[0], e.target.value); this.forceUpdate(); }}
+                    style={{ flex: 1, minWidth: 0, height: 26, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 6, padding: "0 9px", color: "var(--fg)", fontFamily: MONO, fontSize: 11, outline: "none" }} />
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* ── 테마 ── */}
