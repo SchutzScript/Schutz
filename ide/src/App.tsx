@@ -5391,14 +5391,27 @@ ${(r.output || "").slice(0, 2000)}`;
   private _lastTabsRef: string[][] | null = null;
   private _lastActiveRef: string[] | null = null;
   private _lastCollapsedRef: Record<string, boolean> | null = null;
-  /** 렌더 커밋 직전의 채팅 스크롤 상태 — 하단 추적 판정은 반드시 갱신 전 값으로 해야 한다 */
-  getSnapshotBeforeUpdate(): { chatAtBottom: boolean } | null {
+  /** 렌더 커밋 직전의 채팅 스크롤 상태 — 하단 추적 판정은 반드시 갱신 전 값으로 해야 한다.
+   *
+   *  앵커(화면 맨 위에 걸친 메시지)도 같이 잡는다. 모드를 바꾸면 채팅이 통째로 다시
+   *  그려진다 — 여백 16px↔28px, 간격 10↔24, 폭도 사이드바↔52rem 중앙 정렬이라
+   *  scrollHeight 가 달라진다. 픽셀 scrollTop 은 그 사이에서 아무 뜻이 없다. */
+  getSnapshotBeforeUpdate(): { chatAtBottom: boolean; anchorId: string | null; anchorTop: number } | null {
     const el = this._chat;
     if (!el) return null;
-    return { chatAtBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 60 };
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    let anchorId: string | null = null, anchorTop = 0;
+    if (!atBottom) {
+      const top = el.getBoundingClientRect().top;
+      for (const n of Array.from(el.querySelectorAll<HTMLElement>("[data-mid]"))) {
+        const d = n.getBoundingClientRect().top - top;
+        if (d >= -n.offsetHeight) { anchorId = n.dataset.mid ?? null; anchorTop = d; break; }
+      }
+    }
+    return { chatAtBottom: atBottom, anchorId, anchorTop };
   }
 
-  componentDidUpdate(_pp?: any, _ps?: any, snap?: { chatAtBottom: boolean } | null) {
+  componentDidUpdate(_pp?: any, _ps?: any, snap?: { chatAtBottom: boolean; anchorId: string | null; anchorTop: number } | null) {
     // 도움말 → 오프닝 다시 보기는 해시만 바꾼다. App 은 재마운트되지 않으므로
     // componentDidMount 가 다시 돌지 않는다 — prop 이 켜지는 순간을 여기서 잡는다.
     if (this.props.playOpening && !_pp?.playOpening && this.state.openingPhase === "off") {
@@ -5434,14 +5447,39 @@ ${(r.output || "").slice(0, 2000)}`;
       // 지금 탭에 보이는 것만 기준으로 — 안 보이는 탭이 자라도 끌어내리지 않는다.
       // 그리고 사용자가 위로 올려 읽는 중이면 건드리지 않는다(예전엔 매 토큰 하단으로 잡아당겼다).
       const el = this._chat;
+      // 모드가 바뀌면 읽던 자리를 되돌린다. 서명(sig)에 uiMode 가 없어서 "바뀐 게 없다" 로
+      // 읽히는데, 실제로는 채팅이 통째로 다시 그려져 픽셀 위치가 무의미해진다 — 그래서
+      // 아무 보정도 없이 엉뚱한 자리에 떨어졌다. switchChatTab 이 탭에 대해 쓰는 규칙과 같다.
+      //
+      // 전환은 View Transition 안에서 일어나 이 시점의 레이아웃은 아직 앉지 않았다.
+      // 지금 한 번, 다음 프레임에 한 번 더 맞춘다(상대 이동이라 두 번 불러도 수렴한다).
+      if (_ps && _ps.uiMode !== this.state.uiMode && snap) {
+        this.restoreChatScroll(snap);
+        requestAnimationFrame(() => this.restoreChatScroll(snap));
+      }
       // text 가 없는 손상된 항목이 하나라도 있으면 여기서 터져 화면 전체가 하얘졌다 — 방어
-      const sig = this.state.chatTab + "|" + this.visibleMessages().map(m => (m.text ?? "").length).join(",");
+      const sig = this.state.uiMode + "|" + this.state.chatTab + "|" + this.visibleMessages().map(m => (m.text ?? "").length).join(",");
       if (sig !== this._chatSig) {
+        const modeOnly = !!_ps && _ps.uiMode !== this.state.uiMode;
         this._chatSig = sig;
-        if (snap ? snap.chatAtBottom : true) el.scrollTop = el.scrollHeight;
+        // 모드 전환은 위에서 이미 자리를 잡았다 — 여기서 또 하단으로 끌지 않는다.
+        if (!modeOnly && (snap ? snap.chatAtBottom : true)) el.scrollTop = el.scrollHeight;
       }
       this.onChatScroll(); // 버튼 노출은 스크롤 위치 하나로 판단 (도착·스크롤 공통)
     }
+  }
+
+  /** 모드 전환 전의 읽던 자리로 되돌린다. 하단에 있었으면 하단, 아니면 보고 있던
+   *  메시지를 같은 높이에. */
+  private restoreChatScroll(snap: { chatAtBottom: boolean; anchorId: string | null; anchorTop: number }) {
+    const el = this._chat;
+    if (!el) return;
+    if (snap.chatAtBottom) { el.scrollTop = el.scrollHeight; return; }
+    if (!snap.anchorId) return;
+    const n = el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(snap.anchorId)}"]`);
+    // offsetTop 은 가장 가까운 positioned 조상 기준이라 스크롤러와 어긋난다 —
+    // 실제 좌표 차이로 옮긴다(레이아웃이 통째로 바뀐 뒤라 이게 유일하게 맞다).
+    if (n) el.scrollTop += (n.getBoundingClientRect().top - el.getBoundingClientRect().top) - snap.anchorTop;
   }
 
   /** 신택스 하이라이트 (프로토타입 hl 포팅) */
@@ -6750,7 +6788,7 @@ ${(r.output || "").slice(0, 2000)}`;
   private renderAgentMsg(m: ChatMsg) {
     if (m.role === "user") {
       return (
-        <div key={m.id} className="sz-in" style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div key={m.id} data-mid={m.id} className="sz-in" style={{ display: "flex", justifyContent: "flex-end" }}>
           <div style={{
             maxWidth: "84%", padding: "12px 16px", borderRadius: 16,
             background: "var(--w05)", border: "1px solid var(--w06)",
@@ -6761,7 +6799,7 @@ ${(r.output || "").slice(0, 2000)}`;
       );
     }
     return (
-      <div key={m.id} className="sz-in sz-msg" style={{ position: "relative", paddingRight: 26 }}>
+      <div key={m.id} data-mid={m.id} className="sz-in sz-msg" style={{ position: "relative", paddingRight: 26 }}>
         {/* 여러 에이전트가 도는 앱이라 이름은 남긴다 — 다만 아주 조용히, 문단 위에 얹는다 */}
         {m.who && <div style={{ fontSize: 11.5, fontWeight: 600, color: this.chatAgentColor(m.agent), marginBottom: 6 }}>{m.who}</div>}
         <div style={{
@@ -7121,7 +7159,7 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 대화 한 줄 — 두 모드가 같은 것을 그린다. 에이전트 모드는 폭만 달라진다. */
   private renderChatMsg(m: ChatMsg) {
     return (
-          <div key={m.id} className="sz-in sz-msg" style={{ display: "flex", gap: 8, position: "relative" }}>
+          <div key={m.id} data-mid={m.id} className="sz-in sz-msg" style={{ display: "flex", gap: 8, position: "relative" }}>
             <span style={{ flex: "none", width: 11, fontSize: 9, lineHeight: 2, color: m.role === "user" ? "var(--accent)" : "transparent" }}>{m.role === "user" ? "◆" : ""}</span>
             {/* 복사 — 긴 답변을 드래그로 긁어내는 건 사실상 불가능했다. hover 시에만 나타난다 */}
             <button className="sz-msg-copy hv05" title={t("chat.copyMsg")}
@@ -7161,6 +7199,17 @@ ${(r.output || "").slice(0, 2000)}`;
           )}
         </div>
         {!ag && this.renderChatTabs()}
+        {/* 에이전트 모드는 탭을 숨기지만 필터는 그대로 걸려 있다(renderAgentRows 도
+            visibleMessages 를 쓴다). 표시가 없으면 대화 절반이 사라진 걸 모른 채
+            "왜 답이 없지" 가 된다 — 걸려 있을 때만 한 줄로 알린다. */}
+        {ag && s.chatTab !== "all" && (
+          <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--fg-dim)",
+            padding: "10px max(24px, calc((100% - 52rem) / 2)) 0" }}>
+            <span>{t("mode.filtered", { who: this.agDef(s.chatTab).name })}</span>
+            <button className="hv05" onClick={() => this.switchChatTab("all")}
+              style={{ height: 20, padding: "0 8px", fontSize: 10.5, fontFamily: "inherit", cursor: "pointer", borderRadius: 6, color: "var(--fg-sub)", background: "transparent", border: "1px solid var(--w10)" }}>{t("mode.filteredClear")}</button>
+          </div>
+        )}
         <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex" }}>
         {s.chatAway && (
           <button className="hv05 sz-in" onClick={() => this.jumpChatToLatest()}
