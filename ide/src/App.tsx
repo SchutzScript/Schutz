@@ -5456,6 +5456,31 @@ ${(r.output || "").slice(0, 2000)}`;
       prompt: req => this.askExtension(req),
       statusSet: item => this.setState(st => ({ extStatus: sbUpsert(st.extStatus, { ...item, seq: this._sbSeq++ }) })),
       statusRemove: id => this.setState(st => ({ extStatus: sbRemove(st.extStatus, id) })),
+      // document.save() — 앱의 저장 경로를 그대로 탄다(외부 변경 확인·기준선·저장 사건).
+      saveFile: async rel => {
+        const ws = this.state.workspace;
+        const m = projectModels.getByRel(rel);
+        if (!ws || !window.schutz || !m) return false;
+        const content = m.getValue();
+        const ext = projectModels.externalChangeOf(rel);
+        // 그 사이 디스크가 바뀌었으면 조용히 덮지 않는다. 확장에는 "못 했다" 로 답한다 —
+        // 사람이 없는 자리에서 남의 편집을 지우는 것보다 낫다.
+        if (ext !== null && ext !== content) return false;
+        try {
+          await window.schutz.writeFile(ws.root, rel, content);
+          projectModels.markSaved(ws.root, rel, content);
+          this.notifySaved(rel);
+          this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
+          return true;
+        } catch { return false; }
+      },
+      // openTextDocument — 아직 안 연 파일도 읽어 준다. 탭은 열지 않는다.
+      readFile: async rel => {
+        const ws = this.state.workspace;
+        if (!ws || !window.schutz) return null;
+        try { return await window.schutz.readFile(ws.root, rel); } catch { return null; }
+      },
+      revealInView: (viewId, element, expand) => this.revealExtViewRow(viewId, element, expand),
       postToView: (viewId, msg) => {
         const f = this._viewFrames.get(viewId);
         try { f?.contentWindow?.postMessage({ __schutzToView: true, data: msg }, "*"); } catch { /* 사라진 프레임 */ }
@@ -9018,6 +9043,43 @@ ${(r.output || "").slice(0, 2000)}`;
         })}
       </div>
     );
+  }
+
+  /** TreeView.reveal — 확장이 가리킨 줄을 찾아 펼쳐 보여 준다.
+   *
+   *  그려 둔 줄만 뒤지면 안 된다. reveal 은 대개 **아직 안 보이는** 항목을 보이게 하려고
+   *  부르는 것이라, 접힌 가지 안에 있는 게 정상이다. 그래서 프로바이더에게 직접 물어
+   *  가지를 타고 내려가며 찾는다. 못 찾으면 조용히 성공한 척하지 않고 거절한다. */
+  private async revealExtViewRow(viewId: string, element: any, expand: boolean): Promise<void> {
+    const v = extHost.listExtViews().find(x => x.id === viewId);
+    if (!v || v.kind !== "tree") throw new Error("TreeView.reveal: 트리 뷰가 아닙니다");
+
+    const path = await (async function find(parent: any, at: number[], depth: number): Promise<number[] | null> {
+      if (depth > 12) return null;   // 순환 구조를 주는 확장이 있다
+      const kids = await v.children!(parent);
+      for (let i = 0; i < kids.length; i++) {
+        const here = [...at, i];
+        if (kids[i] === element) return here;
+        const row = await v.item!(kids[i]);
+        if (row.collapse === "none") continue;
+        const deeper = await find(kids[i], here, depth + 1);
+        if (deeper) return deeper;
+      }
+      return null;
+    })(undefined, [], 0);
+
+    if (!path) throw new Error("TreeView.reveal: 트리에 없는 항목입니다");
+
+    this.setState(prev => {
+      const open = { ...prev.extViewOpen };
+      // 조상을 전부 편다. 자기 자신은 expand 를 준 경우에만.
+      for (let i = 1; i < path.length; i++) open[rowKey(viewId, path.slice(0, i))] = true;
+      if (expand) open[rowKey(viewId, path)] = true;
+      return { leftTab: "extview" as const, extViewOpen: open };
+    });
+    // setState 가 반영된 뒤에 다시 그려야 펼친 상태가 반영된다.
+    await new Promise<void>(r => this.setState({}, r));
+    await this.refreshExtView(viewId);
   }
 
   /** 트리 줄이 달고 있는 명령을 돌린다.
