@@ -161,7 +161,7 @@ import {
   BINDINGS, buildMap, chordOf, chordFor, conflictsOf, displayChord,
   getOverrides, isModifierOnly, setOverride, resetOverrides, type ActionId,
 } from "./keymap";
-import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos } from "./tour";
+import { TOUR_STEPS, anchorRect, cardPos, visibleSteps, visiblePos, trackStartIndex, otherMode } from "./tour";
 import { TourFigure, type FigureRegion } from "./tourFigure";
 import { Opening } from "./opening/Opening";
 import {
@@ -476,6 +476,8 @@ interface S {
   mcpGen: null | { mode: "cli" | "project" | "openapi" | "generic"; input: string; status: string; };
   /** 사용법 스포트라이트 투어 */
   tourOpen: boolean;
+  /** 투어가 이미 다른 모드 트랙으로 건너갔는가. 한 번만 건너간다. */
+  tourCrossed: boolean;
   /** 오프닝 오버레이 국면. off=안 뜸, intro=마크·선언·세팅, outro=마무리 */
   openingPhase: "off" | "intro" | "outro";
   /** 데모 진행 중 하단 자막 키. null 이면 자막 없음 */
@@ -705,7 +707,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     termReal: "", termInput: "", settingsOpen: false, aboutOpen: false, usageOpen: false, keysOpen: false, commandsOpen: false, agentCommands: [], mcpOpen: false, mcpServers: [], mcpDiscovered: [], mcpBusy: "", engineStatus: {}, skills: [], subagents: [],
     pluginOpen: false, plugins: [], pluginQuery: "", pluginCat: "", pluginBusy: "",
     cloudOpen: false, cloudTasks: [], cloudPrompt: "", cloudBusy: "",
-    engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
+    engineOpen: false, engineShot: null, engineTree: "", engineViewBusy: "", engineViewErr: "", mcpJson: "", mcpGen: null, tourOpen: false, tourCrossed: false, tourStep: 0, openingPhase: "off", demoCaption: null, demoRunning: false, closing: [], closingTabs: [], testMsg: {},
     layout: (() => {
       const m = /[?&]layout=(\d)/.exec(window.location.search);
       if (m) { const v = parseInt(m[1], 10); return v === 2 ? 2 : v === 4 ? 4 : 1; }
@@ -9977,6 +9979,7 @@ ${(r.output || "").slice(0, 2000)}`;
         const rel = this.allOpen()[0] ?? this.state.proposals[this.state.proposals.length - 1]?.rel;
         if (rel) this.openSheet(rel);
       },
+      setMode: m => this.toggleUiMode(m),
     };
   }
 
@@ -10003,6 +10006,24 @@ ${(r.output || "").slice(0, 2000)}`;
         try { localStorage.setItem("schutz.tourStep", step.id); } catch { /* */ }
       });
     });
+  }
+
+  /** 다른 모드의 트랙으로 건너간다.
+   *
+   *  두 트랙은 when 으로 갈려 있어서 한 모드에 서 있으면 다른 쪽은 **영영 안 보인다.**
+   *  에디터 모드로 첫 실행을 마친 사람은 에이전트 트랙 여덟 단계를 한 번도 못 본다 —
+   *  고를 수 있게 해놓고 고르지 않은 쪽을 못 배우게 두는 셈이다.
+   *
+   *  한 번만 건너간다. 안 그러면 모드 단계에서 서로를 가리키며 끝나지 않는다. */
+  private tourCrossTracks() {
+    const to = otherMode(this.state.uiMode);
+    const at = trackStartIndex(to);
+    if (at < 0) return;
+    this.setState({ tourCrossed: true });
+    this.toggleUiMode(to);
+    // 모드 전환은 View Transition 을 타서 레이아웃이 곧바로 자리 잡지 않는다.
+    // 바로 다음 단계로 가면 앵커가 아직 없어 조용히 건너뛴다.
+    this.qt(() => this.tourStepTo(at), 700);
   }
 
   /** 완주(또는 사용자가 그만 보겠다고 닫음) — 다시 자동으로 뜨지 않는다. */
@@ -10073,6 +10094,14 @@ ${(r.output || "").slice(0, 2000)}`;
               </span>
             </div>
             <div style={{ flex: 1 }} />
+            {/* 모드 단계가 두 트랙을 잇는 다리다. 여기서 건너갈 수 없으면 "다른 모양도
+                있다" 는 말만 듣고 끝난다 — 정작 그쪽 여덟 단계는 못 본 채로. */}
+            {step.id === "mode" && !this.state.tourCrossed && (
+              <button className="hv08" onClick={() => this.tourCrossTracks()}
+                style={{ ...tourBtn, background: "transparent", border: "1px solid var(--accent)", color: "var(--accent-hi)", marginRight: "auto" }}>
+                {t(this.state.uiMode === "editor" ? "tour.crossToAgent" : "tour.crossToEditor")}
+              </button>
+            )}
             <button className="hvDim" onClick={() => this.endTour()} style={{ background: "transparent", border: "none", color: "var(--fg-dim)", fontSize: 11.5, cursor: "pointer", padding: "5px 8px", borderRadius: 6, fontFamily: SUIT }}>{t("common.skip")}</button>
             {cur > 0 && <button className="hv08" onClick={() => this.tourStepTo(cur - 1, -1)} style={{ ...tourBtn, background: "transparent", border: "1px solid var(--w10)", color: "var(--fg-sub)" }}>{t("common.prev")}</button>}
             <button className="hvAccent" onClick={() => this.tourStepTo(cur + 1)} style={{ ...tourBtn, background: "var(--accent)", color: "var(--on-accent)", border: "none", fontWeight: 700 }}>{isLast ? t("common.done") : t("common.next")}</button>
