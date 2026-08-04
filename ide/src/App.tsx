@@ -38,6 +38,7 @@ import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction, overlayZ } from ".
 import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } from "./ext/prompt";
 import { upsert as sbUpsert, remove as sbRemove, ordered as sbOrdered, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./ext/statusBar";
 import { classify as fsClassify } from "./ext/fsWatch";
+import { rowKey, webviewDoc, type TreeRow } from "./ext/views";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
   rosterLines, personaSystem, type SubagentDef,
@@ -269,7 +270,7 @@ interface S {
   closingTabs: string[];
   /** 슬롯별 활성 rel ("" = 빈 슬롯). 길이 = layout */
   active: string[];
-  leftTab: "flow" | "tree" | "git" | "debug" | "ext";
+  leftTab: "flow" | "tree" | "git" | "debug" | "ext" | "extview";
   /** 확장: 로드된 커맨드 · 관리 목록 · 기여 패널 */
   extCommands: import("./ext/extHost").ExtCommand[];
   extList: import("./ext/extHost").ExtInfo[];
@@ -343,6 +344,14 @@ interface S {
   } | null;
   /** 확장이 상태바에 올린 항목. 예전엔 셰임이 받아 두기만 하고 읽는 곳이 없었다. */
   extStatus: StatusItem[];
+  /** 확장이 붙인 사이드바 뷰가 바뀔 때마다 올라가는 번호 — 목록은 셰임이 들고 있다. */
+  extViewVer: number;
+  /** 펼쳐 둔 트리 줄(rowKey). 다시 그려도 접힘이 풀리지 않게 상태로 둔다. */
+  extViewOpen: Record<string, boolean>;
+  /** 그려 둔 트리 줄들. 확장에 물어보는 일이 비동기라 결과를 여기에 쌓는다. */
+  extViewRows: Record<string, { rows: { key: string; depth: number; row: TreeRow; el: any; hasKids: boolean }[]; err?: string }>;
+  /** 웹뷰가 돌려준 HTML. */
+  extViewHtml: Record<string, string>;
   /** 확장이 사용자에게 던진 물음. 셰임의 showQuickPick/showInputBox/showXMessage 가
    *  여기로 온다 — 예전엔 묻지도 않고 undefined(=취소)를 돌려줬다. */
   extAsk: PromptReq | null;
@@ -687,7 +696,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
-    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, extStatus: [], extAsk: null, extAskText: "", extAskSel: 0, extAskPicked: [], extAskErr: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, extStatus: [], extViewVer: 0, extViewOpen: {}, extViewRows: {}, extViewHtml: {}, extAsk: null, extAskText: "", extAskSel: 0, extAskPicked: [], extAskErr: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], reviewFindings: [], reviewBusy: false, paneVer: {},
@@ -4831,6 +4840,9 @@ ${(r.output || "").slice(0, 2000)}`;
       void lspClient.initLsp().then(() => { registerLspProviders(); return lspClient.syncOpenModels(); });
       // 확장 로드 (커맨드 기여 → 팔레트)
       void this.reloadExtensions();
+      // 확장이 뷰를 붙이거나 뗄 때 사이드바를 다시 맞춘다.
+      this._viewsOff = extHost.onExtViewsChanged(this.syncExtViews);
+      window.addEventListener("message", this.onViewMessage);
       // MCP 서버 시작 (Schutz 호스트) → 도구를 에이전트 루프에 노출
       mcp.setMcpChangeHandler(() => this.forceUpdate());
       void mcp.startAll();
@@ -4880,6 +4892,10 @@ ${(r.output || "").slice(0, 2000)}`;
     }
   }
   componentWillUnmount() {
+    this._viewsOff?.(); this._viewsOff = null;
+    for (const off of this._viewChangeOff.values()) off();
+    this._viewChangeOff.clear();
+    window.removeEventListener("message", this.onViewMessage);
     window.removeEventListener("dragover", this.onWindowDragOver);
     window.removeEventListener("drop", this.onWindowDrop, true);
     if (this._engineWatch) { clearTimeout(this._engineWatch); this._engineWatch = 0; }
@@ -5440,6 +5456,10 @@ ${(r.output || "").slice(0, 2000)}`;
       prompt: req => this.askExtension(req),
       statusSet: item => this.setState(st => ({ extStatus: sbUpsert(st.extStatus, { ...item, seq: this._sbSeq++ }) })),
       statusRemove: id => this.setState(st => ({ extStatus: sbRemove(st.extStatus, id) })),
+      postToView: (viewId, msg) => {
+        const f = this._viewFrames.get(viewId);
+        try { f?.contentWindow?.postMessage({ __schutzToView: true, data: msg }, "*"); } catch { /* 사라진 프레임 */ }
+      },
     });
     // VS Code 확장(선언형) — 테마·스니펫·언어설정 적용
     const vres = await vscodeExt.loadVscodeExtensions();
@@ -6067,6 +6087,9 @@ ${(r.output || "").slice(0, 2000)}`;
             <button className="hv07" title={t("sc4.railExt")} onClick={() => { this.setState({ leftTab: "ext" }); void this.reloadExtensions(); if (!this.state.extResults.length) void this.extMarketSearch(""); }} style={{ ...railBtn, background: s.leftTab === "ext" ? "rgba(143,168,147,.16)" : "transparent" }}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={s.leftTab === "ext" ? "var(--accent-hi)" : "#6E776F"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h6v3a2 2 0 1 0 4 0V3h2v6h-3a2 2 0 1 0 0 4h3v6h-6v-3a2 2 0 1 0-4 0v3H3v-6h3a2 2 0 1 0 0-4H3V3h6z" /></svg>
             </button>
+            <button className="hv07" title={t("extview.rail")} onClick={() => { this.setState({ leftTab: "extview" }); this.syncExtViews(); }} style={{ ...railBtn, background: s.leftTab === "extview" ? "rgba(143,168,147,.16)" : "transparent" }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={s.leftTab === "extview" ? "var(--accent-hi)" : "#6E776F"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M12 9h6M12 13h4" /></svg>
+            </button>
             <div style={{ width: 22, height: 1, background: "var(--w07)", margin: "4px 0" }} />
             <button className="hv07" title={t("sc4.railTerminal")} onClick={() => this.toggleTerm()} style={{ ...railBtn, background: s.termOpen ? "rgba(143,168,147,.16)" : "transparent" }}>
               <TermIcon />
@@ -6079,14 +6102,14 @@ ${(r.output || "").slice(0, 2000)}`;
           <div ref={el => { this._leftCol = el; }}
             // leftW 0 = 접힘(Ctrl+B). overflow 를 막지 않으면 폭이 0 이어도 내용이 삐져나온다.
             style={{ flex: ag ? 1 : "none", width: ag ? "auto" : s.leftW, minWidth: 0, overflow: "hidden", display: "flex", flexDirection: "column", borderRight: ag ? "none" : "1px solid var(--w06)", background: ag ? "var(--bg-root)" : "var(--bg-panel)" }}>
-            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", ...gone }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : t("panel.tree")}</div>
+            <div style={{ flex: "none", padding: "10px 16px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: 1.5, color: "var(--fg-dim)", ...gone }}>{s.leftTab === "flow" ? t("panel.flow") : s.leftTab === "git" ? t("panel.git") : s.leftTab === "debug" ? t("panel.debug") : s.leftTab === "ext" ? t("panel.ext") : s.leftTab === "extview" ? t("extview.panel") : t("panel.tree")}</div>
 
             {/* 키에 워크스페이스를 포함 — 탭 전환뿐 아니라 프로젝트 전환 때도 페이드가 재생된다(전에는 프로젝트를 바꿔도 내용만 툭 갈렸다) */}
             <div data-tour="left-panel" key={s.leftTab + "|" + (s.workspace?.root ?? "")} className="sz-in" style={{ flex: 1, minHeight: ag ? 0 : TREE_MIN_H, display: "flex", flexDirection: "column", ...gone }}>
               {/* 에이전트 모드에선 이 칸이 display:none 이다 — 그런데도 매 렌더마다 트리·플로우를
                   통째로 다시 만들면(큰 저장소는 수천 행) 보이지도 않는 것에 프레임을 태운다.
                   숨겨져 있으면 아예 그리지 않는다. 모드를 되돌리면 그때 다시 그린다. */}
-              {!ag && (s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : this.renderTree())}
+              {!ag && (s.leftTab === "flow" ? this.renderFlow() : s.leftTab === "git" ? this.renderGit() : s.leftTab === "debug" ? this.renderDebug() : s.leftTab === "ext" ? this.renderExt() : s.leftTab === "extview" ? this.renderExtViews() : this.renderTree())}
             </div>
             {/* 트리↔대화 세로 리사이즈 핸들 */}
             <div onMouseDown={e => this.startChatResize(e)} title={t("sc4.resizeHandleV")}
@@ -8853,6 +8876,157 @@ ${(r.output || "").slice(0, 2000)}`;
         </div>
       </div>
     );
+  }
+
+  // ── 확장이 붙인 사이드바 뷰 ──
+  /** 웹뷰 iframe 들. 확장이 postMessage 로 말을 걸면 이쪽으로 넘긴다. */
+  private _viewFrames = new Map<string, HTMLIFrameElement>();
+  private _viewsOff: (() => void) | null = null;
+  /** 트리 프로바이더가 "바뀌었다" 고 알릴 때 떼어 낼 구독들. */
+  private _viewChangeOff = new Map<string, () => void>();
+
+  /** 웹뷰 → 확장. iframe 안에서 acquireVsCodeApi().postMessage 가 보낸 것이다. */
+  private onViewMessage = (e: MessageEvent) => {
+    const d: any = e.data;
+    if (!d || typeof d !== "object" || !d.__schutzView) return;
+    extHost.listExtViews().find(v => v.id === d.__schutzView)?.post?.(d.data);
+  };
+
+  /** 뷰 하나를 확장에 물어 다시 그린다.
+   *
+   *  트리는 펼쳐 둔 줄만 자식을 물어본다. 전부 미리 물어보면 파일 트리를 내주는
+   *  확장에서 프로젝트 전체를 한 번에 읽게 된다. */
+  private async refreshExtView(id: string) {
+    const v = extHost.listExtViews().find(x => x.id === id);
+    if (!v) return;
+    if (v.kind === "webview") {
+      try {
+        const html = await v.resolve!();
+        this.setState(st => ({ extViewHtml: { ...st.extViewHtml, [id]: html } }));
+      } catch {
+        this.setState(st => ({ extViewRows: { ...st.extViewRows, [id]: { rows: [], err: t("extview.failed") } } }));
+      }
+      return;
+    }
+    const open = this.state.extViewOpen;
+    const rows: { key: string; depth: number; row: TreeRow; el: any; hasKids: boolean }[] = [];
+    const walk = async (parent: any, path: number[], depth: number) => {
+      // 아주 깊은 트리에서 무한히 파고들지 않게. 확장이 순환 구조를 주는 일이 있다.
+      if (depth > 12) return;
+      const kids = await v.children!(parent);
+      for (let i = 0; i < kids.length; i++) {
+        const el = kids[i];
+        const row = await v.item!(el);
+        const key = rowKey(id, [...path, i]);
+        const hasKids = row.collapse !== "none";
+        rows.push({ key, depth, row, el, hasKids });
+        // 확장이 "펼친 채로" 라고 한 줄은 사용자가 접기 전까지 펼쳐 둔다.
+        const isOpen = key in open ? open[key]! : row.collapse === "expanded";
+        if (hasKids && isOpen) await walk(el, [...path, i], depth + 1);
+      }
+    };
+    try {
+      await walk(undefined, [], 0);
+      this.setState(st => ({ extViewRows: { ...st.extViewRows, [id]: { rows } } }));
+    } catch {
+      // 확장이 던지면 그 뷰만 실패로 둔다 — 사이드바 전체가 빈 화면이 되면 안 된다.
+      this.setState(st => ({ extViewRows: { ...st.extViewRows, [id]: { rows: [], err: t("extview.failed") } } }));
+    }
+  }
+
+  /** 등록이 바뀌면(확장 로드·해제) 구독을 다시 맞추고 전부 그린다. */
+  private syncExtViews = () => {
+    const views = extHost.listExtViews();
+    // 구독은 **전부 떼고 다시 건다.** 같은 id 라고 건너뛰면, 확장을 다시 읽어 프로바이더가
+    // 새로 만들어졌을 때 옛 이미터에 걸린 구독이 그대로 남는다. 확장은 계속 알리는데
+    // 아무도 안 듣는 상태가 되고, 트리는 처음 그린 모습에서 굳는다.
+    // 등록이 바뀌는 일은 드무니 매번 다시 거는 편이 싸고 정확하다.
+    for (const off of this._viewChangeOff.values()) off();
+    this._viewChangeOff.clear();
+    const ids = new Set(views.map(v => v.id));
+    for (const id of [...this._viewFrames.keys()]) if (!ids.has(id)) this._viewFrames.delete(id);
+    for (const v of views) {
+      if (v.kind === "tree" && v.onChange) {
+        this._viewChangeOff.set(v.id, v.onChange(() => void this.refreshExtView(v.id)));
+      }
+      void this.refreshExtView(v.id);
+    }
+    this.setState(st => ({ extViewVer: st.extViewVer + 1 }));
+  };
+
+  renderExtViews() {
+    const s = this.state;
+    const views = extHost.listExtViews();
+    if (!views.length) {
+      return (
+        <div style={{ padding: "18px 16px", fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.7 }}>
+          <div>{t("extview.none")}</div>
+          <div style={{ fontSize: 11, marginTop: 5, color: "var(--fg-dim2)" }}>{t("extview.noneHint")}</div>
+        </div>
+      );
+    }
+    return (
+      <div style={{ padding: "2px 0 10px" }}>
+        {views.map(v => {
+          const st = s.extViewRows[v.id];
+          return (
+            <div key={v.id} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px" }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: "var(--fg-sub2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.title}</span>
+                <div style={{ flex: 1 }} />
+                {/* 어느 확장이 붙인 뷰인지 밝힌다 — 안 밝히면 앱의 기능으로 읽힌다. */}
+                <span title={v.source} style={{ flex: "none", maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 9.5, color: "var(--fg-dim2)" }}>{v.source}</span>
+              </div>
+              {v.kind === "webview" ? (
+                <iframe
+                  key={v.id}
+                  ref={el => { if (el) this._viewFrames.set(v.id, el); else this._viewFrames.delete(v.id); }}
+                  title={v.title}
+                  // 확장의 HTML 을 우리 문서에 그대로 붙이면 앱 DOM 을 자유롭게 만질 수
+                  // 있다. 샌드박스 프레임 안에 두면 스크립트는 돌되(웹뷰는 스크립트가
+                  // 있어야 산다) 바깥과는 postMessage 로만 오간다.
+                  sandbox="allow-scripts"
+                  srcDoc={webviewDoc(s.extViewHtml[v.id] ?? "", v.id)}
+                  style={{ width: "100%", height: 220, border: "none", background: "transparent", display: "block" }} />
+              ) : st?.err ? (
+                <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--err)" }}>{st.err}</div>
+              ) : !st ? (
+                <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--fg-dim)" }}>{t("extview.loading")}</div>
+              ) : !st.rows.length ? (
+                <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--fg-dim)" }}>{t("extview.empty")}</div>
+              ) : st.rows.map(r => {
+                const open = r.key in s.extViewOpen ? s.extViewOpen[r.key]! : r.row.collapse === "expanded";
+                return (
+                  <div key={r.key} className="hv06" title={r.row.tooltip || r.row.label}
+                    onClick={() => {
+                      if (r.hasKids) {
+                        this.setState(prev => ({ extViewOpen: { ...prev.extViewOpen, [r.key]: !open } }), () => void this.refreshExtView(v.id));
+                        return;
+                      }
+                      if (r.row.commandId) void this.runExtCommand(r.row.commandId, r.row.commandArgs, v.extId);
+                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 12px 3px " + (12 + r.depth * 12) + "px",
+                      cursor: r.hasKids || r.row.commandId ? "pointer" : "default", minWidth: 0 }}>
+                    <span style={{ width: 11, flex: "none", fontSize: 9, color: "var(--fg-dim)", textAlign: "center" }}>{r.hasKids ? (open ? "▾" : "▸") : ""}</span>
+                    <span style={{ fontSize: 12, color: "var(--fg-sub2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.row.label}</span>
+                    {r.row.description && <span style={{ fontSize: 10.5, color: "var(--fg-dim2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.row.description}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  /** 트리 줄이 달고 있는 명령을 돌린다.
+   *
+   *  확장 명령은 `확장id:명령id` 로 저장된다. 확장이 트리 항목에 적어 두는 것은 그냥
+   *  `probe.pick` 같은 자기 이름이므로, 누가 부르는지(extId)를 같이 넘겨야 찾는다.
+   *  안 넘기면 줄을 눌러도 조용히 아무 일이 없다 — 이 판에서 고치려던 바로 그 모양이다. */
+  private async runExtCommand(id: string, args: any[], extId: string) {
+    try { await (window as any).__schutzRunCommand?.(id, args, extId); } catch { /* 확장이 던진 것 */ }
   }
 
   renderExt() {
