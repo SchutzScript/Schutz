@@ -19,6 +19,9 @@ export interface HostDeps {
   openFiles: () => string[];
   /** 확장이 사용자에게 묻는 통로. 없으면 셰임이 곧장 취소로 답한다. */
   prompt: (req: any) => Promise<any>;
+  /** 상태바 항목 올리기/내리기. */
+  statusSet: (item: any) => void;
+  statusRemove: (id: string) => void;
 }
 
 let commands: ExtCommand[] = [];
@@ -197,7 +200,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
