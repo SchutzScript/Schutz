@@ -209,4 +209,7 @@ export const dict: Record<string, Record<string, string>> = {
     de: "Editor stellt Dateien und Tabs in den Mittelpunkt; Agent gibt dem Gespräch den ganzen Bildschirm. Jederzeit hier wechseln — offene Dateien und das Gespräch bleiben. Pro Projekt gemerkt. Strg+Umschalt+M.",
     ja: "エディタはファイルとタブが中心、エージェントは会話が画面全体です。ここでいつでも行き来でき、開いたファイルも会話もそのまま残ります。プロジェクトごとに記憶します。Ctrl+Shift+M。",
   },
+  // 두 트랙을 잇는 버튼. 여기서 건너갈 수 없으면 "다른 모양도 있다" 는 말만 듣고 끝난다.
+  "tour.crossToAgent": { ko: "에이전트 모드도 둘러보기", en: "Tour agent mode too", de: "Auch den Agentenmodus ansehen", ja: "エージェントモードも見る" },
+  "tour.crossToEditor": { ko: "에디터 모드도 둘러보기", en: "Tour editor mode too", de: "Auch den Editormodus ansehen", ja: "エディターモードも見る" },
 };

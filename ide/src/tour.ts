@@ -20,6 +20,8 @@ export interface TourHost {
   /** 에이전트 모드에서 코드를 오른쪽에 띄운다. 닫혀 있으면 그 열이 아예 없어
    *  앵커가 크기 0 이 되고, 단계가 조용히 중앙 카드로 퇴화한다. */
   showSide(open: boolean): void;
+  /** 모드를 바꾼다 — 투어가 두 트랙을 잇는 데 쓴다. */
+  setMode(mode: "editor" | "agent"): void;
 }
 
 export type Placement = "right" | "left" | "below" | "above" | "center";
@@ -119,6 +121,22 @@ export const TOUR_STEPS: TourStep[] = [
   { id: "mode", figure: "mode", anchor: "mode", titleKey: "tour.mode.title", bodyKey: "tour.mode.body", placement: "below" },
   { id: "done", figure: "overview", anchor: "menubar", titleKey: "tour.done.title", bodyKey: "tour.done.body", placement: "below" },
 ];
+
+export type Mode = "editor" | "agent";
+export const otherMode = (m: Mode): Mode => (m === "editor" ? "agent" : "editor");
+
+/** 각 트랙이 시작하는 단계.
+ *
+ *  두 트랙은 when 으로 갈려 있어서, **한 모드에 서 있으면 다른 쪽은 영영 안 보인다.**
+ *  에디터 모드로 첫 실행을 마친 사람은 에이전트 트랙 여덟 단계를 한 번도 못 본다 —
+ *  고를 수 있게 해놓고 고르지 않은 쪽을 못 배우게 두는 셈이다. 모드 단계에서 넘어갈
+ *  수 있게 시작점을 여기 적어 둔다. */
+export const TRACK_START: Record<Mode, string> = { editor: "rail", agent: "agChat" };
+
+/** 그 트랙 첫 단계의 인덱스. 없으면 -1. */
+export function trackStartIndex(mode: Mode): number {
+  return TOUR_STEPS.findIndex(s => s.id === TRACK_START[mode]);
+}
 
 /** 지금 모양에서 **실제로 보게 될** 단계들.
  *

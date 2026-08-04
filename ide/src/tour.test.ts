@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TOUR_STEPS, visibleSteps, visiblePos, type TourHost } from "./tour";
+import { TOUR_STEPS, visibleSteps, visiblePos, trackStartIndex, otherMode, TRACK_START, type TourHost } from "./tour";
 
 /** 앱 없이 조건만 흉내낸다 — when 은 host 만 본다. */
 const host = (mode: "editor" | "agent", hasWorkspace = true): TourHost => ({
-  showLeftTab: () => {}, showTerminal: () => {}, showAsideTab: () => {}, showSide: () => {},
+  showLeftTab: () => {}, showTerminal: () => {}, showAsideTab: () => {}, showSide: () => {}, setMode: () => {},
   hasWorkspace: () => hasWorkspace,
   mode: () => mode,
 });
@@ -84,5 +84,42 @@ describe("각본 자체", () => {
   it("단계 id 가 중복되지 않는다", () => {
     const ids = TOUR_STEPS.map(s => s.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("두 트랙 잇기", () => {
+  it("트랙 시작점이 실제 단계를 가리킨다", () => {
+    expect(trackStartIndex("editor")).toBeGreaterThanOrEqual(0);
+    expect(trackStartIndex("agent")).toBeGreaterThanOrEqual(0);
+    expect(TOUR_STEPS[trackStartIndex("editor")]!.id).toBe(TRACK_START.editor);
+    expect(TOUR_STEPS[trackStartIndex("agent")]!.id).toBe(TRACK_START.agent);
+  });
+
+  it("각 트랙의 시작 단계는 그 모드에서 실제로 보인다 — 안 보이면 건너뛰기로 시작한다", () => {
+    for (const m of ["editor", "agent"] as const) {
+      const step = TOUR_STEPS[trackStartIndex(m)]!;
+      expect(!step.when || step.when(host(m)), m).toBe(true);
+    }
+  });
+
+  it("상대 모드", () => {
+    expect(otherMode("editor")).toBe("agent");
+    expect(otherMode("agent")).toBe("editor");
+  });
+
+  it("건너간 트랙에도 볼 것이 여럿 있다 — 한 단계짜리면 이을 이유가 없다", () => {
+    for (const m of ["editor", "agent"] as const) {
+      expect(visibleSteps(host(m)).length, m).toBeGreaterThan(5);
+    }
+  });
+
+  it("두 트랙이 서로를 가리지 않는다 — 같은 단계가 양쪽에 다 보이면 중복이다", () => {
+    const e = new Set(visibleSteps(host("editor")).map(s => s.id));
+    const a = new Set(visibleSteps(host("agent")).map(s => s.id));
+    // 공용 꼬리는 겹치는 게 맞다. 트랙 고유 단계만 배타적이어야 한다.
+    expect(e.has("rail")).toBe(true);
+    expect(a.has("rail")).toBe(false);
+    expect(a.has("agChat")).toBe(true);
+    expect(e.has("agChat")).toBe(false);
   });
 });
