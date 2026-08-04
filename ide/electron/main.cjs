@@ -25,6 +25,51 @@ const MAX_DEPTH = 8;
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — 에디터로 열 상한
 
 let winCounter = 0;
+
+/* ── 메인이 죽을 때 ────────────────────────────────────────────────────────
+   여기에는 전역 오류 처리가 아예 없었다. Node 는 처리 안 된 거부를 기본으로
+   던지므로, 어딘가의 async IPC 하나가 실패하면 메인이 죽고 **앱이 통째로
+   사라진다** — 창도, 저장 안 한 버퍼도, 아무 설명도 없이. 렌더러에는 공들인
+   크래시 화면이 있는데 정작 더 치명적인 쪽이 비어 있었다.
+
+   그래서 죽지 않는다. 메인을 살려 두면 렌더러가 들고 있는 편집본을 저장할
+   기회가 남는다 — 관계없는 비동기 오류 하나로 그걸 잃는 것보다 낫다. 대신
+   반드시 남기고, 한 번은 알린다. */
+const crashPolicy = require("./crashPolicy.cjs");
+const notifyGate = crashPolicy.makeNotifyGate();
+let logPath = null;
+function logFile() {
+  if (logPath) return logPath;
+  try { logPath = path.join(app.getPath("userData"), "logs", "main.log"); } catch { logPath = null; }
+  return logPath;
+}
+function recordCrash(kind, err) {
+  const detail = err && err.stack ? err.stack : String(err);
+  try { console.error("[schutz] " + kind + ":", detail); } catch { /* */ }
+  const file = logFile();
+  if (file) {
+    try {
+      require("fs").mkdirSync(path.dirname(file), { recursive: true });
+      let prev = "";
+      try { prev = require("fs").readFileSync(file, "utf8"); } catch { /* 첫 기록 */ }
+      require("fs").writeFileSync(file, crashPolicy.trimLog(prev + crashPolicy.logLine(Date.now(), kind, detail)), "utf8");
+    } catch { /* 로그를 못 써도 앱은 계속 돈다 */ }
+  }
+  if (!notifyGate() || !app.isReady()) return;
+  // 모달로 막지 않는다 — 사용자가 하던 일을 끊을 이유가 없다. 알리고, 로그로 가는 길만 준다.
+  try {
+    dialog.showMessageBox({
+      type: "warning",
+      message: "백그라운드에서 오류가 발생했습니다",
+      detail: "앱은 계속 사용할 수 있습니다. 저장하지 않은 내용이 있으면 먼저 저장해 주세요.\n\n" + String(detail).slice(0, 400),
+      buttons: file ? ["확인", "로그 폴더 열기"] : ["확인"],
+      defaultId: 0, noLink: true,
+    }).then(r => { if (r.response === 1 && file) shell.showItemInFolder(file); }).catch(() => { /* */ });
+  } catch { /* */ }
+}
+process.on("uncaughtException", (e) => recordCrash("uncaughtException", e));
+process.on("unhandledRejection", (e) => recordCrash("unhandledRejection", e));
+
 // 진짜 종료 중인가. 평소 창 닫기는 트레이로 최소화하지만(아래 win.on("close")),
 // 트레이 '종료' → app.quit() → before-quit 에서 이 값이 서면 창이 정상적으로 닫힌다.
 let isQuitting = false;
@@ -78,6 +123,24 @@ function createWindow(layout) {
   } else {
     void loadDist();
   }
+
+  /* 렌더러가 사라지면 빈 창만 남는다. 아무 처리가 없어서 그 창은 영원히 흰 화면이었다 —
+     사용자가 할 수 있는 일이 창을 닫는 것뿐이다. 다시 싣되, 짧은 사이에 되풀이되면
+     멈추고 사용자에게 넘긴다(실을 때마다 또 죽는 상황이면 무한 반복이 된다). */
+  const reloadGate = crashPolicy.makeReloadGate();
+  win.webContents.on("render-process-gone", (_e, details) => {
+    recordCrash("render-process-gone", (details && details.reason) || "unknown");
+    if (win.isDestroyed()) return;
+    if (reloadGate(Date.now())) { try { win.reload(); } catch { /* */ } return; }
+    try {
+      dialog.showMessageBox(win, {
+        type: "error",
+        message: "편집기 화면이 반복해서 종료되고 있습니다",
+        detail: "다시 여는 것을 멈췄습니다. 창을 닫았다가 앱을 다시 시작해 주세요.",
+        buttons: ["확인"], noLink: true,
+      }).catch(() => { /* */ });
+    } catch { /* */ }
+  });
 
   // 외부 링크는 기본 브라우저로 — http/https/mailto 만 허용 (file: 등 위험 스킴 차단)
   win.webContents.setWindowOpenHandler(({ url }) => {
