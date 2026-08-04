@@ -16,6 +16,9 @@ import { paneRegistry } from "../editor/MonacoPane";
 export interface DocDeps {
   /** 워크스페이스 루트. 없으면 null — 그때는 문서를 만들 수 없다. */
   root: () => string | null;
+  /** 이 파일 하나를 저장한다. 앱의 저장 경로를 타야 외부 변경 확인·기준선 갱신·
+   *  저장 사건이 다 같이 돈다 — 확장이 디스크에 직접 쓰면 그게 전부 어긋난다. */
+  save: (rel: string) => Promise<boolean>;
   /** 지금 활성 파일의 워크스페이스 상대 경로. */
   activeRel: () => string | null;
   /** 지금 열려 있는 모든 파일의 상대 경로. */
@@ -25,7 +28,7 @@ export interface DocDeps {
 const abs = (root: string, rel: string) => root.replace(/\\/g, "/").replace(/\/+$/, "") + "/" + rel;
 
 /** 모델 → vscode.TextDocument 모양. 게터로 두어 늘 지금 값을 읽는다. */
-export function makeDoc(root: string, rel: string, m: monaco.editor.ITextModel, Position: any, Range: any) {
+export function makeDoc(root: string, rel: string, m: monaco.editor.ITextModel, Position: any, Range: any, save?: (rel: string) => Promise<boolean>) {
   const pos = (p: any) => ({ lineNumber: (p?.line ?? 0) + 1, column: (p?.character ?? 0) + 1 });
   return {
     uri: monaco.Uri.file(abs(root, rel)),
@@ -65,8 +68,9 @@ export function makeDoc(root: string, rel: string, m: monaco.editor.ITextModel, 
     },
     validateRange(r: any) { return r; },
     validatePosition(p: any) { return p; },
-    /** 저장은 앱의 저장 경로를 타야 한다 — 확장이 직접 디스크에 쓰면 기준선이 어긋난다. */
-    save(): Promise<boolean> { return Promise.resolve(false); },
+    /** 저장은 앱의 저장 경로를 탄다 — 확장이 직접 디스크에 쓰면 외부 변경 확인도,
+     *  기준선 갱신도, 저장 사건도 건너뛴다. */
+    save(): Promise<boolean> { return save ? save(rel) : Promise.resolve(false); },
   };
 }
 
@@ -129,7 +133,7 @@ export function makeDocIndex(d: DocDeps, types: { Position: any; Range: any; Sel
     if (!root || !rel) return undefined;
     const m = projectModels.getByRel(rel);
     if (!m || m.isDisposed()) return undefined;
-    return makeDoc(root, rel, m, types.Position, types.Range);
+    return makeDoc(root, rel, m, types.Position, types.Range, d.save);
   };
   const editorFor = (rel: string | null) => {
     const doc = docFor(rel);

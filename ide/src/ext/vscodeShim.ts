@@ -11,6 +11,7 @@ import { flattenDefaults, fullKey, readValue, hasValue, inspectValue, sectionVal
 import { cleanText, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./statusBar";
 import { globToRegExp, dispatch as fsDispatch, type WatcherSpec, type FsDelta } from "./fsWatch";
 import { parseViews, containerTitle, normalizeTreeItem, type ViewDecl, type TreeRow } from "./views";
+import { collectEdits, groupByFile, sortForApply, hasOverlap, normalizeAction } from "./workspaceEdit";
 import { setShimDocSource } from "./extHost";
 
 /** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
@@ -74,6 +75,12 @@ export interface ShimDeps {
   statusRemove: (id: string) => void;
   /** 확장 → 웹뷰 메시지. App 이 iframe 을 들고 있다. */
   postToView: (viewId: string, msg: any) => void;
+  /** 파일 하나 저장 — document.save() 가 탄다. */
+  saveFile: (rel: string) => Promise<boolean>;
+  /** 아직 안 연 파일의 내용을 읽는다 — openTextDocument 가 탄다. */
+  readFile: (rel: string) => Promise<string | null>;
+  /** 트리 뷰에서 한 줄을 펼쳐 보여 준다. */
+  revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -87,7 +94,11 @@ class Position { constructor(public line: number, public character: number) {} }
 class Range {
   start: Position; end: Position;
   constructor(a: any, b?: any, c?: number, d?: number) {
-    if (a instanceof Position) { this.start = a; this.end = b; }
+    // 확장은 `{ line, character }` 리터럴을 그대로 넘기기도 한다. instanceof 만 보면
+    // 그게 줄 번호 자리로 들어가 범위가 통째로 엉킨다 — 편집이 엉뚱한 곳에 적히거나
+    // 아무 데도 안 적힌다.
+    const isPos = (v: any) => v instanceof Position || (v && typeof v === "object" && "line" in v);
+    if (isPos(a)) { this.start = a; this.end = isPos(b) ? b : a; }
     else { this.start = new Position(a, b); this.end = new Position(c!, d!); }
   }
 }
@@ -105,6 +116,47 @@ class CompletionItem { label: any; kind?: number; detail?: string; documentation
 class Hover { contents: any[]; range?: Range; constructor(contents: any, range?: Range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } }
 class ThemeIcon { constructor(public id: string) {} }
 class ThemeColor { constructor(public id: string) {} }
+/** 확장이 편집을 모아 담는 그릇. 이게 없어서 `new vscode.WorkspaceEdit()` 가 첫 줄에서
+ *  죽었고, 편집을 담은 코드 액션은 확장이 만들 수조차 없었다. */
+class WorkspaceEdit {
+  _edits: { uri: any; range: any; text: string }[] = [];
+  replace(uri: any, range: any, newText: string) { this._edits.push({ uri, range, text: newText }); }
+  insert(uri: any, position: any, newText: string) { this._edits.push({ uri, range: new Range(position, position), text: newText }); }
+  delete(uri: any, range: any) { this._edits.push({ uri, range, text: "" }); }
+  set(uri: any, edits: any[]) {
+    // vscode 의 set 은 그 파일의 편집을 **갈아 끼운다.** 덧붙이면 앞서 넣은 것이 같이 남아
+    // 두 번 적용된다.
+    const key = String(uri?.toString?.() ?? uri ?? "");
+    this._edits = this._edits.filter(e => String(e.uri?.toString?.() ?? e.uri ?? "") !== key);
+    for (const e of edits ?? []) this._edits.push({ uri, range: e?.range, text: e?.newText ?? "" });
+  }
+  has(uri: any) { const k = String(uri?.toString?.() ?? uri ?? ""); return this._edits.some(e => String(e.uri?.toString?.() ?? e.uri ?? "") === k); }
+  get size() { return new Set(this._edits.map(e => String(e.uri?.toString?.() ?? e.uri ?? ""))).size; }
+  entries() {
+    const by = new Map<string, { uri: any; list: any[] }>();
+    for (const e of this._edits) {
+      const k = String(e.uri?.toString?.() ?? e.uri ?? "");
+      if (!by.has(k)) by.set(k, { uri: e.uri, list: [] });
+      by.get(k)!.list.push({ range: e.range, newText: e.text });
+    }
+    return [...by.values()].map(v => [v.uri, v.list] as [any, any[]]);
+  }
+  // 파일 만들기·지우기·이름 바꾸기는 아직 안 한다. 조용히 넘기면 확장은 파일이
+  // 생긴 줄 알고 다음 단계로 간다.
+  createFile() { throw new Error("WorkspaceEdit.createFile 미지원"); }
+  deleteFile() { throw new Error("WorkspaceEdit.deleteFile 미지원"); }
+  renameFile() { throw new Error("WorkspaceEdit.renameFile 미지원"); }
+}
+class CodeAction {
+  edit?: any; command?: any; diagnostics?: any[]; isPreferred?: boolean;
+  constructor(public title: string, public kind?: any) {}
+}
+const CodeActionKind = {
+  Empty: { value: "" }, QuickFix: { value: "quickfix" }, Refactor: { value: "refactor" },
+  RefactorExtract: { value: "refactor.extract" }, RefactorInline: { value: "refactor.inline" },
+  RefactorRewrite: { value: "refactor.rewrite" }, Source: { value: "source" },
+  SourceOrganizeImports: { value: "source.organizeImports" }, SourceFixAll: { value: "source.fixAll" },
+};
 const noopDisposable = { dispose() { /* */ } };
 
 const UriShim = {
@@ -146,7 +198,11 @@ export const editorEvents = {
 function stripRoot(root: string, p: string): string {
   const r = root.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\//, "") + "/";
   const q = String(p).replace(/\\/g, "/").replace(/^\//, "");
-  return q.startsWith(r) ? q.slice(r.length) : q;
+  // 윈도우에서 드라이브 글자의 대소문자가 어긋난다. 앱은 워크스페이스를 `C:/…` 로
+  // 들고 있는데 Uri.fsPath 는 `c:\…` 를 준다. 그대로 비교하면 접두사가 안 맞아
+  // **절대 경로가 그대로 상대 경로 자리에 들어가고**, 뒤이은 파일 조회가 전부 빗나간다.
+  // 자를 위치만 대소문자 없이 정하고, 잘라 낸 조각은 원본 그대로 쓴다.
+  return q.toLowerCase().startsWith(r.toLowerCase()) ? q.slice(r.length) : q;
 }
 function relOfWith(root: string | null, arg: any): string | null {
   if (!arg) return null;
@@ -157,10 +213,44 @@ function relOfWith(root: string | null, arg: any): string | null {
 
 export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; contributes?: any }) {
   const docs = makeDocIndex(
-    { root: deps.workspaceRoot, activeRel: deps.getActiveFile, openRels: deps.openFiles },
+    { root: deps.workspaceRoot, activeRel: deps.getActiveFile, openRels: deps.openFiles, save: deps.saveFile },
     { Position, Range, Selection },
   );
   const relOf = (arg: any) => relOfWith(deps.workspaceRoot(), arg);
+
+  /** WorkspaceEdit 를 열린 모델에 적용한다.
+   *
+   *  모델을 거치므로 Ctrl+Z 로 되돌릴 수 있고, 저장 기준선도 어긋나지 않는다.
+   *  안 열린 파일은 손대지 않는다 — 디스크에 직접 쓰면 되돌릴 방법이 없다. */
+  /** WorkspaceEdit 의 uri 로 모델을 찾는다.
+   *
+   *  `uri.toString()` 은 퍼센트 인코딩된 `file:///c%3A/…` 라, 루트 문자열을 떼는 방식으론
+   *  절대 안 맞는다. 모델 색인이 uri 문자열 그대로를 들고 있으므로 그쪽에 먼저 물어보고,
+   *  안 되면 경로로 떼 본다. */
+  const modelForUri = (uriKey: string): monaco.editor.ITextModel | null => {
+    const byUri = projectModels.relFor(uriKey);
+    if (byUri) return projectModels.getByRel(byUri);
+    const rel = relOf(uriKey);
+    return rel ? projectModels.getByRel(rel) : null;
+  };
+
+  const applyWorkspaceEdit = (we: any): boolean => {
+    const files = groupByFile(collectEdits(we));
+    if (!files.length) return false;
+    const jobs: { model: monaco.editor.ITextModel; edits: { range: any; text: string }[] }[] = [];
+    for (const f of files) {
+      const model = modelForUri(f.key);
+      // 하나라도 못 쓰면 아무것도 안 쓴다. 반만 적용된 편집은 확장도 사용자도
+      // 되돌릴 수 없는 상태를 만든다.
+      if (!model || model.isDisposed()) return false;
+      if (hasOverlap(f.edits)) return false;
+      jobs.push({ model, edits: sortForApply(f.edits) });
+    }
+    for (const j of jobs) {
+      j.model.pushEditOperations([], j.edits.map(e => ({ range: e.range, text: e.text })), () => null);
+    }
+    return true;
+  };
   /** 프로바이더에 넘길 문서.
    *
    *  vscode 는 프로바이더의 첫 인자로 **TextDocument** 를 준다고 약속한다. 그런데
@@ -255,7 +345,51 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
       }
       return { dispose() { for (const d of created) { try { d.dispose(); } catch { /* */ } const i = disposables.indexOf(d); if (i >= 0) disposables.splice(i, 1); } } };
     },
-    registerCodeActionsProvider() { return noopDisposable; },
+    /** 코드 액션. WorkspaceEdit 가 없던 동안은 붙일 수가 없었다 — 편집을 담은 액션을
+     *  확장이 만들 수조차 없었으니, 반쪽만 붙이면 되는 것과 안 되는 것만 흐려진다. */
+    registerCodeActionsProvider(selector: any, provider: any, _metadata?: any) {
+      // metadata.providedCodeActionKinds 는 받아만 두고 쓰지 않는다. Monaco 는 종류를
+      // 프로바이더가 아니라 등록 쪽에서 받는데, 그 목록은 "무엇을 낼 수 있는지" 힌트라
+      // 없어도 액션은 그대로 나온다. 확장 쪽 호출이 깨지지 않게 인자만 받아 둔다.
+      const created: monaco.IDisposable[] = [];
+      for (const lang of langIdsFromSelector(selector)) {
+        const d = monaco.languages.registerCodeActionProvider(lang, {
+          async provideCodeActions(model, range, context) {
+            try {
+              const doc = docForModel(model);
+              const vrange = new Range(range.startLineNumber - 1, range.startColumn - 1, range.endLineNumber - 1, range.endColumn - 1);
+              // 이 자리의 진단을 함께 넘긴다. 빠른 수정은 대개 그걸 보고 무엇을 고칠지 정한다.
+              const diagnostics = (context?.markers ?? []).map((m: any) => ({
+                message: m.message,
+                range: new Range(m.startLineNumber - 1, m.startColumn - 1, m.endLineNumber - 1, m.endColumn - 1),
+                severity: m.severity === 8 ? 0 : m.severity === 4 ? 1 : m.severity === 2 ? 2 : 3,
+                source: m.source, code: m.code,
+              }));
+              const res = await provider.provideCodeActions(doc, vrange, { diagnostics, only: undefined, triggerKind: 1 }, null);
+              const list = (Array.isArray(res) ? res : []).map(normalizeAction).filter(Boolean) as any[];
+              return {
+                actions: list.map(a => ({
+                  title: a.title,
+                  kind: a.kind || undefined,
+                  isPreferred: a.isPreferred,
+                  // 편집은 Monaco 가 직접 적용하게 넘긴다 — undo 스택에 한 덩어리로 남는다.
+                  edit: a.files.length ? { edits: a.files.flatMap((f: any) => {
+                    const m2 = modelForUri(f.key);
+                    if (!m2) return [];
+                    return sortForApply(f.edits).map(e => ({ resource: m2.uri, textEdit: { range: e.range, text: e.text }, versionId: undefined }));
+                  }) } : undefined,
+                  command: a.commandId ? { id: ext.id + ":" + a.commandId, title: a.title, arguments: a.commandArgs } : undefined,
+                  diagnostics: [],
+                })),
+                dispose() { /* */ },
+              };
+            } catch { return { actions: [], dispose() { /* */ } }; }
+          },
+        });
+        disposables.push(d); created.push(d);
+      }
+      return { dispose() { for (const d of created) { try { d.dispose(); } catch { /* */ } const i = disposables.indexOf(d); if (i >= 0) disposables.splice(i, 1); } } };
+    },
     registerDocumentFormattingEditProvider(selector: any, provider: any) {
       const created: monaco.IDisposable[] = [];
       for (const lang of langIdsFromSelector(selector)) {
@@ -449,8 +583,9 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
         visible: true, selection: [], onDidChangeVisibility: new EventEmitter().event,
         onDidChangeSelection: new EventEmitter().event, onDidExpandElement: new EventEmitter().event,
         onDidCollapseElement: new EventEmitter().event,
-        // reveal 은 아직 못 한다. 조용히 성공한 척하지 않는다.
-        reveal: () => Promise.reject(new Error("TreeView.reveal 미지원")),
+        // 트리 줄을 펼쳐 보여 준다. 어느 줄인지는 앱이 프로바이더에 되물어 찾는다 —
+        // 확장이 넘기는 것은 자기 데이터 객체라 우리가 곧장 알아볼 수 없다.
+        reveal: (element: any, options?: any) => deps.revealInView(String(viewId), element, options?.expand !== false),
         get title() { return titleFor(String(viewId)); },
         set title(_v: string) { /* 제목은 매니페스트가 정한다 */ },
         dispose: d.dispose,
@@ -580,11 +715,24 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
         dispose: d.dispose,
       };
     },
-    openTextDocument: (arg?: any) => {
-      // 열려 있지 않은 파일은 아직 못 연다(모델이 없다). 그래도 reject 로 끝내던
-      // 자리라, 최소한 열려 있는 파일에는 답한다.
-      const d = docs.docFor(relOf(arg));
-      return d ? Promise.resolve(d) : Promise.reject(new Error("열려 있는 파일만 지원합니다"));
+    /** 확장이 직접 편집을 적용한다. 예전엔 이 함수 자체가 없어서, WorkspaceEdit 를
+     *  만들 수 있었더라도 쓸 데가 없었다. */
+    applyEdit: (we: any) => Promise.resolve(applyWorkspaceEdit(we)),
+    openTextDocument: async (arg?: any) => {
+      const rel = relOf(arg);
+      if (!rel) throw new Error("openTextDocument: 경로가 필요합니다");
+      const open = docs.docFor(rel);
+      if (open) return open;
+      // 안 열린 파일이면 디스크에서 읽어 모델을 만든다. **탭은 열지 않는다** —
+      // vscode 도 그렇고, 확장이 파일 하나를 훑을 때마다 탭이 생기면 못 쓴다.
+      const root = deps.workspaceRoot();
+      if (!root) throw new Error("openTextDocument: 열린 워크스페이스가 없습니다");
+      const text = await deps.readFile(rel);
+      if (text == null) throw new Error("openTextDocument: 읽을 수 없습니다 — " + rel);
+      projectModels.ensure(root, rel, text);
+      const d = docs.docFor(rel);
+      if (!d) throw new Error("openTextDocument: 문서를 만들지 못했습니다 — " + rel);
+      return d;
     },
     registerTextDocumentContentProvider: () => noopDisposable,
     fs: {},
@@ -612,6 +760,7 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
     env: { appName: "Schutz", language: getLang(), machineId: "schutz", openExternal: () => Promise.resolve(true), clipboard: { writeText: () => Promise.resolve(), readText: () => Promise.resolve("") } },
     Uri: UriShim, Position, Range, Selection, Location, Disposable, EventEmitter,
     MarkdownString, CompletionItem, CompletionItemKind, Hover, ThemeIcon, ThemeColor,
+    WorkspaceEdit, CodeAction, CodeActionKind,
     StatusBarAlignment: { Left: 1, Right: 2 },
     ViewColumn: { Active: -1, One: 1, Two: 2 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },

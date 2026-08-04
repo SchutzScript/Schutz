@@ -24,6 +24,10 @@ export interface HostDeps {
   statusRemove: (id: string) => void;
   /** 확장 → 웹뷰 메시지. */
   postToView: (viewId: string, msg: any) => void;
+  /** 파일 하나 저장 / 아직 안 연 파일 읽기 / 트리 줄 펼치기. */
+  saveFile: (rel: string) => Promise<boolean>;
+  readFile: (rel: string) => Promise<string | null>;
+  revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
 }
 
 let commands: ExtCommand[] = [];
@@ -202,7 +206,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, saveFile: d.saveFile, readFile: d.readFile, revealInView: d.revealInView, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
