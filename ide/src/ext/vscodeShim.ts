@@ -10,6 +10,7 @@ import { toMarkers, toLocations, toEdits } from "./shimLang";
 import { flattenDefaults, fullKey, readValue, hasValue, inspectValue, sectionValues, affects } from "./config";
 import { cleanText, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./statusBar";
 import { globToRegExp, dispatch as fsDispatch, type WatcherSpec, type FsDelta } from "./fsWatch";
+import { parseViews, containerTitle, normalizeTreeItem, type ViewDecl, type TreeRow } from "./views";
 import { setShimDocSource } from "./extHost";
 
 /** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
@@ -19,6 +20,40 @@ let fsWatchSeq = 0;
 /** 앱이 파일 변화를 알아냈을 때 부른다. 맞는 감시자에게만 간다. */
 export function deliverFsDelta(delta: FsDelta): number {
   return fsDispatch(fsWatchers.values(), delta);
+}
+
+/** 확장이 붙인 뷰들. 앱의 사이드바가 이 표를 읽어 그린다.
+ *  예전엔 registerTreeDataProvider/registerWebviewViewProvider 가 빈 disposable 만
+ *  돌려줬고, 그 뷰가 놓일 자리 자체가 앱에 없었다. */
+export interface RegisteredView {
+  id: string;
+  title: string;
+  /** 어느 확장이 붙였는가. 명령은 확장별로 이름이 붙어 저장되므로(ext.id + ":" + id)
+   *  이걸 같이 넘기지 않으면 줄을 눌러도 아무 일이 없다. */
+  extId: string;
+  group: string;
+  source: string;
+  kind: "tree" | "webview";
+  /** 트리 — 자식 목록과 줄 하나를 확장에 물어본다. */
+  children?: (element: any) => Promise<any[]>;
+  item?: (element: any) => Promise<TreeRow>;
+  /** 트리가 스스로 "바뀌었다" 고 알릴 때 부를 것을 등록한다. */
+  onChange?: (fn: () => void) => () => void;
+  /** 웹뷰 — 앱이 붙일 자리를 마련한 뒤 부른다. HTML 을 돌려준다. */
+  resolve?: () => Promise<string>;
+  /** 웹뷰가 보낸 메시지를 확장에 넘긴다. */
+  post?: (msg: any) => void;
+  /** 확장에게 메시지를 보낸다(앱 → 웹뷰는 App 이 iframe 에 직접 쏜다). */
+}
+
+const extViews = new Map<string, RegisteredView>();
+const viewListeners = new Set<() => void>();
+function viewsChanged() { for (const f of viewListeners) { try { f(); } catch { /* */ } } }
+
+export function listExtViews(): RegisteredView[] { return [...extViews.values()]; }
+export function onExtViewsChanged(fn: () => void): () => void {
+  viewListeners.add(fn);
+  return () => viewListeners.delete(fn);
 }
 
 export interface ShimDeps {
@@ -37,6 +72,8 @@ export interface ShimDeps {
   /** 상태바에 항목을 올리고 내린다. 없으면 확장이 올린 글자가 어디에도 안 보인다. */
   statusSet: (item: StatusItem) => void;
   statusRemove: (id: string) => void;
+  /** 확장 → 웹뷰 메시지. App 이 iframe 을 들고 있다. */
+  postToView: (viewId: string, msg: any) => void;
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -384,8 +421,72 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
       return got == null ? undefined : String(got);
     },
     createTextEditorDecorationType: () => ({ dispose() {}, key: "sz-deco" }),
-    registerTreeDataProvider: () => noopDisposable,
-    registerWebviewViewProvider: () => noopDisposable,
+    registerTreeDataProvider: (viewId: string, provider: any) => {
+      const id = String(viewId);
+      extViews.set(id, {
+        id, extId: ext.id, title: titleFor(id), group: groupFor(id), source: ext.name, kind: "tree",
+        children: async (element?: any) => {
+          const r = await provider?.getChildren?.(element);
+          return Array.isArray(r) ? r : [];
+        },
+        item: async (element: any) => normalizeTreeItem(await provider?.getTreeItem?.(element)),
+        onChange: (fn: () => void) => {
+          const ev = provider?.onDidChangeTreeData;
+          if (typeof ev !== "function") return () => { /* 알림 없는 프로바이더 */ };
+          const d = ev(() => fn());
+          return () => { try { d?.dispose?.(); } catch { /* */ } };
+        },
+      });
+      viewsChanged();
+      const d = { dispose() { extViews.delete(id); viewsChanged(); } };
+      disposables.push(d);
+      return d;
+    },
+    /** createTreeView 는 같은 등록에 손잡이를 하나 더 얹은 것이다. */
+    createTreeView: (viewId: string, options: any) => {
+      const d = window_.registerTreeDataProvider(viewId, options?.treeDataProvider);
+      return {
+        visible: true, selection: [], onDidChangeVisibility: new EventEmitter().event,
+        onDidChangeSelection: new EventEmitter().event, onDidExpandElement: new EventEmitter().event,
+        onDidCollapseElement: new EventEmitter().event,
+        // reveal 은 아직 못 한다. 조용히 성공한 척하지 않는다.
+        reveal: () => Promise.reject(new Error("TreeView.reveal 미지원")),
+        get title() { return titleFor(String(viewId)); },
+        set title(_v: string) { /* 제목은 매니페스트가 정한다 */ },
+        dispose: d.dispose,
+      };
+    },
+    registerWebviewViewProvider: (viewId: string, provider: any) => {
+      const id = String(viewId);
+      let onMsg: ((m: any) => void) | null = null;
+      extViews.set(id, {
+        id, extId: ext.id, title: titleFor(id), group: groupFor(id), source: ext.name, kind: "webview",
+        resolve: async () => {
+          let html = "";
+          const webview: any = {
+            options: {}, cspSource: "schutz:",
+            get html() { return html; },
+            set html(v: string) { html = String(v ?? ""); viewsChanged(); },
+            onDidReceiveMessage: (fn: (m: any) => void) => { onMsg = fn; return { dispose() { onMsg = null; } }; },
+            // 앱 → 웹뷰. App 이 iframe 을 들고 있으므로 그쪽에 넘긴다.
+            postMessage: (m: any) => { deps.postToView(id, m); return Promise.resolve(true); },
+            asWebviewUri: (u: any) => u,
+          };
+          const view: any = {
+            webview, visible: true, title: titleFor(id), description: "",
+            onDidChangeVisibility: new EventEmitter().event, onDidDispose: new EventEmitter().event,
+            show: () => { /* 앱이 이미 보여 주고 있다 */ },
+          };
+          await provider?.resolveWebviewView?.(view, { state: undefined }, { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event });
+          return html;
+        },
+        post: (msg: any) => { try { onMsg?.(msg); } catch { /* 확장이 던진 것 */ } },
+      });
+      viewsChanged();
+      const d = { dispose() { extViews.delete(id); viewsChanged(); } };
+      disposables.push(d);
+      return d;
+    },
     onDidChangeActiveTextEditor: editorEvents.activeChanged.event,
     onDidChangeTextEditorSelection: editorEvents.selectionChanged.event,
     // 예전엔 이 둘이 늘 undefined / 빈 배열이었다. 확장은 로드되고 "성공" 으로 보고된
@@ -400,6 +501,14 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
   // 확장은 자기 기본값을 package.json 의 contributes.configuration 에 적어 두고
   // `get(key)` 를 인자 없이 부른다. 예전 셰임은 그 선언을 아예 안 읽어서 그런 호출이
   // 전부 undefined 였다 — 확장은 "설정이 꺼져 있다" 로 읽고 기능을 접었다.
+  const viewDecls: ViewDecl[] = parseViews(ext.contributes);
+  const declFor = (id: string) => viewDecls.find(v => v.id === id);
+  const titleFor = (id: string) => declFor(id)?.name || id;
+  const groupFor = (id: string) => {
+    const d = declFor(id);
+    return d ? containerTitle(ext.contributes, d.container) : ext.name;
+  };
+
   const cfgDefaults = flattenDefaults(ext.contributes);
   const CFG_NS = "schutz.extconfig." + ext.id;
   const readStored = (): Record<string, any> => {

@@ -1,7 +1,7 @@
 // 확장 호스트 (렌더러) — 활성 확장의 엔트리를 큐레이트 API로 로드.
 // 확장은 신뢰 코드로 간주(VS Code와 동일 모델)하되, 편의 API는 이 표면으로 한정한다.
 // Schutz 네이티브(schutz API) + VS Code 프로그램형(vscode 셰임으로 activate 실행) 둘 다 지원.
-import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta } from "./vscodeShim";
+import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta, listExtViews, onExtViewsChanged } from "./vscodeShim";
 import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
 import { editorEvents } from "./vscodeShim";
 import { t } from "../i18n";
@@ -22,6 +22,8 @@ export interface HostDeps {
   /** 상태바 항목 올리기/내리기. */
   statusSet: (item: any) => void;
   statusRemove: (id: string) => void;
+  /** 확장 → 웹뷰 메시지. */
+  postToView: (viewId: string, msg: any) => void;
 }
 
 let commands: ExtCommand[] = [];
@@ -200,7 +202,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
@@ -266,6 +268,9 @@ function memento(nsKey: string) {
     setKeysForSync: () => { /* no-op */ },
   };
 }
+
+/** 확장이 붙인 사이드바 뷰들. */
+export { listExtViews, onExtViewsChanged };
 
 /** 앱이 알아낸 파일 변화를 확장의 감시자들에게 넘긴다. */
 export function notifyFsDelta(delta: { created: string[]; changed: string[]; deleted: string[] }): number {
