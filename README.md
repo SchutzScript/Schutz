@@ -93,7 +93,7 @@ same table the app dispatches from, so it cannot drift from what actually happen
 
 **Debugging** — Breakpoints, call stack, variables, and stepping via DAP (Python/debugpy today).
 
-**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. The `vscode` shim gives them the active editor for real: reading the document, moving the selection, and editing through the model so `Ctrl+Z` still works. Extensions can ask you things too — quick picks, input boxes with validation, and messages with buttons, each labelled with the extension doing the asking. Diagnostics land in the editor and the problems panel; definitions and formatters work; settings, file watchers and status bar items all do what they say. Trees and webviews contributed by an extension get their own place in the sidebar, webviews sandboxed. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
+**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. The `vscode` shim gives them the active editor for real: reading the document, moving the selection, and editing through the model so `Ctrl+Z` still works. Extensions can ask you things too — quick picks, input boxes with validation, and messages with buttons, each labelled with the extension doing the asking. Diagnostics land in the editor and the problems panel; definitions and formatters work; settings, file watchers and status bar items all do what they say. Trees and webviews contributed by an extension get their own place in the sidebar, webviews sandboxed. Quick fixes appear in the editor's own menu and apply through the model, so one `Ctrl+Z` takes them back. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
 
 **Localization** — The full UI ships in Korean, English, German, and Japanese.
 
@@ -130,12 +130,12 @@ today. A VS Code extension can read and edit the active document, publish diagno
 you a question, read its own settings, watch files, show status, and contribute a tree or
 webview to the sidebar. MCP speaks all three of its pillars rather than tools alone.
 
-Where it is still thin, specifically: code actions are not wired (the shim does not expose
-`WorkspaceEdit`, so an extension cannot build one), `TreeView.reveal` and `document.save()`
-are unimplemented, and a file that is not already in a tab cannot be opened. Each of those
-returns an error rather than an empty value, so an extension that needs one fails loudly
-instead of doing nothing. MCP resources and prompts are readable and shown in the panel, but
-are not yet offered to the agent as tools.
+MCP resources and prompts are offered to the agent, not just listed in a panel.
+
+Where it is still thin, specifically: a `WorkspaceEdit` cannot create, delete or rename
+files, and the shim has no `TextEditor` decorations, no custom editors, and no debug adapter
+API. Each of those throws rather than returning an empty value, so an extension that needs
+one fails loudly instead of quietly doing nothing.
 
 ## Contributing
 
