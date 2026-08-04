@@ -39,6 +39,7 @@ import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } 
 import { upsert as sbUpsert, remove as sbRemove, ordered as sbOrdered, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./ext/statusBar";
 import { classify as fsClassify } from "./ext/fsWatch";
 import { ASYNC_ERROR_EVENT, makeThrottle } from "./asyncErrors";
+import { newlyGone, stillGone } from "./engine/staleModels";
 import { rowKey, webviewDoc, type TreeRow } from "./ext/views";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
@@ -4400,6 +4401,8 @@ ${(r.output || "").slice(0, 2000)}`;
   /** 워처가 알려 준, 아직 처리하지 않은 경로들. 디바운스 동안 모았다가 트리를
    *  다시 읽은 뒤 만들어짐/고쳐짐/지워짐으로 나눈다. */
   private _fsTouched = new Set<string>();
+  /** 사라졌는데 미저장 편집이 있어 남겨 둔 파일들 — 이미 알린 것을 되풀이하지 않게. */
+  private _goneTold = new Set<string>();
   private onFsChange = (rels?: string[]) => {
     for (const r of rels ?? []) this._fsTouched.add(r);
     if (this._fsTimer) clearTimeout(this._fsTimer);
@@ -4434,7 +4437,15 @@ ${(r.output || "").slice(0, 2000)}`;
     // 사라진 파일(외부 삭제·브랜치 전환)의 stale 모델·진단·문제패널 항목 정리 — 트리 완전할 때만(truncated 면 실존 파일 오삭제 위험)
     if (tree && !(tree as any).truncated) {
       const present = new Set(tree.entries.filter(e => !e.dir).map(e => e.rel));
-      projectModels.dropMissing(ws.root, present);
+      // 사라졌지만 저장 안 한 편집이 있는 파일은 남는다. 남았다는 사실을 알려야
+      // 사용자가 저장해 되살릴지 버릴지 정할 수 있다 — 조용히 두면 다음에 앱을
+      // 껐을 때 그 편집이 사라진다.
+      const kept = projectModels.dropMissing(ws.root, present, this.isDirtyRel);
+      const fresh = newlyGone(kept, this._goneTold);
+      this._goneTold = stillGone(new Set([...this._goneTold, ...kept]), present);
+      if (fresh.length) {
+        this.toast("error", t("sc1.goneButDirty", { files: fresh.slice(0, 3).join(", ") + (fresh.length > 3 ? ` 외 ${fresh.length - 3}개` : "") }));
+      }
       this._nav = navDropMissing(this._nav, rel => present.has(rel));   // 지워진 파일로 되돌아가면 빈 탭이 열린다
     }
     // 대량 변경(브랜치 전환/pull/stash pop): 열지 않은 preload 모델도 디스크로 재로드해 stale 진단 방지
