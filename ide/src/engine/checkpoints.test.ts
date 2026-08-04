@@ -10,7 +10,7 @@ const E = (o: Partial<CheckpointEntry>): CheckpointEntry => ({
 });
 const D = (o: Partial<DiskState>): DiskState => ({ exists: true, hash: "H1", ...o });
 const disk = (rel: string, d: Partial<DiskState>) => new Map([[rel, D(d)]]);
-const only = (entries: CheckpointEntry[], m: Map<string, DiskState>) => planUndo(entries, m)[0];
+const only = (entries: CheckpointEntry[], m: Map<string, DiskState>) => planUndo(entries, m)[0]!;
 
 describe("planUndo — 되돌려도 되는 경우", () => {
   it("우리가 쓴 그대로면 되돌린다", () => {
@@ -111,7 +111,7 @@ describe("mergeCapture — 처음 것이 원본", () => {
     let es = mergeCapture([], E({ rel: "a.ts", beforeHash: "처음" }));
     es = mergeCapture(es, E({ rel: "a.ts", beforeHash: "나중" }));
     expect(es).toHaveLength(1);
-    expect(es[0].beforeHash).toBe("처음");
+    expect(es[0]!.beforeHash).toBe("처음");
   });
   it("다른 파일은 더한다", () => {
     let es = mergeCapture([], E({ rel: "a.ts" }));
@@ -129,8 +129,8 @@ describe("applyAfter", () => {
   it("해당 파일의 afterHash 만 갱신한다", () => {
     const es = [E({ rel: "a.ts", afterHash: "옛것" }), E({ rel: "b.ts", afterHash: "그대로" })];
     const r = applyAfter(es, "a.ts", "새것");
-    expect(r[0].afterHash).toBe("새것");
-    expect(r[1].afterHash).toBe("그대로");
+    expect(r[0]!.afterHash).toBe("새것");
+    expect(r[1]!.afterHash).toBe("그대로");
   });
   it("없는 파일은 만들지 않는다 — 캡처 안 된 것을 되돌릴 수는 없다", () => {
     const r = applyAfter([E({ rel: "a.ts" })], "없는파일.ts", "H");
