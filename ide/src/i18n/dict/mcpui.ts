@@ -1,5 +1,7 @@
 // mcpui 도메인 번역 사전
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
+  // 리소스·프롬프트 도구가 실패했을 때 흐름 안 카드에 다는 짧은 표시.
+  "mcpui.failed": { ko: "실패", en: "failed", de: "fehlgeschlagen", ja: "失敗" },
   "mcpui.title": { ko: "MCP 서버", en: "MCP Servers", de: "MCP-Server", ja: "MCP サーバー" },
   // MCP 번들(.mcpb) — 파일 하나를 끌어다 놓으면 서버가 된다. 남이 만든 파일이 우리 기계에서
   // 명령을 실행하게 되는 일이라, 무엇이 실행될지 보여 준 뒤에만 설치한다.

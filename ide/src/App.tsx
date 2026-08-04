@@ -72,6 +72,7 @@ import * as vscodeExt from "./ext/vscodeExt";
 import * as iconTheme from "./ext/iconTheme";
 import * as textmate from "./ext/textmate";
 import * as mcp from "./mcp/mcpClient";
+import * as mcpExtras from "./mcp/mcpExtras";
 import * as mcpGen from "./mcp/generator";
 import * as engines from "./gameEngine/adapters";
 import { buildReviewSystemPrompt, buildReviewUserPrompt, parseFindings, severityRank, Finding, type ReviewLang } from "./review/reviewer";
@@ -3149,11 +3150,39 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   /** 도구 실행 (워크스페이스 모드, 에이전트별) */
   /** 실행 중 MCP 서버의 도구를 provider ToolDef 로 변환 (mcp__server__tool) */
   private mcpToolDefs(): ToolDef[] {
-    return mcp.getMcpTools().map(t => ({
+    const tools = mcp.getMcpTools().map(t => ({
       name: mcp.mcpToolName(t.server, t.name),
       description: (t.description ? t.description + " " : "") + `[MCP: ${t.server}]`,
       input_schema: (t.inputSchema && typeof t.inputSchema === "object") ? t.inputSchema : { type: "object", properties: {} },
     }));
+    // MCP 는 도구 말고 리소스·프롬프트도 내준다. 읽어서 패널에 세어 두기만 하던 동안
+    // 모델은 그것들이 있다는 사실조차 몰랐다. 줄 것이 있을 때만 도구를 붙인다.
+    return [...tools, ...mcpExtras.extraToolDefs(mcp.getMcpResources(), mcp.getMcpPrompts())];
+  }
+
+  /** 리소스·프롬프트 도구 실행. 인자는 서버에 보내기 전에 확인한다 — 조용한 빈 결과는
+   *  모델에게 "그런 건 없다" 로 읽혀서, 있는 것을 두고 물러난다. */
+  private async runMcpExtra(name: string, input: any): Promise<string> {
+    const resources = mcp.getMcpResources(), prompts = mcp.getMcpPrompts();
+    const arg = (input && typeof input === "object") ? input : {};
+    if (name === mcpExtras.LIST_RESOURCES) {
+      return mcpExtras.formatResourceList(resources, arg.server ? String(arg.server) : undefined);
+    }
+    if (name === mcpExtras.READ_RESOURCE) {
+      const bad = mcpExtras.checkResourceArgs(resources, arg.server, arg.uri);
+      if (bad) return "오류: " + bad;
+      const r = await mcp.readResource(String(arg.server), String(arg.uri));
+      return r.ok ? mcpExtras.formatResourceContents(r.result) : "⚠️ MCP 오류: " + (r.error || "알 수 없음");
+    }
+    if (name === mcpExtras.GET_PROMPT) {
+      const bad = mcpExtras.checkPromptArgs(prompts, arg.server, arg.name);
+      if (bad) return "오류: " + bad;
+      const miss = mcpExtras.missingPromptArgs(prompts, String(arg.server), String(arg.name), arg.arguments);
+      if (miss.length) return "오류: 필수 인자가 빠졌습니다 — " + miss.join(", ");
+      const r = await mcp.getPrompt(String(arg.server), String(arg.name), arg.arguments);
+      return r.ok ? mcpExtras.formatPromptResult(r.result) : "⚠️ MCP 오류: " + (r.error || "알 수 없음");
+    }
+    return "오류: 알 수 없는 도구 " + name;
   }
 
   // ── 스킬 (Claude Code 생태계) ───────────────────────────────────────────────
@@ -3284,6 +3313,14 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       }
     }
     // MCP 도구 — 워크스페이스와 무관하게 실행
+    if (mcpExtras.isExtraTool(call.name)) {
+      const mid = "rt" + (this._uid++);
+      const note = call.name === mcpExtras.GET_PROMPT ? String(call.input?.name ?? "") : String(call.input?.uri ?? call.input?.server ?? "");
+      this.addTool(mid, agentId, "MCP", note || call.name);
+      const out = await this.runMcpExtra(call.name, call.input);
+      this.setTool(mid, { st: "done", note: out.startsWith("오류") || out.startsWith("⚠️") ? t("mcpui.failed") : undefined });
+      return out;
+    }
     if (mcp.isMcpToolName(call.name)) {
       const r = mcp.resolveMcpTool(call.name);
       if (!r) return "오류: 알 수 없는 MCP 도구 " + call.name;
