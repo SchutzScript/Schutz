@@ -37,6 +37,7 @@ import { shouldProbeQuota } from "./engine/quotaPoll";
 import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction, overlayZ } from "./overlays";
 import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } from "./ext/prompt";
 import { upsert as sbUpsert, remove as sbRemove, ordered as sbOrdered, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./ext/statusBar";
+import { classify as fsClassify } from "./ext/fsWatch";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
   rosterLines, personaSystem, type SubagentDef,
@@ -4347,19 +4348,40 @@ ${(r.output || "").slice(0, 2000)}`;
 
   private _fsTimer: ReturnType<typeof setTimeout> | null = null;
   /** 파일 워처 트리거 — 트리·모델·git을 디스크와 가볍게 동기화 (페인 리마운트 없이 커서 보존) */
-  private onFsChange = () => {
+  /** 워처가 알려 준, 아직 처리하지 않은 경로들. 디바운스 동안 모았다가 트리를
+   *  다시 읽은 뒤 만들어짐/고쳐짐/지워짐으로 나눈다. */
+  private _fsTouched = new Set<string>();
+  private onFsChange = (rels?: string[]) => {
+    for (const r of rels ?? []) this._fsTouched.add(r);
     if (this._fsTimer) clearTimeout(this._fsTimer);
     this._fsTimer = setTimeout(() => void this.syncFromDisk(), 250);
   };
   async syncFromDisk(opts?: { bulk?: boolean }) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
+    const before = ws.entries.filter(e => !e.dir).map(e => e.rel);
     let tree: SchutzWorkspaceTree | null = null;
     try {
       tree = await window.schutz.readTree(ws.root);
       if (this.state.workspace !== ws) return; // 그 사이 워크스페이스 전환 → 스테일 트리로 새 repo를 덮지 않음
       this.setState({ workspace: tree });
     } catch { /* */ }
+    // 확장의 파일 감시자에게 알린다. 워처가 준 이름만으로는 무슨 일이 있었는지 알 수
+    // 없으므로(만들어졌는지 지워졌는지 고쳐졌는지) 앞뒤 트리와 맞춰 판정한다.
+    const touched = [...this._fsTouched];
+    this._fsTouched.clear();
+    if (tree) {
+      const after = tree.entries.filter(e => !e.dir).map(e => e.rel);
+      // 트리가 잘렸으면 "목록에 없다" 가 "지워졌다" 가 아니라 "상한에 걸려 안 읽었다"
+      // 일 수 있다. 그때 트리 전체를 비교하면 멀쩡한 파일에 지워짐을 쏜다 — 그걸 받은
+      // 확장은 인덱스에서 실제로 지운다. 그래서 **워처가 이름을 준 경로만** 본다.
+      const capped = tree.truncated || ws.truncated;
+      const t = new Set(touched);
+      const delta = capped
+        ? fsClassify(before.filter(r => t.has(r)), after.filter(r => t.has(r)), touched)
+        : fsClassify(before, after, touched);
+      if (delta.created.length || delta.changed.length || delta.deleted.length) extHost.notifyFsDelta(delta);
+    }
     // 사라진 파일(외부 삭제·브랜치 전환)의 stale 모델·진단·문제패널 항목 정리 — 트리 완전할 때만(truncated 면 실존 파일 오삭제 위험)
     if (tree && !(tree as any).truncated) {
       const present = new Set(tree.entries.filter(e => !e.dir).map(e => e.rel));

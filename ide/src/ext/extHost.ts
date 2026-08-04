@@ -1,7 +1,7 @@
 // 확장 호스트 (렌더러) — 활성 확장의 엔트리를 큐레이트 API로 로드.
 // 확장은 신뢰 코드로 간주(VS Code와 동일 모델)하되, 편의 API는 이 표면으로 한정한다.
 // Schutz 네이티브(schutz API) + VS Code 프로그램형(vscode 셰임으로 activate 실행) 둘 다 지원.
-import { makeVscodeApi, disposeShimRegistrations } from "./vscodeShim";
+import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta } from "./vscodeShim";
 import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
 import { editorEvents } from "./vscodeShim";
 import { t } from "../i18n";
@@ -265,6 +265,11 @@ function memento(nsKey: string) {
     keys: () => Object.keys(read()),
     setKeysForSync: () => { /* no-op */ },
   };
+}
+
+/** 앱이 알아낸 파일 변화를 확장의 감시자들에게 넘긴다. */
+export function notifyFsDelta(delta: { created: string[]; changed: string[]; deleted: string[] }): number {
+  return deliverFsDelta(delta);
 }
 
 /** 관리 UI용 목록 */

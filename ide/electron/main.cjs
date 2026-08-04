@@ -1356,18 +1356,31 @@ ipcMain.on("schutz:watchStart", (e, root) => {
   try { assertRoot(root); } catch { return; }
   let timer = null;
   let dirty = false;
+  // 어떤 파일이 움직였는지 모아 둔다. fs.watch 는 처음부터 이름을 주는데, 예전엔
+  // 무시 규칙에만 쓰고 버려서 렌더러에는 "뭔가 바뀌었다" 는 빈 신호만 갔다.
+  // 그래서 확장의 파일 감시자를 만들 수가 없었다.
+  let touched = new Set();
+  const MAX_TOUCHED = 2000;   // 대량 변경(브랜치 전환)에서 무한히 쌓이지 않게
   try {
     const watcher = fs.watch ? require("fs").watch(root, { recursive: true }, (_type, filename) => {
       if (filename) {
         const parts = String(filename).replace(/\\/g, "/").split("/");
         if (parts.some(seg => IGNORE_DIRS.has(seg))) return; // node_modules/.git 등 무시
         if (parts[parts.length - 1].endsWith(".schutz-tmp")) return; // 우리가 방금 만든 임시 파일 — 새로고침을 유발할 이유가 없다
+        if (touched.size < MAX_TOUCHED) touched.add(String(filename).replace(/\\/g, "/"));
       }
       dirty = true;
       const cur = watchers.get(wid);
       if (cur) {
         clearTimeout(cur.timer);
-        cur.timer = setTimeout(() => { if (dirty && !e.sender.isDestroyed()) { dirty = false; e.sender.send("schutz:fsChange"); } }, 350);
+        cur.timer = setTimeout(() => {
+          if (dirty && !e.sender.isDestroyed()) {
+            dirty = false;
+            const rels = [...touched];
+            touched = new Set();
+            e.sender.send("schutz:fsChange", rels);
+          }
+        }, 350);
       }
     }) : null;
     if (watcher) {
