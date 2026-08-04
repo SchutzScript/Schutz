@@ -4,6 +4,7 @@
 import monaco from "../editor/monacoSetup";
 import { getLang } from "../i18n";
 import { makeDocIndex } from "./shimDoc";
+import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
 import { setShimDocSource } from "./extHost";
 
 export interface ShimDeps {
@@ -15,6 +16,10 @@ export interface ShimDeps {
    *  없이 두었더니 activeTextEditor 가 영원히 undefined 였다. */
   workspaceRoot: () => string | null;
   openFiles: () => string[];
+  /** 사용자에게 묻는다. 취소면 undefined 로 풀린다 — 그게 vscode 규약이다.
+   *  이 통로가 없던 동안 showQuickPick·showInputBox 는 **묻지도 않고** undefined 를
+   *  돌려줬고, 확장은 사용자가 취소한 줄 알고 흐름을 접었다. */
+  prompt: (req: PromptReq) => Promise<any>;
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -170,10 +175,24 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
     setLanguageConfiguration() { return noopDisposable; },
   };
 
+  /** 알림인가 물음인가를 인자로 가른다. vscode 도 이 한 함수로 둘 다 한다. */
+  const msgOrAsk = async (tone: "info" | "warn" | "error", msg: string, items: any[]) => {
+    const buttons = normalizeButtons(items);
+    if (!buttons.length) {
+      deps.toast(tone === "error" ? "error" : "info", ext.name + (tone === "warn" ? " ⚠ " : ": ") + msg);
+      return undefined;
+    }
+    const got = await deps.prompt({ kind: "buttons", source: ext.name, title: String(msg), tone, buttons });
+    return got == null ? undefined : buttons[got as number]!.raw;
+  };
+
   const window_ = {
-    showInformationMessage: (msg: string, ..._items: any[]) => { deps.toast("info", ext.name + ": " + msg); return Promise.resolve(undefined); },
-    showWarningMessage: (msg: string, ..._items: any[]) => { deps.toast("info", ext.name + " ⚠ " + msg); return Promise.resolve(undefined); },
-    showErrorMessage: (msg: string, ..._items: any[]) => { deps.toast("error", ext.name + ": " + msg); return Promise.resolve(undefined); },
+    // 버튼 없이 부르면 알림이다(토스트). 버튼을 주면 **물음**이다 — 예전엔 둘 다
+    // 토스트로 흘리고 undefined 를 돌려줘, `if (await showInformationMessage(m, "Reload") === "Reload")`
+    // 같은 흔한 흐름이 영원히 거짓이었다. 뭔가 뜨긴 하니 더 알아채기 어려웠다.
+    showInformationMessage: (msg: string, ...items: any[]) => msgOrAsk("info", msg, items),
+    showWarningMessage: (msg: string, ...items: any[]) => msgOrAsk("warn", msg, items),
+    showErrorMessage: (msg: string, ...items: any[]) => msgOrAsk("error", msg, items),
     setStatusBarMessage: (_msg: string) => noopDisposable,
     createOutputChannel: (name: string) => {
       let buf = "";
@@ -184,8 +203,32 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
       };
     },
     createStatusBarItem: () => ({ text: "", tooltip: "", command: "", show() {}, hide() {}, dispose() {} }),
-    showQuickPick: () => Promise.resolve(undefined),
-    showInputBox: () => Promise.resolve(undefined),
+    showQuickPick: async (items: any, options?: any) => {
+      // 확장은 배열을 Promise 로 넘기기도 한다(파일 목록을 읽어 오는 흐름).
+      const list = normalizePicks(await Promise.resolve(items));
+      if (!list.length) return undefined;
+      const many = options?.canPickMany === true;
+      const got = await deps.prompt({
+        kind: "pick", source: ext.name,
+        title: String(options?.placeHolder ?? options?.title ?? ""),
+        items: list, many,
+        match: { matchOnDescription: options?.matchOnDescription === true, matchOnDetail: options?.matchOnDetail === true },
+      });
+      if (got == null) return undefined;
+      // 넘겨받은 값 그대로 돌려준다 — 확장은 대개 자기가 붙인 필드를 보고 다음을 정한다.
+      return many ? (got as number[]).map(i => list[i]!.raw) : list[got as number]!.raw;
+    },
+    showInputBox: async (options?: any) => {
+      const got = await deps.prompt({
+        kind: "input", source: ext.name,
+        title: String(options?.prompt ?? options?.title ?? ""),
+        detail: String(options?.placeHolder ?? ""),
+        value: String(options?.value ?? ""),
+        password: options?.password === true,
+        validate: options?.validateInput,
+      });
+      return got == null ? undefined : String(got);
+    },
     createTextEditorDecorationType: () => ({ dispose() {}, key: "sz-deco" }),
     registerTreeDataProvider: () => noopDisposable,
     registerWebviewViewProvider: () => noopDisposable,
