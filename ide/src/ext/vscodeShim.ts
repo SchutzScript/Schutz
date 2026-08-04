@@ -3,12 +3,18 @@
 // Node/네이티브 의존이나 미구현 API를 쓰는 확장은 실패(캐치되어 보고). "단순 확장"용.
 import monaco from "../editor/monacoSetup";
 import { getLang } from "../i18n";
+import { makeDocIndex } from "./shimDoc";
+import { setShimDocSource } from "./extHost";
 
 export interface ShimDeps {
   toast: (kind: "ok" | "error" | "info", msg: string) => void;
   showPanel: (title: string, html: string) => void;
   getActiveFile: () => string | null;
   registerCommand: (id: string, title: string, run: (...args: any[]) => any, source: string) => void;
+  /** 열려 있는 파일들과 워크스페이스 루트 — 문서·편집기를 만들려면 이 둘이 있어야 한다.
+   *  없이 두었더니 activeTextEditor 가 영원히 undefined 였다. */
+  workspaceRoot: () => string | null;
+  openFiles: () => string[];
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -66,7 +72,44 @@ function langIdsFromSelector(sel: any): string[] {
 }
 
 /** vscode 모듈 셰임 인스턴스 생성 — 확장별로 만든다(구독/컨텍스트 격리). */
+/** 셰임이 쏘는 편집기 사건들. 앱이 fireShimEvent 로 밀어 준다 — 예전엔 전부 아무도
+ *  안 쏘는 빈 EventEmitter 라, 저장·열기를 구독한 확장은 영원히 안 불렸다. */
+export const editorEvents = {
+  activeChanged: new EventEmitter<any>(),
+  selectionChanged: new EventEmitter<any>(),
+  docChanged: new EventEmitter<any>(),
+  docOpened: new EventEmitter<any>(),
+  docClosed: new EventEmitter<any>(),
+  docSaved: new EventEmitter<any>(),
+};
+
+/** 루트를 떼어 워크스페이스 상대 경로로. uri·경로·문서 아무거나 받는다. */
+function stripRoot(root: string, p: string): string {
+  const r = root.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\//, "") + "/";
+  const q = String(p).replace(/\\/g, "/").replace(/^\//, "");
+  return q.startsWith(r) ? q.slice(r.length) : q;
+}
+function relOfWith(root: string | null, arg: any): string | null {
+  if (!arg) return null;
+  const p = typeof arg === "string" ? arg : (arg.fsPath || arg.path || arg.uri?.fsPath || arg.uri?.path);
+  if (!p) return null;
+  return root ? stripRoot(root, p) : String(p);
+}
+
 export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string }) {
+  const docs = makeDocIndex(
+    { root: deps.workspaceRoot, activeRel: deps.getActiveFile, openRels: deps.openFiles },
+    { Position, Range, Selection },
+  );
+  const relOf = (arg: any) => relOfWith(deps.workspaceRoot(), arg);
+  // 사건을 쏠 때 쓸 통로. 확장마다 덮어써도 같은 것을 가리키므로 문제 없다.
+  setShimDocSource((rel) => docs.docFor(rel), (rel) => docs.editorFor(rel));
+  const folder = () => {
+    const r = deps.workspaceRoot();
+    if (!r) return undefined;
+    const name = r.replace(/\\/g, "/").split("/").filter(Boolean).pop() || r;
+    return { uri: UriShim.file(r), name, index: 0 };
+  };
   const executeCommand = async (id: string, ...args: any[]) => {
     // 내장 명령 일부만 지원; 나머지는 등록된 확장 명령으로 위임(자기 네임스페이스 우선 해석)
     try { return (window as any).__schutzRunCommand?.(id, args, ext.id); } catch { /* */ }
@@ -146,10 +189,13 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
     createTextEditorDecorationType: () => ({ dispose() {}, key: "sz-deco" }),
     registerTreeDataProvider: () => noopDisposable,
     registerWebviewViewProvider: () => noopDisposable,
-    onDidChangeActiveTextEditor: new EventEmitter().event,
-    onDidChangeTextEditorSelection: new EventEmitter().event,
-    get activeTextEditor() { return undefined; },
-    visibleTextEditors: [] as any[],
+    onDidChangeActiveTextEditor: editorEvents.activeChanged.event,
+    onDidChangeTextEditorSelection: editorEvents.selectionChanged.event,
+    // 예전엔 이 둘이 늘 undefined / 빈 배열이었다. 확장은 로드되고 "성공" 으로 보고된
+    // 뒤 현재 파일을 못 읽어 조용히 아무것도 하지 않았다 — 앱은 그 정보를 다 갖고 있었다.
+    get activeTextEditor() { return docs.activeEditor(); },
+    get visibleTextEditors() { return docs.visibleEditors(); },
+    showTextDocument: (doc: any) => Promise.resolve(docs.editorFor(relOf(doc))),
     withProgress: (_opts: any, task: any) => Promise.resolve(task({ report() {} }, { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event })),
   };
 
@@ -161,16 +207,22 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
       inspect: () => undefined,
     }),
     onDidChangeConfiguration: new EventEmitter().event,
-    onDidChangeTextDocument: new EventEmitter().event,
-    onDidOpenTextDocument: new EventEmitter().event,
-    onDidCloseTextDocument: new EventEmitter().event,
-    onDidSaveTextDocument: new EventEmitter().event,
+    onDidChangeTextDocument: editorEvents.docChanged.event,
+    onDidOpenTextDocument: editorEvents.docOpened.event,
+    onDidCloseTextDocument: editorEvents.docClosed.event,
+    onDidSaveTextDocument: editorEvents.docSaved.event,
     onDidChangeWorkspaceFolders: new EventEmitter().event,
-    workspaceFolders: undefined as any,
-    getWorkspaceFolder: () => undefined,
-    getText: () => "",
+    // 폴더를 안 주면 대부분의 확장이 첫 줄에서 물러난다.
+    get workspaceFolders() { const f = folder(); return f ? [f] : undefined; },
+    get textDocuments() { return docs.documents(); },
+    getWorkspaceFolder: (_uri?: any) => folder(),
     createFileSystemWatcher: () => ({ onDidCreate: new EventEmitter().event, onDidChange: new EventEmitter().event, onDidDelete: new EventEmitter().event, dispose() {} }),
-    openTextDocument: () => Promise.reject(new Error("openTextDocument 미지원")),
+    openTextDocument: (arg?: any) => {
+      // 열려 있지 않은 파일은 아직 못 연다(모델이 없다). 그래도 reject 로 끝내던
+      // 자리라, 최소한 열려 있는 파일에는 답한다.
+      const d = docs.docFor(relOf(arg));
+      return d ? Promise.resolve(d) : Promise.reject(new Error("열려 있는 파일만 지원합니다"));
+    },
     registerTextDocumentContentProvider: () => noopDisposable,
     fs: {},
     name: undefined,
