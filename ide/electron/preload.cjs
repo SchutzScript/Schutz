@@ -185,6 +185,23 @@ contextBridge.exposeInMainWorld("schutz", {
     return () => ipcRenderer.removeListener("schutz:quota", h);
   },
 
+  /** 저장 안 한 파일 목록을 메인에 알려 둔다.
+   *  종료를 누른 **뒤에** 물어보면 늦다 — 그때는 이미 트레이가 사라지고 실행 중인
+   *  프로세스가 죽은 다음이다. 미리 알고 있어야 종료 자체를 붙잡을 수 있다. */
+  reportDirty: (files) => ipcRenderer.send("schutz:dirty", files),
+  /** 메인이 "저장하고 종료" 를 골랐을 때. 저장이 끝나면 done() 을 부른다. */
+  onQuitSave: (cb) => {
+    const h = () => cb(() => ipcRenderer.send("schutz:quitReady"));
+    ipcRenderer.on("schutz:quitSave", h);
+    return () => ipcRenderer.removeListener("schutz:quitSave", h);
+  },
+  /** 메인이 "저장하지 않고 종료" 를 골랐을 때 — beforeunload 가 더는 막으면 안 된다. */
+  onQuitForce: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("schutz:quitForce", h);
+    return () => ipcRenderer.removeListener("schutz:quitForce", h);
+  },
+
   /** 범용 GET (CORS 우회) — 모델 목록 등 */
   httpGet: (url, headers) => ipcRenderer.invoke("schutz:httpGet", url, headers),
 

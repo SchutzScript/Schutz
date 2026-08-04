@@ -146,6 +146,13 @@ interface SchutzApi {
   /** 바뀐 파일들의 워크스페이스 상대 경로. 감시자가 이름을 못 준 변경도 있으므로
    *  이 목록은 완전하지 않다 — 트리 비교로 보완해서 쓴다. */
   onFsChange(cb: (rels: string[]) => void): () => void;
+  /** 저장 안 한 파일 목록을 메인에 알려 둔다 — 종료를 붙잡을지 메인이 이걸로 정한다.
+   *  종료를 누른 뒤에 물어보면 늦다(그때는 트레이가 이미 사라진 뒤다). */
+  reportDirty?(files: string[]): void;
+  /** 메인이 "저장하고 종료" 를 골랐다. 저장이 끝나면 done() 을 부른다. */
+  onQuitSave?(cb: (done: () => void) => void): () => void;
+  /** 메인이 "저장하지 않고 종료" 를 골랐다 — beforeunload 가 더는 막으면 안 된다. */
+  onQuitForce?(cb: () => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
   /** 체크포인트 — 한 실행이 손댄 파일의 원본 바이트를 메인에 잡아 두고 통째로 되돌린다.
    *  해시는 전부 메인이 계산한다. 무엇을 되돌릴지는 engine/checkpoints.ts 가 정한다. */

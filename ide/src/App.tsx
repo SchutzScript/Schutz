@@ -4865,6 +4865,13 @@ ${(r.output || "").slice(0, 2000)}`;
     if (window.schutz) {
       this.setState(s => ({ ...this.normSlots([], [], s.layout), leftTab: "tree" } as any));
       window.addEventListener("beforeunload", this._onBeforeUnload);
+      // 메인이 종료를 붙잡고 물었을 때의 두 갈래.
+      this._quitSaveOff = window.schutz.onQuitSave?.(async (done) => {
+        try { await this.saveAllDirtyModels(true); } catch { /* 저장 실패해도 알려야 한다 */ }
+        // 정말 다 저장됐을 때만 알린다 — 남아 있으면 메인이 8초 뒤 "종료하지 않았다" 고 말한다.
+        if (!this.anyDirty()) done();
+      }) ?? null;
+      this._quitForceOff = window.schutz.onQuitForce?.(() => { this._forceQuit = true; }) ?? null;
       // MCP 번들을 창 아무 데나 끌어다 놓을 수 있게. capture 로 먼저 잡아야 컴포저 첨부보다
       // 앞선다. dragover 를 안 막으면 브라우저가 그 파일로 네비게이트해 앱이 통째로 날아간다.
       window.addEventListener("dragover", this.onWindowDragOver);
@@ -4984,6 +4991,8 @@ ${(r.output || "").slice(0, 2000)}`;
     this._oauthOff = null;
     window.removeEventListener("keydown", this._onGlobalKey);
     window.removeEventListener("beforeunload", this._onBeforeUnload);
+    this._quitSaveOff?.(); this._quitSaveOff = null;
+    this._quitForceOff?.(); this._quitForceOff = null;
     this._markersOff?.dispose();
     this._fsOff?.();
     this._langOff?.();
@@ -4997,11 +5006,17 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   /** 앱 종료 가드 — 미저장 변경이 있으면 네이티브 확인 */
+  /** 사용자가 "저장하지 않고 종료" 를 골랐다 — 더는 막지 않는다. */
+  private _forceQuit = false;
+  private _quitSaveOff: (() => void) | null = null;
+  private _quitForceOff: (() => void) | null = null;
   private _onBeforeUnload = (e: BeforeUnloadEvent) => {
     // 대화는 턴이 끝날 때만 저장돼서, 스트리밍 중에 끄면 그 주고받음이 통째로 사라졌다.
     // 슬래시 명령 응답처럼 턴 밖에서 생긴 메시지도 마찬가지 — 나가기 직전에 한 번 더 저장한다.
     try { this.saveSession(); } catch { /* 저장 실패가 종료를 막으면 안 된다 */ }
-    if (this.anyDirty()) {
+    // Electron 에선 이 가드가 **대화상자 없이** 종료를 취소한다. 그래서 메인이 먼저
+    // 묻고, 사용자가 그냥 나가기로 했으면 여기서 붙잡으면 안 된다.
+    if (!this._forceQuit && this.anyDirty()) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -5351,7 +5366,23 @@ ${(r.output || "").slice(0, 2000)}`;
   }
   /** 어디든 미저장이 있는가 (종료·브랜치 전환 가드용) */
   private anyDirty(): boolean {
-    return Object.values(this.state.paneDirty).some(Boolean) || projectModels.dirtyRels().length > 0;
+    return this.dirtyFiles().length > 0;
+  }
+  /** 저장 안 한 파일들. 종료를 붙잡을 때 메인이 이 목록을 그대로 보여 준다. */
+  private dirtyFiles(): string[] {
+    const fromPanes = Object.entries(this.state.paneDirty).filter(([, d]) => d).map(([rel]) => rel);
+    return [...new Set([...fromPanes, ...projectModels.dirtyRels()])].filter(rel => !this.parseDiffKey(rel));
+  }
+  /** 메인에 알려 둔 마지막 목록 — 같은 값을 되풀이해 보내지 않는다. */
+  private _dirtyReported = "";
+  /** 종료를 누른 **뒤에** 물어보면 늦다. 그때는 이미 트레이가 사라지고 실행 중인
+   *  프로세스가 죽은 다음이다. 바뀔 때마다 미리 알려 둔다. */
+  private reportDirty() {
+    const files = this.dirtyFiles();
+    const key = files.join("|");
+    if (key === this._dirtyReported) return;
+    this._dirtyReported = key;
+    try { window.schutz?.reportDirty?.(files); } catch { /* */ }
   }
   // MonacoPane 콜백 — 안정 참조(arrow property)로 두어 React.memo 가 불필요한 리렌더를 차단하게 한다
   private handleDirtyChange = (rel: string, d: boolean) => this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: d } }));
@@ -5686,6 +5717,8 @@ ${(r.output || "").slice(0, 2000)}`;
       this.setState({ openingPhase: "intro" });
     }
     if (_ps) this._restoreClosedFocus(_ps);
+    // 저장 안 한 파일 목록을 메인에 맞춰 둔다 — 종료를 붙잡을지 여기서 정해진다.
+    this.reportDirty();
     // 모드가 바뀌면 Monaco 를 다시 재어준다. automaticLayout 은 display:none 안에서
     // 0×0 으로 측정하고, 다시 보일 때 ResizeObserver 가 뒤늦게 따라오면서 한 프레임
     // 어긋난 크기가 보인다. 명시적으로 한 번 재면 그 깜빡임이 없어진다.

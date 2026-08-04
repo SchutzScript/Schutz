@@ -745,7 +745,9 @@ function syncTray(img) {
   } catch { /* 트레이가 없는 환경도 있다 — 없어도 앱은 돈다 */ }
 }
 // 앱이 끝날 때 놓아준다. 안 그러면 종료 후에도 아이콘이 남아 클릭하면 아무 일도 안 난다.
-app.on("before-quit", () => { try { tray?.destroy(); } catch { /* */ } tray = null; });
+// 트레이는 **정말 나갈 때** 놓는다. before-quit 에서 없애면, 종료가 붙잡혔을 때
+// (저장 안 한 것이 있어 되물을 때) 트레이만 사라져 앱에 닿을 길이 없어진다.
+app.on("will-quit", () => { try { tray?.destroy(); } catch { /* */ } tray = null; });
 
 // 파일/폴더 이름 변경 · 삭제
 ipcMain.handle("schutz:renameEntry", async (_e, root, relFrom, relTo) => {
@@ -1502,7 +1504,61 @@ app.whenReady().then(() => {
 
 // 백그라운드 실행(dev 서버)은 앱보다 오래 산다 — 종료 때 정리하지 않으면
 // 포트를 계속 물고 있어 다음 실행이 EADDRINUSE 로 죽는다.
-app.on("before-quit", () => {
+/* ── 저장 안 한 채로 나가려 할 때 ──────────────────────────────────────────
+   렌더러에는 beforeunload 가드가 있는데, Electron 에서 그건 **대화상자 없이 종료를
+   조용히 취소한다.** 그러면 종료를 눌렀는데 아무 일도 안 일어난 것처럼 보이고, 그
+   시점엔 이미 트레이가 사라지고 실행 중인 프로세스가 죽은 뒤다 — 창을 트레이로
+   내려둔 상태였다면 앱에 닿을 방법이 없다. (최소 재현으로 확인했다.)
+
+   그래서 붙잡기 전에 **묻는다.** 렌더러가 미리 알려 둔 목록을 쓰므로 종료 순간에
+   왕복할 필요가 없다. */
+const quitGuard = require("./quitGuard.cjs");
+/** 창(webContents id) → 저장 안 한 파일 목록. */
+const dirtyByWin = new Map();
+let quitDecided = false;
+ipcMain.on("schutz:dirty", (e, files) => {
+  const list = Array.isArray(files) ? files.filter(x => typeof x === "string") : [];
+  if (list.length) dirtyByWin.set(e.sender.id, list); else dirtyByWin.delete(e.sender.id);
+});
+const allDirty = () => [...new Set([].concat(...dirtyByWin.values()))];
+
+app.on("before-quit", (e) => {
+  const files = allDirty();
+  if (quitGuard.shouldAsk(files.length, quitDecided)) {
+    e.preventDefault();
+    const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) || null;
+    const opts = {
+      type: "warning",
+      message: "저장하지 않은 파일이 " + files.length + "개 있습니다",
+      detail: quitGuard.describe(files) + "\n\n저장하지 않고 종료하면 이 내용은 사라집니다.",
+      buttons: quitGuard.BUTTONS, defaultId: 0, cancelId: 2, noLink: true,
+    };
+    const handle = (r) => {
+      const what = quitGuard.decide(r && r.response);
+      if (what === "cancel") return;              // 트레이도 창도 그대로 — 누른 적 없는 것과 같다
+      quitDecided = true;
+      if (what === "discard") {
+        // 렌더러의 beforeunload 가 더는 막지 않게 알린 뒤 나간다.
+        for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send("schutz:quitForce"); } catch { /* */ } }
+        setTimeout(() => app.quit(), 120);
+        return;
+      }
+      // 저장하고 종료 — 렌더러가 끝났다고 알리면 그때 나간다. 답이 없으면 8초 뒤 포기하고
+      // **다시 묻지 않고** 나가지 않는다(저장이 안 됐을 수 있다).
+      let done = false;
+      const off = () => { ipcMain.removeListener("schutz:quitReady", onReady); };
+      const onReady = () => { if (done) return; done = true; off(); app.quit(); };
+      ipcMain.on("schutz:quitReady", onReady);
+      for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send("schutz:quitSave"); } catch { /* */ } }
+      setTimeout(() => {
+        if (done) return;
+        done = true; off(); quitDecided = false;
+        try { dialog.showMessageBox(win, { type: "error", message: "저장을 끝내지 못해 종료하지 않았습니다", detail: "직접 저장한 뒤 다시 시도해 주세요.", buttons: ["확인"], noLink: true }).catch(() => {}); } catch { /* */ }
+      }, 8000);
+    };
+    try { (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then(handle).catch(() => {}); } catch { /* */ }
+    return;
+  }
   // 이제부터의 창 닫기는 트레이 최소화가 아니라 진짜 종료다 — win.on("close") 가 이 값을 본다.
   isQuitting = true;
   for (const c of runProcs.values()) { try { killProcTree(c); } catch { /* 이미 죽음 */ } }
