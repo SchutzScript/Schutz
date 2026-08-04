@@ -2,6 +2,69 @@
 
 ## [Unreleased]
 
+## [0.2.0] — Everything the extension host said it could do
+
+The previous release fixed behaviour the app claimed to have. This one does the same thing one layer out: an extension could load, report success, and then do nothing at all, because most of what it asked for was answered by a function that returned an empty value.
+
+There is a shape to all of it. `registerTreeDataProvider` returned a disposable. `showQuickPick` returned `undefined`. `createStatusBarItem` returned an object with a writable `text`. Each of those is a *successful* answer, so the extension carried on believing it had worked. Nothing errored, nothing was logged, and the feature simply was not there. That is worse than failing, because there is nothing to search for.
+
+### An extension can see the file you are looking at
+
+`window.activeTextEditor` was `undefined` — always. `visibleTextEditors` was an empty array, `workspaceFolders` was `undefined`, and `openTextDocument` rejected. The app had all of it: the models, the open panes. Only the shim was not connected.
+
+Documents and editors are now built on the real Monaco models, read through getters rather than snapshots so an extension never reasons about stale text. `editor.edit()` goes through the model rather than writing to disk — writing directly would be neither undoable nor reconcilable with the save baseline, and this way `Ctrl+Z` just works. `onDidOpenTextDocument`, `onDidSaveTextDocument` and `onDidChangeActiveTextEditor` fire for real; they were empty emitters nobody ever fired.
+
+### Language extensions deliver what they produce
+
+Completion and hover were wired. The four lines under them accepted a registration and threw the results away — and one of those was diagnostics, so a linter would read your file, find every problem, hand them over, and produce no squiggle, no problems panel entry, no count in the tab.
+
+- **Diagnostics reach the editor and the problems panel.** Each extension gets its own marker owner; sharing one would mean the next `set()` wipes the previous extension's findings. The collection remembers what it marked so `clear()` can actually clear it, rather than reporting itself empty while stale problems stay on screen.
+- **The severity table is written fresh.** VS Code numbers `Error` as **0**; LSP numbers it 1. Reusing the LSP table — which sits in the next file over — would shift everything one step down and quietly demote every error to a warning.
+- **Go-to-definition and formatters work.** Definitions accept the `LocationLink` shape (`targetUri`/`targetRange`) that plenty of extensions return; formatter edits go through the model, so `Ctrl+Z` takes them back.
+- **Providers receive a `TextDocument`, not a Monaco model.** A model has no `getText`, no `lineAt`, no `fileName`, so any provider calling one threw on its first line into a `catch` that returns an empty result. From the extension's side that is indistinguishable from "nothing to report" — and it explains why completion and hover, wired up long ago, produced nothing for any provider that read its document.
+
+### An extension can ask you something
+
+All three ways of asking answered without asking. In the VS Code contract `undefined` means *the user cancelled*, so an extension concluded it had been cancelled by a prompt that never appeared, and dropped whatever it was doing.
+
+Quick picks, input boxes and button messages now open real dialogs. A pick returns **the item the extension passed in**, not a copy, because extensions branch on fields they attached themselves. `validateInput` also runs when the dialog opens — an extension's own initial value can already violate its own rule, and with nothing marked you would have to press OK to find out why OK does nothing.
+
+`showInformationMessage(msg)` with no buttons stays a toast. A notification should not block. The worst of the three was this one, because the toast *did* appear, so something looked like it had happened while `if (await showInformationMessage(m, "Reload") === "Reload")` was permanently false.
+
+Every prompt names the extension asking. A dialog that reads as the app's own leaves you suspecting the app after the extension is gone.
+
+### Settings, watchers, status, views
+
+- **Extensions can read their own settings.** `get(key, def)` reads plausibly until you notice extensions do not pass a fallback — they declared their defaults in the manifest. `contributes.configuration` may be an object *or* an array; handling only one silently loses defaults for half of them. `update()` persists, and `update(key, undefined)` restores the declared default rather than recording `undefined` as your choice.
+- **File watchers wake up.** `fs.watch` receives the changed filename in the main process, used it for the ignore rules, and discarded it; the renderer got an argument-less "something changed". Those names now travel through and are classified against the before/after tree. When the tree is truncated by the entry cap only watcher-reported paths count — "absent from the listing" would otherwise mean "deleted", and an extension acting on that removes a good file from its index.
+- **Status bar items appear.** The item is wrapped in a `Proxy` because extensions keep reassigning `text` after `show()` — that is how a progress indicator works, and reading it once would freeze it on its first string. `$(icon)` markup is stripped; when stripping leaves nothing, a dot remains, since a zero-width label makes the clickable thing vanish.
+- **Trees and webviews have a place in the sidebar.** Titles come from the manifest, because the registering side only knows the view id. Trees fetch children only where expanded, so an extension serving a file tree does not read the whole project at once. Webviews live in a sandboxed iframe with `acquireVsCodeApi()` injected — nearly every webview opens with that line, and a pane that renders but answers nothing is worse than one that never appears.
+
+### MCP speaks all three of its pillars
+
+The handshake result was discarded, so the negotiated revision, the server's capabilities and its name were all unknown. Revision `2025-06-18` is now proposed and whatever the server negotiates is honoured, with the `MCP-Protocol-Version` header on HTTP transports. Only `tools/*` was ever called; `resources/*` and `prompts/*` are read too, and the panel counts all three — a server offering only resources used to read as "0 tools".
+
+### Fixed
+
+- **An extension in a folder not named `publisher.name` could not read a single file.** The scan derives the id from `package.json` and returns the real directory alongside it; the read path threw that away and rebuilt `extensions/<id>/`. Installing a `.vsix` names the folder after the id, which is why this stayed hidden — but the app has an "Open extensions folder" button, which is an invitation to put one there by hand.
+- **Overlay z-index now comes from the overlay table.** The table said a render's `zIndex` must equal its `z`, and two had drifted: the confirm dialog rendered *below* the bundle installer, and the tour shared a layer with the import dialog. `Escape` closes top-down by the table while the eye sees the opposite order, so you press `Escape` at the dialog in front and the answer goes to the one behind it.
+- **The repository had no CI at all.** The only workflow ran on `v*` tags, so 685 tests and a two-stage typecheck existed and nothing ran them on a push or a pull request — and the strict-mode pass over `src/engine` had been failing, unnoticed, in 25 places.
+- Confirmation dialogs moved off the OS `window.confirm`, which freezes the renderer, ignores the theme, and cannot show more than one line of what you are about to lose.
+- Monaco's own widgets (find, suggest, hover, peek) follow the app theme. The colours defined for them never applied, because an installed grammar extension means the TextMate theme wins.
+- Switching between editor and agent mode keeps your reading position, and the log filter is no longer silently dropped.
+- The renderer logs which bundle it loaded, and `dist` is no longer loaded twice on a failed dev-server connection.
+
+### Added
+
+- **Run this one file** (`Ctrl+F5`) for C, C++, Python, Go, Rust, JavaScript and TypeScript, with the toolchain checked before anything runs.
+- **`Alt+←` / `Alt+→`** return to where you just were, across files and within one.
+- **Git status colours in the tree**, so a modified file is visible without opening the git panel.
+- **Extensions can subscribe to what happens in the IDE** — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
+
+### Removed
+
+- 531 lines of a browser-preview-only demo path. It was a second implementation of the plan panel and change overview, and being the only implementation of them, those two panels were always empty in the desktop app.
+
 ## [0.1.0] — Nothing new, and that is the point
 
 This release adds no features. Every change here restores behaviour the app already claimed to have. Two of them were ways to lose work you had not saved.
