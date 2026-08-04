@@ -39,4 +39,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "misc.cancel": { ko: "취소", en: "Cancel", de: "Abbrechen", ja: "キャンセル" },
   "misc.dontSave": { ko: "저장 안 함", en: "Don't save", de: "Nicht speichern", ja: "保存しない" },
   "misc.saveAndClose": { ko: "저장 후 닫기", en: "Save and close", de: "Speichern und schließen", ja: "保存して閉じる" },
+  // 처리 안 된 비동기 실패 알림. 무엇이 실패했는지는 콘솔에 남고, 사용자에게는
+  // "조용히 넘어가지 않았다" 는 사실만 알린다.
+  "async.failed": { ko: "백그라운드 작업이 실패했습니다 — 개발자 도구 콘솔에 자세한 내용이 있습니다", en: "A background task failed — details are in the developer console", de: "Eine Hintergrundaufgabe ist fehlgeschlagen — Details in der Entwicklerkonsole", ja: "バックグラウンド処理が失敗しました — 詳細は開発者コンソールにあります" },
 };

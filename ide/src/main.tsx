@@ -6,12 +6,30 @@ import { applyTheme, getThemeId } from "./theme";
 import { applyUiFont } from "./settings";
 import { applyLang } from "./i18n";
 import { applyUiMode, getUiMode } from "./uiMode";
+import { ASYNC_ERROR_EVENT, isIgnorable, describe as describeError } from "./asyncErrors";
 
 // 첫 페인트 전에 테마/폰트/언어를 적용 — 저장된 Paper(라이트) 등에서 다크 플래시 방지, <html lang> 동기화
 // 첫 페인트 전에 모드까지 찍는다 — 없으면 에이전트 모드 사용자가 에디터 레이아웃을
 // 한 프레임 보고 지나간다. 여기선 워크스페이스를 모르니 전역 기본값이고, App 이 프로젝트를
 // 열면서 그 프로젝트 값으로 다시 맞춘다.
 try { applyTheme(getThemeId()); applyUiFont(); applyLang(); applyUiMode(getUiMode()); } catch { /* ignore */ }
+
+/* ── 처리 안 된 비동기 실패 ────────────────────────────────────────────────
+   아래 ErrorBoundary 는 **렌더 중에 던진 것만** 잡는다. 클릭 핸들러 안의 await 가
+   거부되면 React 는 아무것도 모르고, 지금까지 앱에도 그걸 지켜보는 곳이 없었다 —
+   오류도 로그도 없이 그냥 아무 일도 안 일어난다.
+
+   Monaco 의 취소(Canceled)는 뺀다. 취소는 실패가 아니고, 같이 시끄럽게 하면 진짜
+   오류가 그 속에 묻힌다. */
+function reportAsync(reason: unknown, kind: string) {
+  if (isIgnorable(reason)) return;
+  const { title, detail } = describeError(reason);
+  try { console.error("[schutz] 처리 안 된 " + kind + ":", detail); } catch { /* ignore */ }
+  // App 이 받아 한 번만 알린다. 여기서 직접 못 띄우는 것은 토스트가 App 안에 있어서다.
+  try { window.dispatchEvent(new CustomEvent(ASYNC_ERROR_EVENT, { detail: { title, detail, kind } })); } catch { /* ignore */ }
+}
+window.addEventListener("unhandledrejection", e => reportAsync(e.reason, "거부"));
+window.addEventListener("error", e => { if (e.error) reportAsync(e.error, "오류"); });
 
 // 옛 설정 마법사(Onboarding.tsx)가 남긴 완료 표시. 마법사 자체는 오프닝이 대체하며
 // 사라졌지만, 이 키는 **기존 사용자를 알아보는 유일한 흔적**이라 계속 읽는다 —
