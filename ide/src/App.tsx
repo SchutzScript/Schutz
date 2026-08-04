@@ -10370,7 +10370,19 @@ ${(r.output || "").slice(0, 2000)}`;
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg)" }}>{sv.name}</div>
                 <div style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sv.command} {sv.args.join(" ")}</div>
               </div>
-              {sv.running && <span style={{ flex: "none", fontSize: 10, color: "var(--accent-hi)" }}>{t("mcpui.toolCount", { n: sv.tools })}</span>}
+              {/* 도구 개수만 보여 주던 자리. 리소스·프롬프트를 내주는 서버는 여기서
+                  "0개" 로 보였다 — 붙었는데 아무것도 없는 것처럼. 협상된 개정판도 같이 적어
+                  무엇에 붙었는지 말할 수 있게 한다. */}
+              {sv.running && (
+                <span style={{ flex: "none", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
+                  <span style={{ fontSize: 10, color: "var(--accent-hi)" }}>
+                    {t("mcpui.offers", { t: sv.tools, r: sv.resources ?? 0, p: sv.prompts ?? 0 })}
+                  </span>
+                  {sv.protocolVersion && (
+                    <span title={sv.serverName || undefined} style={{ fontSize: 9, fontFamily: MONO, color: "var(--fg-dim2)" }}>{sv.protocolVersion}</span>
+                  )}
+                </span>
+              )}
               <button className="hv08" disabled={busy(sv.name)} onClick={() => sv.running ? this.mcpStopServer(sv.name) : this.mcpStartServer(sv.name)}
                 style={{ flex: "none", padding: "3px 11px", fontSize: 11, fontFamily: SUIT, cursor: "pointer", borderRadius: 6, border: "1px solid var(--w10)", background: "transparent", color: sv.running ? "var(--err)" : "var(--accent-hi)" }}>{busy(sv.name) ? "…" : sv.running ? t("mcpui.stop") : t("mcpui.start")}</button>
               <button className="hvDim" title={t("mcpui.remove")} onClick={() => this.mcpRemoveServer(sv.name)} style={{ flex: "none", width: 22, height: 22, border: "none", background: "transparent", color: "var(--fg-dim)", cursor: "pointer", fontSize: 13, borderRadius: 5 }}>✕</button>

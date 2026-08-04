@@ -29,6 +29,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "mcpui.modeGeneric": { ko: "설명으로", en: "From description", de: "Aus Beschreibung", ja: "説明から" },
   "mcpui.installedServers": { ko: "설치된 서버", en: "Installed servers", de: "Installierte Server", ja: "インストール済みサーバー" },
   "mcpui.noInstalled": { ko: "설치된 MCP 서버가 없습니다.", en: "No MCP servers installed.", de: "Keine MCP-Server installiert.", ja: "インストールされた MCP サーバーはありません。" },
+  "mcpui.offers": { ko: "도구 {t} · 리소스 {r} · 프롬프트 {p}", en: "{t} tools · {r} resources · {p} prompts", de: "{t} Werkzeuge · {r} Ressourcen · {p} Prompts", ja: "ツール {t} · リソース {r} · プロンプト {p}" },
   "mcpui.toolCount": { ko: "도구 {n}", en: "{n} tools", de: "{n} Werkzeuge", ja: "ツール {n}" },
   "mcpui.stop": { ko: "중지", en: "Stop", de: "Stoppen", ja: "停止" },
   "mcpui.start": { ko: "시작", en: "Start", de: "Starten", ja: "開始" },

@@ -77,6 +77,9 @@ function pickRpc(text, id) {
 function httpHeaders(s) {
   const h = { "content-type": "application/json", accept: "application/json, text/event-stream", ...(s.headers || {}) };
   if (s.sessionId) h["mcp-session-id"] = s.sessionId;   // 서버가 세션을 쥐면 따라간다
+  // 2025-06-18 개정부터 HTTP 전송은 협상된 버전을 매 요청에 실어야 한다. 예전엔
+  // initialize 응답을 통째로 버려서 실을 값이 없었다 — 그래서 아예 안 보냈다.
+  if (s.protocolVersion) h["mcp-protocol-version"] = s.protocolVersion;
   return h;
 }
 async function httpRequest(s, method, params, timeoutMs) {
@@ -141,17 +144,44 @@ function killServer(name) {
  *  핸드셰이크 도중 들어온 두 번째 startServer 가 **끝날 때까지 기다리게** 한다.
  *  예전엔 servers.set 이 핸드셰이크보다 먼저라, 그 사이의 호출이 아직 비어 있는 s.tools 로
  *  `{ok:true, tools:[]}` 를 돌려받았다 — 시작 버튼을 두 번 누르면 "연결됨, 도구 0개" 가 됐다. */
+/** 우리가 먼저 부르는 개정판. 서버가 다른 걸 돌려주면 **서버 것을 따른다** —
+ *  스펙이 그렇게 하라고 되어 있고, 그래야 옛 서버와 새 서버가 같이 붙는다. */
+const PREFERRED_PROTOCOL = "2025-06-18";
+
 function handshake(s, name) {
   s.starting = (async () => {
     try {
-      await request(s, "initialize", {
-        protocolVersion: "2024-11-05", capabilities: {},
+      // 예전엔 이 응답을 통째로 버렸다. 그 바람에 협상된 버전도, 서버가 무엇을 할 수
+      // 있는지도, 서버 이름조차도 몰랐다 — tools/list 를 무턱대고 부르고 있었다.
+      const init = await request(s, "initialize", {
+        protocolVersion: PREFERRED_PROTOCOL, capabilities: {},
         clientInfo: { name: "Schutz", version: app.getVersion() },
-      }, 20000);
+      }, 20000) || {};
+      s.protocolVersion = typeof init.protocolVersion === "string" ? init.protocolVersion : PREFERRED_PROTOCOL;
+      s.caps = init.capabilities && typeof init.capabilities === "object" ? init.capabilities : {};
+      s.info = init.serverInfo && typeof init.serverInfo === "object" ? init.serverInfo : null;
       sendRpc(s, "notifications/initialized", {}, true);
-      const listed = await request(s, "tools/list", {}, 15000).catch(() => ({ tools: [] }));
+
+      // capabilities 를 광고하는 서버는 그 말을 믿는다. 아예 안 주는 서버(옛 구현)는
+      // 예전처럼 그냥 물어본다 — 없다고 단정해 기능을 잠그는 것보다 낫다.
+      const can = (k) => !init.capabilities || s.caps[k] !== undefined;
+      const listed = can("tools")
+        ? await request(s, "tools/list", {}, 15000).catch(() => ({ tools: [] }))
+        : { tools: [] };
       s.tools = Array.isArray(listed && listed.tools) ? listed.tools : [];
-      return { ok: true, tools: s.tools };
+
+      // 도구만 쓰던 자리. 리소스·프롬프트를 노출하는 서버를 붙여도 화면에 아무것도
+      // 안 나왔다 — MCP 의 세 기둥 중 둘이 통째로 비어 있었다.
+      if (can("resources")) {
+        const r = await request(s, "resources/list", {}, 15000).catch(() => ({ resources: [] }));
+        s.resources = Array.isArray(r && r.resources) ? r.resources : [];
+      } else s.resources = [];
+      if (can("prompts")) {
+        const p = await request(s, "prompts/list", {}, 15000).catch(() => ({ prompts: [] }));
+        s.prompts = Array.isArray(p && p.prompts) ? p.prompts : [];
+      } else s.prompts = [];
+
+      return { ok: true, tools: s.tools, resources: s.resources, prompts: s.prompts, protocolVersion: s.protocolVersion, info: s.info };
     } catch (err) {
       killServer(name);   // 맵에서 지운다 → 다시 시도할 수 있다
       return { ok: false, reason: String(err && err.message || err) };
@@ -166,7 +196,7 @@ async function startServer(name) {
   if (servers.has(name)) {
     const s = servers.get(name);
     if (s.starting) return s.starting;   // 아직 악수 중 — 빈 도구 목록을 성공으로 돌려주지 않는다
-    return { ok: true, tools: s.tools };
+    return { ok: true, tools: s.tools, resources: s.resources, prompts: s.prompts, protocolVersion: s.protocolVersion, info: s.info };
   }
   let cfg;
   try { cfg = readCfg().mcpServers[name]; } catch { return { ok: false, reason: "설정 파일(mcp.json) 손상" }; }
@@ -177,7 +207,7 @@ async function startServer(name) {
     let u;
     try { u = new URL(cfg.url); } catch { return { ok: false, reason: "잘못된 URL" }; }
     if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "http(s) 주소만 지원합니다" };
-    const hs = { kind: "http", url: u.toString(), headers: cfg.headers || {}, tools: [], seq: 0, pending: new Map(), name, starting: null };
+    const hs = { kind: "http", url: u.toString(), headers: cfg.headers || {}, tools: [], resources: [], prompts: [], seq: 0, pending: new Map(), name, starting: null, protocolVersion: null, caps: {}, info: null };
     servers.set(name, hs);
     return handshake(hs, name);
   }
@@ -193,7 +223,7 @@ async function startServer(name) {
     });
   } catch (err) { return { ok: false, reason: String(err && err.message || err) }; }
 
-  const s = { child, tools: [], seq: 0, pending: new Map(), name, starting: null };
+  const s = { child, tools: [], resources: [], prompts: [], seq: 0, pending: new Map(), name, starting: null, protocolVersion: null, caps: {}, info: null };
   const parser = makeLineParser((msg) => {
     if (msg.id != null && s.pending.has(msg.id)) {
       const p = s.pending.get(msg.id); s.pending.delete(msg.id); clearTimeout(p.timer);
@@ -258,12 +288,38 @@ function init(ipcMain) {
       return {
         name, command: remote ? c.url : c.command, args: remote ? [] : (c.args || []),
         running: !!s, tools: s ? s.tools.length : 0, remote,
+        // 도구 개수만 보여 주던 자리 — 리소스·프롬프트를 내주는 서버가 "0개" 로 보였다.
+        resources: s ? s.resources.length : 0,
+        prompts: s ? s.prompts.length : 0,
+        protocolVersion: s ? s.protocolVersion : null,
+        serverName: s && s.info ? (s.info.name || "") : "",
       };
     });
   });
   ipcMain.handle("schutz:mcpStart", (_e, name) => startServer(name));
   ipcMain.handle("schutz:mcpStop", (_e, name) => { killServer(name); return { ok: true }; });
   ipcMain.handle("schutz:mcpTools", (_e, name) => { const s = servers.get(name); return s ? s.tools : []; });
+  /** 서버가 무엇을 내주는지 — 도구 말고도. 예전엔 이 둘이 아예 없어서, 리소스를
+   *  노출하는 서버를 붙여도 화면에 아무것도 안 나왔다. */
+  ipcMain.handle("schutz:mcpResources", (_e, name) => { const s = servers.get(name); return s ? s.resources : []; });
+  ipcMain.handle("schutz:mcpPrompts", (_e, name) => { const s = servers.get(name); return s ? s.prompts : []; });
+  /** 연결 상태 — 협상된 개정판과 서버가 스스로 밝힌 이름. 무엇에 붙었는지 말할 수 있게. */
+  ipcMain.handle("schutz:mcpInfo", (_e, name) => {
+    const s = servers.get(name);
+    return s ? { protocolVersion: s.protocolVersion, info: s.info, caps: s.caps } : null;
+  });
+  ipcMain.handle("schutz:mcpReadResource", async (_e, name, uri) => {
+    const s = servers.get(name);
+    if (!s) return { ok: false, error: "서버가 실행 중이 아닙니다" };
+    try { return { ok: true, result: await request(s, "resources/read", { uri }, 60000) }; }
+    catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+  });
+  ipcMain.handle("schutz:mcpGetPrompt", async (_e, name, promptName, args) => {
+    const s = servers.get(name);
+    if (!s) return { ok: false, error: "서버가 실행 중이 아닙니다" };
+    try { return { ok: true, result: await request(s, "prompts/get", { name: promptName, arguments: args || {} }, 60000) }; }
+    catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+  });
   ipcMain.handle("schutz:mcpAllTools", () => {
     const out = [];
     for (const [name, s] of servers) for (const t of s.tools) out.push({ server: name, ...t });
