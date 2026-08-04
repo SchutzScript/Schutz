@@ -8,6 +8,7 @@ import { makeDocIndex } from "./shimDoc";
 import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
 import { toMarkers, toLocations, toEdits } from "./shimLang";
 import { flattenDefaults, fullKey, readValue, hasValue, inspectValue, sectionValues, affects } from "./config";
+import { cleanText, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./statusBar";
 import { setShimDocSource } from "./extHost";
 
 export interface ShimDeps {
@@ -23,6 +24,9 @@ export interface ShimDeps {
    *  이 통로가 없던 동안 showQuickPick·showInputBox 는 **묻지도 않고** undefined 를
    *  돌려줬고, 확장은 사용자가 취소한 줄 알고 흐름을 접었다. */
   prompt: (req: PromptReq) => Promise<any>;
+  /** 상태바에 항목을 올리고 내린다. 없으면 확장이 올린 글자가 어디에도 안 보인다. */
+  statusSet: (item: StatusItem) => void;
+  statusRemove: (id: string) => void;
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -287,6 +291,7 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
     return got == null ? undefined : buttons[got as number]!.raw;
   };
 
+  let statusSeq = 0;
   const window_ = {
     // 버튼 없이 부르면 알림이다(토스트). 버튼을 주면 **물음**이다 — 예전엔 둘 다
     // 토스트로 흘리고 undefined 를 돌려줘, `if (await showInformationMessage(m, "Reload") === "Reload")`
@@ -294,7 +299,14 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
     showInformationMessage: (msg: string, ...items: any[]) => msgOrAsk("info", msg, items),
     showWarningMessage: (msg: string, ...items: any[]) => msgOrAsk("warn", msg, items),
     showErrorMessage: (msg: string, ...items: any[]) => msgOrAsk("error", msg, items),
-    setStatusBarMessage: (_msg: string) => noopDisposable,
+    /** 잠깐 띄우는 한 줄. 시간을 주면 그때 스스로 내려간다. */
+    setStatusBarMessage: (msg: string, hideAfter?: number) => {
+      const id = "sbmsg:" + ext.id + ":" + (++statusSeq);
+      deps.statusSet({ id, source: ext.name, text: cleanText(msg), tooltip: "", alignment: ALIGN_RIGHT, priority: -1, seq: 0 });
+      const off = () => deps.statusRemove(id);
+      if (typeof hideAfter === "number" && hideAfter > 0) setTimeout(off, hideAfter);
+      return { dispose: off };
+    },
     createOutputChannel: (name: string) => {
       let buf = "";
       return {
@@ -303,7 +315,38 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
         hide: () => {}, dispose: () => {}, replace: (s: string) => { buf = s; },
       };
     },
-    createStatusBarItem: () => ({ text: "", tooltip: "", command: "", show() {}, hide() {}, dispose() {} }),
+    /** 상태바 항목. 예전엔 `text` 를 받아 두기만 하는 빈 객체였다 — 대입도 show() 도
+     *  성공하는데 그 객체를 읽는 곳이 없어서, "빌드 중…" 같은 알림이 통째로 사라졌다. */
+    createStatusBarItem: (...args: any[]) => {
+      // vscode 는 (alignment, priority) 와 (id, alignment, priority) 둘 다 받는다.
+      const withId = typeof args[0] === "string";
+      const alignment = withId ? args[1] : args[0];
+      const priority = withId ? args[2] : args[1];
+      const id = "sb:" + ext.id + ":" + (++statusSeq);
+      let shown = false;
+      const item: any = {
+        id, text: "", tooltip: "", command: undefined, color: undefined, name: undefined,
+        alignment: alignment === ALIGN_LEFT ? ALIGN_LEFT : ALIGN_RIGHT,
+        priority: typeof priority === "number" ? priority : 0,
+        show() { shown = true; push(); },
+        hide() { shown = false; deps.statusRemove(id); },
+        dispose() { shown = false; deps.statusRemove(id); },
+      };
+      const push = () => {
+        if (!shown) return;
+        const cmd = typeof item.command === "string" ? item.command : item.command?.command;
+        deps.statusSet({
+          id, source: ext.name,
+          text: cleanText(item.text),
+          // 어느 확장이 올린 글자인지 밝힌다 — 상태바는 앱의 것으로 읽히는 자리다.
+          tooltip: [String(item.tooltip ?? ""), ext.name].filter(Boolean).join(" — "),
+          alignment: item.alignment, priority: item.priority, seq: 0,
+          run: cmd ? () => { void executeCommand(cmd); } : undefined,
+        });
+      };
+      // 확장은 show() 뒤에도 text 를 계속 갈아 끼운다(진행 표시). 그때마다 올려 줘야 한다.
+      return new Proxy(item, { set(t, k, v) { (t as any)[k] = v; push(); return true; } });
+    },
     showQuickPick: async (items: any, options?: any) => {
       // 확장은 배열을 Promise 로 넘기기도 한다(파일 목록을 읽어 오는 흐름).
       const list = normalizePicks(await Promise.resolve(items));

@@ -36,6 +36,7 @@ import { emptyNav, push as navPush, back as navBack, forward as navForward, curr
 import { shouldProbeQuota } from "./engine/quotaPoll";
 import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction, overlayZ } from "./overlays";
 import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } from "./ext/prompt";
+import { upsert as sbUpsert, remove as sbRemove, ordered as sbOrdered, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./ext/statusBar";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
   rosterLines, personaSystem, type SubagentDef,
@@ -339,6 +340,8 @@ interface S {
     /** 되돌릴 수 없는 일 — 확인 버튼을 오류 색으로. */
     danger?: boolean;
   } | null;
+  /** 확장이 상태바에 올린 항목. 예전엔 셰임이 받아 두기만 하고 읽는 곳이 없었다. */
+  extStatus: StatusItem[];
   /** 확장이 사용자에게 던진 물음. 셰임의 showQuickPick/showInputBox/showXMessage 가
    *  여기로 온다 — 예전엔 묻지도 않고 undefined(=취소)를 돌려줬다. */
   extAsk: PromptReq | null;
@@ -683,7 +686,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
-    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, extAsk: null, extAskText: "", extAskSel: 0, extAskPicked: [], extAskErr: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, extStatus: [], extAsk: null, extAskText: "", extAskSel: 0, extAskPicked: [], extAskErr: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], reviewFindings: [], reviewBusy: false, paneVer: {},
@@ -2006,6 +2009,22 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       this.setState({ confirmAsk: { ...o, cancelLabel: o.cancelLabel ?? t("confirm.cancel") } });
     });
   }
+  /** 상태바 항목의 등록 순서. 우선순위가 같을 때 자리를 고정한다. */
+  private _sbSeq = 0;
+
+  /** 확장이 올린 상태바 항목 하나. 누르면 그 확장이 붙여 둔 명령이 돈다. */
+  private renderExtStatus(align: number) {
+    const items = sbOrdered(this.state.extStatus, align);
+    if (!items.length) return null;
+    return <>{items.map(it => (
+      <button key={it.id} className={it.run ? "hv08" : undefined} title={it.tooltip} disabled={!it.run}
+        onClick={it.run ? () => { try { it.run!(); } catch { /* 확장이 던져도 상태바는 살아 있어야 한다 */ } } : undefined}
+        style={{ flex: "none", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          height: 19, padding: "0 6px", fontFamily: SUIT, fontSize: 10.5, borderRadius: 5, border: "none",
+          background: "transparent", color: "var(--fg-dim)", cursor: it.run ? "pointer" : "default" }}>{it.text}</button>
+    ))}</>;
+  }
+
   private _extAskResolve: ((v: any) => void) | null = null;
 
   /** 확장의 물음을 띄우고 답을 기다린다. 취소면 undefined 로 푼다 — vscode 규약이다.
@@ -5385,6 +5404,9 @@ ${(r.output || "").slice(0, 2000)}`;
 
   async reloadExtensions() {
     if (!window.schutz) return;
+    // 상태바를 먼저 비운다. 항목은 확장이 올린 것뿐이라 전부 지워도 되고, 안 지우면
+    // 방금 끈 확장의 "빌드 중…" 이 아무도 갱신하지 않은 채 영원히 남는다.
+    if (this.state.extStatus.length) this.setState({ extStatus: [] });
     const res = await extHost.loadExtensions({
       toast: (k, m) => this.toast(k, m),
       showPanel: (title, html) => this.openO({ extPanel: { title, html } }),
@@ -5394,6 +5416,8 @@ ${(r.output || "").slice(0, 2000)}`;
       workspaceRoot: () => this.state.workspace?.root ?? null,
       openFiles: () => this.allOpen().filter(rel => !this.parseDiffKey(rel) && !this.parsePreviewKey(rel)),
       prompt: req => this.askExtension(req),
+      statusSet: item => this.setState(st => ({ extStatus: sbUpsert(st.extStatus, { ...item, seq: this._sbSeq++ }) })),
+      statusRemove: id => this.setState(st => ({ extStatus: sbRemove(st.extStatus, id) })),
     });
     // VS Code 확장(선언형) — 테마·스니펫·언어설정 적용
     const vres = await vscodeExt.loadVscodeExtensions();
@@ -6107,7 +6131,9 @@ ${(r.output || "").slice(0, 2000)}`;
           {(() => { const c = (s.git?.staged.length ?? 0) + (s.git?.unstaged.length ?? 0) + (s.git?.untracked.length ?? 0); return c > 0
             ? <span style={{ color: "var(--dirty)" }}>{t("status.changes", { n: c })}</span>
             : <span style={{ color: pendingFiles > 0 ? "var(--dirty)" : "var(--fg-dim)" }}>{pendingFiles > 0 ? t("status.pendingReview", { n: pendingFiles }) : t("status.noChanges")}</span>; })()}
+          {this.renderExtStatus(ALIGN_LEFT)}
           <div style={{ flex: 1 }} />
+          {this.renderExtStatus(ALIGN_RIGHT)}
           <span>{t("status.agentsActive", { active: AGDEF.filter(d => ["edit", "plan"].includes(s.agents[d.id].status)).length, total: AGDEF.length })}</span>
           {quotaSummary && (() => {
             const left = this.quotaTightest(getManagerId()) ?? this.quotaTightest("claude") ?? this.quotaTightest("gpt") ?? 100;
