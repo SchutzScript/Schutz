@@ -3,6 +3,7 @@
 // Schutz 네이티브(schutz API) + VS Code 프로그램형(vscode 셰임으로 activate 실행) 둘 다 지원.
 import { makeVscodeApi, disposeShimRegistrations } from "./vscodeShim";
 import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
+import { editorEvents } from "./vscodeShim";
 import { t } from "../i18n";
 
 export interface ExtCommand { id: string; title: string; run: (...args: any[]) => any; source: string; }
@@ -12,6 +13,10 @@ export interface HostDeps {
   toast: (kind: "ok" | "error" | "info", msg: string) => void;
   showPanel: (title: string, html: string) => void;
   getActiveFile: () => string | null;
+  /** vscode 셰임이 문서·편집기를 만들려면 이 둘이 필요하다. 없이 두었을 때
+   *  activeTextEditor 가 영원히 undefined 였다. */
+  workspaceRoot: () => string | null;
+  openFiles: () => string[];
 }
 
 let commands: ExtCommand[] = [];
@@ -36,6 +41,22 @@ export function notifyExtensions(ev: HookEvent, payload: Record<string, unknown>
   emitHook(ev, payload, (source, err) => {
     deps?.toast("error", t("exth.commandError", { source, msg: err instanceof Error ? err.message : String(err) }));
   });
+  // vscode 확장은 같은 사건을 자기 이름으로 듣는다. 셰임의 이벤트들은 아무도 안 쏘는
+  // 빈 EventEmitter 였다 — onDidSaveTextDocument 를 구독한 확장은 영원히 안 불렸다.
+  const rel = typeof payload.rel === "string" ? payload.rel : null;
+  if (!rel) return;
+  const doc = shimDocFor(rel);
+  if (!doc) return;
+  if (ev === "file.open") { editorEvents.docOpened.fire(doc); editorEvents.activeChanged.fire(shimEditorFor(rel)); }
+  else if (ev === "file.save") editorEvents.docSaved.fire(doc);
+}
+
+/** 사건을 쏠 때 쓸 문서 통로. makeVscodeApi 가 확장마다 인덱스를 만들지만,
+ *  사건에는 확장과 무관한 문서 하나면 된다. */
+let shimDocFor: (rel: string) => any = () => null;
+let shimEditorFor: (rel: string) => any = () => null;
+export function setShimDocSource(d: (rel: string) => any, e: (rel: string) => any): void {
+  shimDocFor = d; shimEditorFor = e;
 }
 
 /** 등록된 확장 명령 실행 (vscode 셰임의 executeCommand 위임용).
@@ -174,7 +195,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
