@@ -116,7 +116,12 @@ npm run dist:linux # Linux build
 
 ## Contributing
 
-Issues and pull requests are welcome. Run `npm run build` in `ide/` before opening a PR — it type-checks and builds the renderer, which is what CI does on every release tag.
+Issues and pull requests are welcome. CI runs on every push and pull request: `npm run typecheck`,
+`npm test`, and `npm run build` in `ide/`. Running those three locally before opening a PR gets you
+the same answer without the wait.
+
+Note that `typecheck` is two passes — the whole app, then the stricter island under `src/engine`,
+which turns on `strict` and `noUncheckedIndexedAccess` for code that is meant to be provably total.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history and [docs/DESIGN.md](docs/DESIGN.md) for design notes.
 

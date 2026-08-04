@@ -156,7 +156,7 @@ export function resolveServer(m: McpbManifest, vars: TemplateVars): ResolvedServ
 
   const unresolved: string[] = [];
   const scan = (s: string) => {
-    for (const mt of s.matchAll(/\$\{([^}]+)\}/g)) unresolved.push(mt[1].trim());
+    for (const mt of s.matchAll(/\$\{([^}]+)\}/g)) { const g = mt[1]; if (g) unresolved.push(g.trim()); }
   };
   scan(command); args.forEach(scan); Object.values(env).forEach(scan);
   return { command, args, env, unresolved: [...new Set(unresolved)] };

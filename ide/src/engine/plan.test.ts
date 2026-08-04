@@ -43,24 +43,24 @@ describe("mergePlan", () => {
   it("같은 라벨은 id 를 유지한다 — 안 그러면 스피너가 껌뻑인다", () => {
     const first = mergePlan([], [S("a"), S("b")], "claude");
     const second = mergePlan(first, [S("a", true), S("b")], "claude");
-    expect(second[0].id).toBe(first[0].id);
-    expect(second[1].id).toBe(first[1].id);
+    expect(second[0]!.id).toBe(first[0]!.id);
+    expect(second[1]!.id).toBe(first[1]!.id);
     expect(second.map(x => x.st)).toEqual(["done", "active"]);
   });
 
   it("처음 올린 에이전트를 기억한다 — 나중 호출이 주인을 바꾸지 않는다", () => {
     const first = mergePlan([], [S("a")], "claude");
     const second = mergePlan(first, [S("a", true)], "gpt");
-    expect(second[0].agent).toBe("claude");
+    expect(second[0]!.agent).toBe("claude");
   });
 
   it("새로 끼워 넣은 단계는 새 id 를 받는다", () => {
     const first = mergePlan([], [S("a"), S("c")], "claude");
     const second = mergePlan(first, [S("a", true), S("b"), S("c")], "claude");
     expect(second.map(x => x.label)).toEqual(["a", "b", "c"]);
-    expect(second[0].id).toBe(first[0].id);          // 유지
-    expect(second[2].id).toBe(first[1].id);          // c 도 유지 — 순서가 밀려도 라벨로 찾는다
-    expect(second[1].id).not.toBe(first[1].id);      // b 는 새것
+    expect(second[0]!.id).toBe(first[0]!.id);          // 유지
+    expect(second[2]!.id).toBe(first[1]!.id);          // c 도 유지 — 순서가 밀려도 라벨로 찾는다
+    expect(second[1]!.id).not.toBe(first[1]!.id);      // b 는 새것
   });
 
   it("사라진 단계는 결과에서 빠진다 — 모델이 보낸 것이 전부다", () => {
