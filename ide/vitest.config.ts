@@ -22,7 +22,7 @@ export default defineConfig({
       "src/ai/retry.test.ts",
       "src/keymap.test.ts",
       "src/overlays.test.ts",
-      "src/ext/hooks.test.ts", "src/ext/prompt.test.ts", "src/ext/shimLang.test.ts", "src/ext/config.test.ts", "src/ext/statusBar.test.ts",
+      "src/ext/hooks.test.ts", "src/ext/prompt.test.ts", "src/ext/shimLang.test.ts", "src/ext/config.test.ts", "src/ext/statusBar.test.ts", "src/ext/fsWatch.test.ts",
       "src/theme.test.ts",
       "src/editor/monacoColors.test.ts",
       "src/opening/**/*.test.ts",

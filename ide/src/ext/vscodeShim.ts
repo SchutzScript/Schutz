@@ -9,7 +9,17 @@ import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
 import { toMarkers, toLocations, toEdits } from "./shimLang";
 import { flattenDefaults, fullKey, readValue, hasValue, inspectValue, sectionValues, affects } from "./config";
 import { cleanText, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./statusBar";
+import { globToRegExp, dispatch as fsDispatch, type WatcherSpec, type FsDelta } from "./fsWatch";
 import { setShimDocSource } from "./extHost";
+
+/** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
+const fsWatchers = new Map<string, WatcherSpec>();
+let fsWatchSeq = 0;
+
+/** 앱이 파일 변화를 알아냈을 때 부른다. 맞는 감시자에게만 간다. */
+export function deliverFsDelta(delta: FsDelta): number {
+  return fsDispatch(fsWatchers.values(), delta);
+}
 
 export interface ShimDeps {
   toast: (kind: "ok" | "error" | "info", msg: string) => void;
@@ -434,7 +444,33 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
     get workspaceFolders() { const f = folder(); return f ? [f] : undefined; },
     get textDocuments() { return docs.documents(); },
     getWorkspaceFolder: (_uri?: any) => folder(),
-    createFileSystemWatcher: () => ({ onDidCreate: new EventEmitter().event, onDidChange: new EventEmitter().event, onDidDelete: new EventEmitter().event, dispose() {} }),
+    /** 파일 감시자. 예전엔 아무도 쏘지 않는 이미터 셋이라, 파일이 바뀌면 다시 읽는
+     *  확장이 한 번도 깨어나지 않았다. 정작 바뀐 경로는 메인이 처음부터 알고 있었다. */
+    createFileSystemWatcher: (pattern: any, ignoreCreate?: boolean, ignoreChange?: boolean, ignoreDelete?: boolean) => {
+      // RelativePattern(`{ base, pattern }`) 도 온다. 우리는 워크스페이스 하나만
+      // 다루므로 pattern 만 본다 — base 를 무시해도 루트 밖은 애초에 안 감시한다.
+      const glob = typeof pattern === "string" ? pattern : String(pattern?.pattern ?? "**/*");
+      const onCreate = new EventEmitter<any>(), onChange = new EventEmitter<any>(), onDelete = new EventEmitter<any>();
+      const id = "fsw:" + ext.id + ":" + (++fsWatchSeq);
+      const root = deps.workspaceRoot();
+      fsWatchers.set(id, {
+        id, re: globToRegExp(glob),
+        ignoreCreate: ignoreCreate === true, ignoreChange: ignoreChange === true, ignoreDelete: ignoreDelete === true,
+        fire: (kind, rel) => {
+          // 확장은 Uri 를 기대한다. 루트가 없으면 상대 경로로라도 준다.
+          const uri = UriShim.file(root ? root.replace(/\\/g, "/").replace(/\/+$/, "") + "/" + rel : rel);
+          (kind === "create" ? onCreate : kind === "delete" ? onDelete : onChange).fire(uri);
+        },
+      });
+      const d = { dispose() { fsWatchers.delete(id); } };
+      // 확장이 dispose 를 잊어도 재로드 때 정리된다.
+      disposables.push(d);
+      return {
+        onDidCreate: onCreate.event, onDidChange: onChange.event, onDidDelete: onDelete.event,
+        ignoreCreateEvents: ignoreCreate === true, ignoreChangeEvents: ignoreChange === true, ignoreDeleteEvents: ignoreDelete === true,
+        dispose: d.dispose,
+      };
+    },
     openTextDocument: (arg?: any) => {
       // 열려 있지 않은 파일은 아직 못 연다(모델이 없다). 그래도 reject 로 끝내던
       // 자리라, 최소한 열려 있는 파일에는 답한다.

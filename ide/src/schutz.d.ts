@@ -143,7 +143,9 @@ interface SchutzApi {
   readBinary(root: string, rel: string): Promise<string>;
   watchStart(root: string): void;
   watchStop(): void;
-  onFsChange(cb: () => void): () => void;
+  /** 바뀐 파일들의 워크스페이스 상대 경로. 감시자가 이름을 못 준 변경도 있으므로
+   *  이 목록은 완전하지 않다 — 트리 비교로 보완해서 쓴다. */
+  onFsChange(cb: (rels: string[]) => void): () => void;
   mkdir(root: string, rel: string): Promise<boolean>;
   /** 체크포인트 — 한 실행이 손댄 파일의 원본 바이트를 메인에 잡아 두고 통째로 되돌린다.
    *  해시는 전부 메인이 계산한다. 무엇을 되돌릴지는 engine/checkpoints.ts 가 정한다. */
