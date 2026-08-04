@@ -68,6 +68,11 @@ interface PluginInfo {
 }
 
 /** MCP 서버가 노출하는 도구 (tools/list 결과) */
+/** 서버가 내주는 읽을거리 — 파일·문서·DB 스키마 같은 것. */
+interface McpResource { uri: string; name?: string; description?: string; mimeType?: string }
+/** 서버가 내주는 프롬프트 템플릿. */
+interface McpPrompt { name: string; description?: string; arguments?: { name: string; description?: string; required?: boolean }[] }
+
 interface McpTool {
   name: string;
   description?: string;
@@ -207,10 +212,17 @@ interface SchutzApi {
   cliChatCounts(): Promise<{ counts: Record<string, number> }>;
   cliChatList(agent: string, headBytes: number): Promise<{ rows: { agent: string; file: string; head: string; bytes: number; updatedAt: number }[] }>;
   cliChatRead(agent: string, file: string, tailBytes: number): Promise<{ text?: string; bytes?: number; partial?: boolean; error?: string }>;
-  mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number; remote?: boolean }[]>;
-  mcpStart(name: string): Promise<{ ok: boolean; tools?: McpTool[]; reason?: string }>;
+  mcpList(): Promise<{ name: string; command: string; args: string[]; running: boolean; tools: number; remote?: boolean; resources?: number; prompts?: number; protocolVersion?: string | null; serverName?: string }[]>;
+  mcpStart(name: string): Promise<{ ok: boolean; tools?: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; protocolVersion?: string; info?: { name?: string; version?: string } | null; reason?: string }>;
   mcpStop(name: string): Promise<{ ok: boolean }>;
   mcpTools(name: string): Promise<McpTool[]>;
+  /** MCP 의 나머지 두 기둥. 예전엔 도구만 읽어서, 리소스를 노출하는 서버는 붙여도 빈 칸이었다. */
+  mcpResources(name: string): Promise<McpResource[]>;
+  mcpPrompts(name: string): Promise<McpPrompt[]>;
+  /** 협상된 개정판과 서버가 스스로 밝힌 이름 — 무엇에 붙었는지 말할 수 있게. */
+  mcpInfo(name: string): Promise<{ protocolVersion: string | null; info: { name?: string; version?: string } | null; caps: Record<string, unknown> } | null>;
+  mcpReadResource(name: string, uri: string): Promise<{ ok: boolean; result?: any; error?: string }>;
+  mcpGetPrompt(name: string, promptName: string, args?: Record<string, unknown>): Promise<{ ok: boolean; result?: any; error?: string }>;
   mcpAllTools(): Promise<(McpTool & { server: string })[]>;
   mcpCall(name: string, tool: string, args: any): Promise<{ ok: boolean; result?: any; error?: string }>;
   mcpAdd(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; url?: string; headers?: Record<string, string>; overwrite?: boolean }): Promise<{ ok: boolean; error?: string }>;
