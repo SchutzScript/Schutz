@@ -93,7 +93,7 @@ same table the app dispatches from, so it cannot drift from what actually happen
 
 **Debugging** — Breakpoints, call stack, variables, and stepping via DAP (Python/debugpy today).
 
-**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. The `vscode` shim gives them the active editor for real: reading the document, moving the selection, and editing through the model so `Ctrl+Z` still works. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
+**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. The `vscode` shim gives them the active editor for real: reading the document, moving the selection, and editing through the model so `Ctrl+Z` still works. Extensions can ask you things too — quick picks, input boxes with validation, and messages with buttons, each labelled with the extension doing the asking. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
 
 **Localization** — The full UI ships in Korean, English, German, and Japanese.
 
@@ -129,11 +129,11 @@ skills and subagents, MCP servers over stdio and HTTP, and `.mcpb` bundles are a
 today. The VS Code shim reads and edits the active document, and MCP speaks all three of its
 pillars rather than tools alone.
 
-Where it is still thin, specifically: the shim has no quick-pick or input box, cannot open a
-file that is not already in a tab, and does not implement `document.save()` — those return an
-error rather than an empty value, so an extension that needs them fails loudly instead of
-doing nothing. MCP resources and prompts are readable and shown in the panel, but are not yet
-offered to the agent as tools.
+Where it is still thin, specifically: the shim cannot open a file that is not already in a
+tab, and does not implement `document.save()` — both return an error rather than an empty
+value, so an extension that needs them fails loudly instead of doing nothing. MCP resources
+and prompts are readable and shown in the panel, but are not yet offered to the agent as
+tools.
 
 ## Contributing
 
