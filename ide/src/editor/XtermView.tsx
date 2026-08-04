@@ -39,8 +39,41 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(hostRef.current);
-    try { fit.fit(); } catch { /* */ }
+
+    /** 붙일 자리가 **실제로 생긴 뒤에** 연다.
+     *
+     *  하단 도크는 열릴 때 0 에서 210 으로 펼쳐진다. 그 도중에 term.open() 을 하면
+     *  xterm 이 글자 크기를 재지 못해 렌더 서비스의 치수가 안 만들어지고, 이후 첫
+     *  스크롤 동기화가 `dimensions` 를 undefined 로 읽어 던진다. 화면은 멀쩡해
+     *  보이는데 터미널을 열 때마다 콘솔에 예외가 하나씩 쌓였다.
+     *
+     *  "폭이 0인가" 로는 못 잡는다 — 펼쳐지는 중에는 0 이 아니라 **너무 작을** 뿐이다.
+     *  그래서 여는 것 자체를 크기가 잡힐 때까지 미룬다. 그때까지 들어온 출력은 xterm
+     *  코어가 들고 있다가 열리는 순간 그려 준다. */
+    let opened = false;
+    const bigEnough = () => {
+      const h = hostRef.current;
+      return !!h && h.offsetWidth > 24 && h.offsetHeight > 24;
+    };
+    const safeFit = (): boolean => {
+      if (!opened || !bigEnough()) return false;
+      try {
+        const d = (fit as unknown as { proposeDimensions?: () => { cols: number; rows: number } | undefined }).proposeDimensions?.();
+        if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows) || d.cols < 2 || d.rows < 2) return false;
+        fit.fit();
+        return true;
+      } catch { return false; }
+    };
+    const ensureOpen = (): boolean => {
+      if (opened) return true;
+      const h = hostRef.current;
+      if (!h || !bigEnough()) return false;
+      term.open(h);
+      opened = true;
+      safeFit();
+      return true;
+    };
+    ensureOpen();
     termRef.current = term;
     fitRef.current = fit;
 
@@ -74,8 +107,8 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
     let ptyResolved = false;
     const tryStart = () => {
       if (disposed || started || !ptyResolved) return;
-      try { fit.fit(); } catch { /* */ }
-      if (term.cols < 2 || term.rows < 2) return; // 아직 레이아웃 전 — 다음 리사이즈에 다시 본다
+      if (!ensureOpen() || !safeFit()) return;    // 아직 레이아웃 전 — 다음 리사이즈에 다시 본다
+      if (term.cols < 2 || term.rows < 2) return;
       window.schutz!.termStart(cwd, id, term.cols, term.rows);
       started = true;
       if (pending) { window.schutz!.termInput(pending, id); pending = ""; } // 조기 입력 flush
@@ -141,12 +174,14 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
     const ro = new ResizeObserver(() => {
       // 아직 안 떴으면 이 리사이즈가 "이제 크기가 생겼다" 는 신호다.
       if (!started) { tryStart(); return; }
-      try { fit.fit(); if (realPty) window.schutz!.termResize(id, term.cols, term.rows); } catch { /* */ }
+      if (!ensureOpen() || !safeFit()) return;
+      if (realPty) { try { window.schutz!.termResize(id, term.cols, term.rows); } catch { /* */ } }
     });
     ro.observe(hostRef.current);
 
     return () => {
       disposed = true;
+      opened = false;
       ro.disconnect();
       onData.dispose();
       host.removeEventListener("contextmenu", onCtx);
@@ -168,8 +203,16 @@ export function XtermView({ id, cwd, codeFont, fontSize, themeId, initialCommand
     term.options.fontFamily = codeFontStack(codeFont);
     term.options.fontSize = fontSize - 1;
     term.options.theme = termTheme(themeId !== "paper");
-    // fit 후 PTY 에도 새 cols/rows 통지 — 폰트 변경 시 그리드 크기 불일치 방지
-    try { fitRef.current?.fit(); window.schutz?.termResize(id, term.cols, term.rows); } catch { /* */ }
+    // fit 후 PTY 에도 새 cols/rows 통지 — 폰트 변경 시 그리드 크기 불일치 방지.
+    // 여기서도 잴 수 있을 때만 맞춘다(위 safeFit 과 같은 이유).
+    const fitNow = fitRef.current, host = hostRef.current;
+    if (!fitNow || !host || !host.offsetWidth || !host.offsetHeight) return;
+    try {
+      const d = (fitNow as unknown as { proposeDimensions?: () => { cols: number; rows: number } | undefined }).proposeDimensions?.();
+      if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows) || d.cols < 2 || d.rows < 2) return;
+      fitNow.fit();
+      window.schutz?.termResize(id, term.cols, term.rows);
+    } catch { /* */ }
   }, [codeFont, fontSize, themeId]);
 
   return <div ref={hostRef} style={{ position: "absolute", inset: 0, padding: "4px 8px" }} />;

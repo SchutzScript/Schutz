@@ -38,6 +38,7 @@ import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction, overlayZ } from ".
 import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } from "./ext/prompt";
 import { upsert as sbUpsert, remove as sbRemove, ordered as sbOrdered, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./ext/statusBar";
 import { classify as fsClassify } from "./ext/fsWatch";
+import { ASYNC_ERROR_EVENT, makeThrottle } from "./asyncErrors";
 import { rowKey, webviewDoc, type TreeRow } from "./ext/views";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
@@ -4880,6 +4881,9 @@ ${(r.output || "").slice(0, 2000)}`;
       // 확장이 뷰를 붙이거나 뗄 때 사이드바를 다시 맞춘다.
       this._viewsOff = extHost.onExtViewsChanged(this.syncExtViews);
       window.addEventListener("message", this.onViewMessage);
+      // 처리 안 된 비동기 실패를 사용자에게도 한 번은 알린다. 콘솔에만 남기면
+      // "눌렀는데 아무 일도 안 일어났다" 는 그대로 남는다.
+      window.addEventListener(ASYNC_ERROR_EVENT, this.onAsyncError);
       // MCP 서버 시작 (Schutz 호스트) → 도구를 에이전트 루프에 노출
       mcp.setMcpChangeHandler(() => this.forceUpdate());
       void mcp.startAll();
@@ -4928,7 +4932,16 @@ ${(r.output || "").slice(0, 2000)}`;
       this.qt(() => { if (this.state.messages.length === 0) this.send(); }, 800);
     }
   }
+  /** 같은 실패는 1분에 한 번만 알린다 — 루프 안의 실패가 화면을 덮으면 안 된다. */
+  private _asyncThrottle = makeThrottle(60_000);
+  private onAsyncError = (e: Event) => {
+    const title = String((e as CustomEvent).detail?.title ?? "");
+    if (!this._asyncThrottle(title, Date.now())) return;
+    this.toast("error", t("async.failed"));
+  };
+
   componentWillUnmount() {
+    window.removeEventListener(ASYNC_ERROR_EVENT, this.onAsyncError);
     this._viewsOff?.(); this._viewsOff = null;
     for (const off of this._viewChangeOff.values()) off();
     this._viewChangeOff.clear();
@@ -9130,7 +9143,9 @@ ${(r.output || "").slice(0, 2000)}`;
 
   renderExt() {
     const s = this.state;
-    const badge = (text: string, color: string) => <span style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "22", borderRadius: 4, padding: "1px 5px" }}>{text}</span>;
+    // key 를 받는다. 목록 안에서 쓰이는데 없으면 React 가 위치로만 짝을 맞춰,
+    // 확장을 켜고 끄거나 목록이 바뀔 때 엉뚱한 배지가 남는다.
+    const badge = (text: string, color: string, key?: string) => <span key={key} style={{ fontSize: 8.5, fontWeight: 700, color, background: color + "22", borderRadius: 4, padding: "1px 5px" }}>{text}</span>;
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
         {/* Open VSX 마켓플레이스 검색 */}
@@ -9204,7 +9219,7 @@ ${(r.output || "").slice(0, 2000)}`;
             {ext.description && <div style={{ fontSize: 10.5, color: "var(--fg-sub2)", marginTop: 3, maxHeight: 30, overflow: "hidden" }}>{ext.description}</div>}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, alignItems: "center" }}>
               <span style={{ fontSize: 9, color: "var(--fg-dim)", fontFamily: MONO }}>v{ext.version}</span>
-              {ext.contributes.map(c => badge(c, "#8B8F9E"))}
+              {ext.contributes.map(c => badge(c, "#8B8F9E", c))}
               {ext.kind === "vscode" && ext.programmatic && !limited && <span style={{ fontSize: 9, color: "var(--fg-dim)" }}>{t("extui.programmatic")}</span>}
             </div>
             {limited && (
