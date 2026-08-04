@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { OVERLAYS, OVERLAY_KEY, overlayById, topOverlay, suppressesAction } from "./overlays";
+import { OVERLAYS, OVERLAY_KEY, overlayById, topOverlay, suppressesAction, overlayZ } from "./overlays";
 
 describe("표 불변 조건", () => {
   it("id 가 유일하다", () => {
@@ -124,5 +124,29 @@ describe("suppressesAction", () => {
     for (const id of ["askRun", "undoAsk", "commitView", "mcpb", "import", "tour", "askClose"]) {
       expect(suppressesAction(overlayById(id), "file.save"), id).toBe(true);
     }
+  });
+});
+
+describe("overlayZ", () => {
+  it("표의 z 를 그대로 내준다 — 렌더가 이걸 읽어 간다", () => {
+    for (const o of OVERLAYS) expect(overlayZ(o.id), o.id).toBe(o.z);
+  });
+
+  it("표에 없는 id 는 조용히 0 을 주지 않고 던진다", () => {
+    // 렌더가 zIndex: 0 으로 그려지면 모달이 뒤에 깔려 **보이지 않는 채로** 키를 먹는다.
+    // 그 모양은 디버깅이 어렵다 — 차라리 화면이 안 뜨고 오류가 나는 편이 낫다.
+    expect(() => overlayZ("없는것")).toThrow();
+  });
+
+  it("확장이 던진 물음은 앱의 확인창보다 위다", () => {
+    expect(overlayZ("extAsk")).toBeGreaterThan(overlayZ("confirmAsk"));
+  });
+
+  it("확인창은 번들 설치창보다 위다 — 예전엔 표만 그랬고 렌더는 반대였다", () => {
+    expect(overlayZ("confirmAsk")).toBeGreaterThan(overlayZ("mcpb"));
+  });
+
+  it("투어는 가져오기창보다 위다 — 예전엔 렌더에서 둘 다 240 이라 DOM 순서가 정했다", () => {
+    expect(overlayZ("tour")).toBeGreaterThan(overlayZ("import"));
   });
 });

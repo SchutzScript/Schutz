@@ -70,6 +70,9 @@ export const OVERLAYS: OverlaySpec[] = [
   // 되돌리기 어려운 일 직전의 확인. 다른 모달 위에서 뜰 수 있어야 한다
   // (설정·검색 안에서도 삭제·치환을 부른다).
   { id: "confirmAsk", flag: "confirmAsk", z: 233, escapable: true },
+  // 확장이 던진 물음. 확인창보다 위다 — 확장 명령이 앱의 확인을 거쳐 시작될 수 있고,
+  // 그때 위에 뜨는 것은 확장 쪽이다. Esc 는 확장에 "취소" 로 전달된다.
+  { id: "extAsk", flag: "extAsk", z: 234, escapable: true },
 
   { id: "import", flag: "impOpen", z: 240, escapable: true },
   { id: "tour", flag: "tourOpen", z: 245, escapable: true },
@@ -77,6 +80,23 @@ export const OVERLAYS: OverlaySpec[] = [
 
 const BY_ID = new Map(OVERLAYS.map(o => [o.id, o]));
 export function overlayById(id: string): OverlaySpec | null { return BY_ID.get(id) ?? null; }
+
+/**
+ * 렌더가 쓸 zIndex. **표에서 읽어 간다.**
+ *
+ * "렌더 쪽 리터럴과 같아야 한다" 고 적어 두기만 했더니 실제로 어긋나 있었다:
+ * 확인창은 표에서 233 인데 231 로 그려졌고(번들 설치 232 **아래**), 투어는 표에서
+ * 245 인데 240 으로 그려져 가져오기(240)와 같은 층이었다. 둘 다 Esc 는 표 순서대로
+ * 위엣것부터 닫는데 **눈에 보이는 순서는 반대**가 된다 — 사용자는 보이는 창을 닫으려
+ * Esc 를 누르고, 답은 뒤에 가려진 창으로 간다.
+ *
+ * 지켜야 할 규칙을 주석으로 적는 대신 한 곳에서 값을 내주면 어긋날 자리가 없다.
+ */
+export function overlayZ(id: string): number {
+  const o = BY_ID.get(id);
+  if (!o) throw new Error(`overlayZ: 표에 없는 오버레이 "${id}"`);
+  return o.z;
+}
 
 /** 지금 열린 것들 중 **가장 위**. 같은 z 면 표에서 뒤에 적힌 것이 이긴다. */
 export function topOverlay(openIds: readonly string[]): OverlaySpec | null {

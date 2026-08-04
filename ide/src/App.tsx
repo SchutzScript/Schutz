@@ -34,7 +34,8 @@ import { planRun, langFor, LANGS as RUN_LANGS } from "./engine/runFile";
 import { getRunOverride, getRunOverrides, setRunOverride } from "./settings";
 import { emptyNav, push as navPush, back as navBack, forward as navForward, current as navCurrent, dropMissing as navDropMissing, type NavState } from "./engine/navHistory";
 import { shouldProbeQuota } from "./engine/quotaPoll";
-import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction } from "./overlays";
+import { OVERLAYS, OVERLAY_KEY, topOverlay, suppressesAction, overlayZ } from "./overlays";
+import { filterPicks, stepIndex, validateInput, type PromptReq, type NormPick } from "./ext/prompt";
 import {
   targetIdOf, isSubagentTarget, findSubagent, providerFor, filterTools,
   rosterLines, personaSystem, type SubagentDef,
@@ -338,6 +339,17 @@ interface S {
     /** 되돌릴 수 없는 일 — 확인 버튼을 오류 색으로. */
     danger?: boolean;
   } | null;
+  /** 확장이 사용자에게 던진 물음. 셰임의 showQuickPick/showInputBox/showXMessage 가
+   *  여기로 온다 — 예전엔 묻지도 않고 undefined(=취소)를 돌려줬다. */
+  extAsk: PromptReq | null;
+  /** 물음 안의 입력값. 빠른 선택에서는 걸러내기 문자열, 입력창에서는 값 자체다. */
+  extAskText: string;
+  /** 빠른 선택의 커서. **걸러낸 뒤 목록에서의 자리**다(원본 index 가 아니다). */
+  extAskSel: number;
+  /** canPickMany 에서 체크한 항목 — 원본 index 를 담는다. 걸러도 선택이 유지돼야 한다. */
+  extAskPicked: number[];
+  /** validateInput 이 돌려준 문구. 있으면 확인을 막는다. */
+  extAskErr: string | null;
   /** 실행 승인 대기 중인 명령 (수동 정책일 때) */
   /** 승인 대기. okLabel/cancelLabel 은 자리에 맞는 문구가 있을 때만 채운다(없으면 기본 허용/거부). */
   askRun: { command: string; rationale: string; agent: string; okLabel?: string; cancelLabel?: string } | null;
@@ -671,7 +683,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     termOpen: false, termReady: false, termTab: "t1", chatTab: "all", chatAway: false, openDiffs: {}, openTools: {}, sheetOpen: false, convId: null, asideTab: "recents",
     impOpen: false, impRows: null, impThisOnly: true, impBusy: null, impAgent: "all",
     agentSideW: (() => { try { return Math.max(360, Math.min(1100, +(localStorage.getItem("schutz.agentSideW") || 620))); } catch { return 620; } })(),
-    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
+    agentAsideW: (() => { try { return Math.max(150, Math.min(480, +(localStorage.getItem("schutz.agentAsideW") || 216))); } catch { return 216; } })(), quota: {}, askRun: null, confirmAsk: null, extAsk: null, extAskText: "", extAskSel: 0, extAskPicked: [], extAskErr: null, terms: [{ id: "t1", n: 1 }], tasks: [], keyCapture: null, hunkSel: {}, checkpoints: [], undoAsk: null, gitAmend: false, commitView: null, mcpb: null,
     agents: this.freshAgents(),
     workspace: null, paneDirty: {},
     proposals: [], reviewFindings: [], reviewBusy: false, paneVer: {},
@@ -1994,6 +2006,72 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       this.setState({ confirmAsk: { ...o, cancelLabel: o.cancelLabel ?? t("confirm.cancel") } });
     });
   }
+  private _extAskResolve: ((v: any) => void) | null = null;
+
+  /** 확장의 물음을 띄우고 답을 기다린다. 취소면 undefined 로 푼다 — vscode 규약이다.
+   *
+   *  물음이 이미 떠 있으면 앞의 것을 **취소로** 닫는다. 겹쳐 쌓이면 어느 물음에 답한
+   *  것인지 알 수 없고, 확장 쪽 await 는 둘 다 살아 있다(askConfirm 과 같은 규칙). */
+  private askExtension(req: PromptReq): Promise<any> {
+    this._extAskResolve?.(undefined);
+    return new Promise<any>(resolve => {
+      this._extAskResolve = resolve;
+      const picked = req.kind === "pick" ? req.items.filter(i => i.picked).map(i => i.index) : [];
+      this.openO({
+        extAsk: req,
+        extAskText: req.kind === "input" ? req.value : "",
+        extAskSel: 0, extAskPicked: picked, extAskErr: null,
+      });
+      // 확장이 준 초기값이 이미 규칙에 어긋날 수 있다. 열자마자 검사하지 않으면
+      // 멀쩡해 보이는 값에 확인을 눌러야 비로소 왜 안 되는지 알게 된다.
+      //
+      // 여기서는 state 를 보면 안 된다. 바로 위의 setState 는 아직 반영되지 않았을 수
+      // 있어서(React 가 마이크로태스크에서 몰아 처리한다) `extAsk`·`extAskText` 둘 다
+      // 옛 값이고, 그걸 "그 사이 다른 물음으로 바뀌었다" 로 읽어 조용히 지나갔다.
+      // **기다리는 resolve** 는 동기적으로 이미 정해져 있으니 그걸로 신원을 확인한다.
+      //
+      // 사용자가 그 사이 타자를 쳤다면 그쪽 onChange 가 더 최신 답을 덮어쓴다.
+      if (req.kind === "input") {
+        void validateInput(req.validate, req.value).then(m => {
+          if (this._extAskResolve === resolve) this.setState({ extAskErr: m });
+        });
+      }
+    });
+  }
+  private answerExtension(v: any) {
+    const r = this._extAskResolve;
+    this._extAskResolve = null;
+    this.setState({ extAsk: null, extAskText: "", extAskPicked: [], extAskErr: null }, () => r?.(v));
+  }
+
+  /** 지금 걸러낸 목록. 렌더와 키 처리가 같은 것을 봐야 커서가 어긋나지 않는다. */
+  private extAskVisible(): NormPick[] {
+    const a = this.state.extAsk;
+    if (a?.kind !== "pick") return [];
+    return filterPicks(a.items, this.state.extAskText, a.match);
+  }
+
+  private async extAskSubmit() {
+    const a = this.state.extAsk;
+    if (!a) return;
+    if (a.kind === "input") {
+      const msg = await validateInput(a.validate, this.state.extAskText);
+      // 확인을 누른 뒤에도 다시 검사한다 — 타자 중 검사만 믿으면 마지막 글자가 빠진다.
+      if (msg) { this.setState({ extAskErr: msg }); return; }
+      this.answerExtension(this.state.extAskText);
+      return;
+    }
+    if (a.kind === "pick") {
+      if (a.many) { this.answerExtension(this.state.extAskPicked.slice().sort((x, y) => x - y)); return; }
+      const vis = this.extAskVisible();
+      const it = vis[this.state.extAskSel];
+      // 걸러낸 결과가 비었으면 고를 것이 없다. 여기서 취소로 닫으면 확장은 사용자가
+      // 그만둔 줄 안다 — 실제로는 오타 하나였을 수 있으므로 아무것도 하지 않는다.
+      if (!it) return;
+      this.answerExtension(it.index);
+    }
+  }
+
   private answerConfirm(ok: boolean) {
     const r = this._confirmResolve;
     this._confirmResolve = null;
@@ -5315,6 +5393,7 @@ ${(r.output || "").slice(0, 2000)}`;
       // 못 읽고 조용히 무동작했다.
       workspaceRoot: () => this.state.workspace?.root ?? null,
       openFiles: () => this.allOpen().filter(rel => !this.parseDiffKey(rel) && !this.parsePreviewKey(rel)),
+      prompt: req => this.askExtension(req),
     });
     // VS Code 확장(선언형) — 테마·스니펫·언어설정 적용
     const vres = await vscodeExt.loadVscodeExtensions();
@@ -5653,6 +5732,7 @@ ${(r.output || "").slice(0, 2000)}`;
         {this.renderSearch()}
         {this.renderAskClose()}
         {this.renderConfirm()}
+        {this.renderExtAsk()}
         {this.renderAskRun()}
         {this.renderUndoAsk()}
         {this.renderCommitView()}
@@ -6750,7 +6830,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (!a) return null;
     return (
       <div className="sz-backdrop" onClick={() => this.answerConfirm(false)}
-        style={{ position: "fixed", inset: 0, zIndex: 231, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("confirmAsk"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(a.title, "confirmAsk")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 440, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8, color: a.danger ? "var(--err)" : "var(--fg)" }}>{a.title}</div>
@@ -6769,6 +6849,127 @@ ${(r.output || "").slice(0, 2000)}`;
     );
   }
 
+  /** 확장이 던진 물음 — 빠른 선택 / 입력 / 버튼.
+   *
+   *  세 모양이 한 함수에 있는 이유는 vscode 도 셋을 "확장이 사용자에게 묻는 한 가지 일"
+   *  로 묶기 때문이다. 어느 쪽이든 **누가 묻는지**를 머리에 밝힌다 — 확장이 띄운 창을
+   *  앱이 띄운 것으로 오해하면, 확장을 지운 뒤에도 앱을 의심하게 된다. */
+  renderExtAsk() {
+    const a = this.state.extAsk;
+    if (!a) return null;
+    const s = this.state;
+    const cancel = () => this.answerExtension(undefined);
+    const head = (
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", flex: "none",
+          background: a.kind === "buttons" && a.tone === "error" ? "var(--err)" : a.kind === "buttons" && a.tone === "warn" ? "var(--warn)" : "var(--accent)" }} />
+        <span style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>{t("extask.from", { name: a.source })}</span>
+      </div>
+    );
+    const inputStyle: React.CSSProperties = {
+      width: "100%", height: 30, boxSizing: "border-box", padding: "0 10px", fontSize: 12.5, fontFamily: "inherit",
+      color: "var(--fg)", background: "var(--bg-editor)", borderRadius: 7, outline: "none",
+      border: "1px solid " + (s.extAskErr ? "var(--err)" : "var(--w12)"),
+    };
+    const btn = (label: string, primary: boolean, onClick: () => void, key?: string) => (
+      <button key={key ?? label} className={primary ? "hvAccent" : "hv08"} onClick={onClick}
+        style={{ height: 28, padding: "0 14px", fontSize: 12, fontWeight: primary ? 600 : 400, fontFamily: "inherit", cursor: "pointer", borderRadius: 7,
+          color: primary ? "var(--on-accent)" : "var(--fg-sub)", background: primary ? "var(--accent)" : "transparent",
+          border: primary ? "none" : "1px solid var(--w12)" }}>{label}</button>
+    );
+
+    let body: React.ReactNode;
+    if (a.kind === "buttons") {
+      body = (<>
+        <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.7, marginBottom: 16, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{a.title}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          {/* 첫 버튼이 권장값이라는 것이 vscode 관례다. isCloseAffordance 는 취소 자리로 둔다. */}
+          {a.buttons.map((b, i) => btn(b.label, i === 0 && !b.isClose, () => this.answerExtension(i), "b" + i))}
+        </div>
+      </>);
+    } else if (a.kind === "input") {
+      body = (<>
+        {a.title && <div style={{ fontSize: 12.5, color: "var(--fg-sub2)", lineHeight: 1.6, marginBottom: 10 }}>{a.title}</div>}
+        <input data-szfocus type={a.password ? "password" : "text"} value={s.extAskText} placeholder={a.detail} style={inputStyle}
+          onChange={e => {
+            const v = e.target.value;
+            this.setState({ extAskText: v, extAskErr: null });
+            // 타자 중에도 검사한다. 늦게 오는 답이 그 사이 바뀐 값을 덮지 않게, 돌아왔을
+            // 때 값이 그대로인지 확인한다.
+            void validateInput(a.validate, v).then(m => {
+              if (this.state.extAsk === a && this.state.extAskText === v) this.setState({ extAskErr: m });
+            });
+          }}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); void this.extAskSubmit(); }
+            else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+          }} />
+        {s.extAskErr && <div style={{ fontSize: 11.5, color: "var(--err)", marginTop: 7 }}>{s.extAskErr}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          {btn(t("extask.cancel"), false, cancel)}
+          {btn(t("extask.ok"), true, () => void this.extAskSubmit())}
+        </div>
+      </>);
+    } else {
+      const vis = this.extAskVisible();
+      const sel = Math.min(s.extAskSel, Math.max(0, vis.length - 1));
+      const toggle = (idx: number) => this.setState(st => ({
+        extAskPicked: st.extAskPicked.includes(idx) ? st.extAskPicked.filter(x => x !== idx) : [...st.extAskPicked, idx],
+      }));
+      body = (<>
+        <input data-szfocus value={s.extAskText} placeholder={a.title || t("extask.pickPlaceholder")} style={inputStyle}
+          onChange={e => this.setState({ extAskText: e.target.value, extAskSel: 0 })}
+          onKeyDown={e => {
+            if (e.key === "ArrowDown") { e.preventDefault(); this.setState({ extAskSel: stepIndex(sel, 1, vis.length) }); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); this.setState({ extAskSel: stepIndex(sel, -1, vis.length) }); }
+            else if (e.key === "Enter") { e.preventDefault(); void this.extAskSubmit(); }
+            else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+            // 여러 개 고르는 중에는 Space 가 체크다. 한 개짜리에서는 걸러내기에 쓰는
+            // 평범한 글자여야 하므로 가로채지 않는다.
+            else if (e.key === " " && a.many && vis[sel]) { e.preventDefault(); toggle(vis[sel]!.index); }
+          }} />
+        <div style={{ marginTop: 8, maxHeight: 280, overflowY: "auto", border: "1px solid var(--w07)", borderRadius: 8 }}>
+          {!vis.length && <div style={{ padding: "14px 12px", fontSize: 12, color: "var(--fg-dim)" }}>{t("extask.none")}</div>}
+          {vis.map((it, i) => (
+            <div key={it.index} className="hv06" role="option" aria-selected={i === sel}
+              onMouseEnter={() => this.setState({ extAskSel: i })}
+              onClick={() => { if (a.many) toggle(it.index); else this.answerExtension(it.index); }}
+              style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 11px", cursor: "pointer",
+                background: i === sel ? "var(--w08)" : "transparent" }}>
+              {a.many && <span style={{ width: 13, height: 13, flex: "none", borderRadius: 3, border: "1px solid var(--w20)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "var(--on-accent)", background: s.extAskPicked.includes(it.index) ? "var(--accent)" : "transparent" }}>{s.extAskPicked.includes(it.index) ? "✓" : ""}</span>}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12.5, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {it.label}
+                  {it.description && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--fg-dim)" }}>{it.description}</span>}
+                </div>
+                {it.detail && <div style={{ fontSize: 11, color: "var(--fg-dim)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.detail}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+          <span style={{ fontSize: 10.5, color: "var(--fg-dim)" }}>
+            {a.many ? (s.extAskPicked.length ? t("extask.selected", { n: s.extAskPicked.length }) : t("extask.pickMany")) : ""}
+          </span>
+          <div style={{ flex: 1 }} />
+          {btn(t("extask.cancel"), false, cancel)}
+          {a.many && btn(t("extask.ok"), true, () => void this.extAskSubmit())}
+        </div>
+      </>);
+    }
+
+    return (
+      <div className="sz-backdrop" onClick={cancel}
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("extAsk"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: a.kind === "pick" ? "flex-start" : "center", justifyContent: "center", paddingTop: a.kind === "pick" ? "12vh" : 0 }}>
+        <div {...this.dialogProps(t("extask.from", { name: a.source }), "extAsk")} className="sz-pop" onClick={e => e.stopPropagation()}
+          style={{ width: 460, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18, fontFamily: SUIT }}>
+          {head}
+          {body}
+        </div>
+      </div>
+    );
+  }
+
   renderAskRun() {
     const a = this.state.askRun;
     if (!a) return null;
@@ -6777,7 +6978,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const d = this.agDef(a.agent);
     return (
       <div className="sz-backdrop" onClick={() => this.answerRun(false)}
-        style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("askRun"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("run.askTitle"), "askRun")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 460, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
@@ -6970,7 +7171,7 @@ ${(r.output || "").slice(0, 2000)}`;
 
     return (
       <div className="sz-backdrop" onClick={close}
-        style={{ position: "fixed", inset: 0, zIndex: 240, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("import"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("imp.title"), "import")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 620, maxWidth: "94%", height: 520, maxHeight: "86vh", display: "flex", flexDirection: "column",
             background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
@@ -8018,7 +8219,7 @@ ${(r.output || "").slice(0, 2000)}`;
     );
     return (
       <div className="sz-backdrop" onClick={() => { if (!ask.busy) this.setState({ undoAsk: null }); }}
-        style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("undoAsk"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("cp.title"), "undoAsk")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 480, maxWidth: "92%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>{t("cp.title")}</div>
@@ -8065,7 +8266,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const label = { fontSize: 10.5, color: "var(--fg-dim)", marginBottom: 3 } as React.CSSProperties;
     return (
       <div className="sz-backdrop" onClick={() => { if (!b.busy) this.closeBundle(); }}
-        style={{ position: "fixed", inset: 0, zIndex: 232, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("mcpb"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("mcpb.title"), "mcpb")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 540, maxWidth: "94%", maxHeight: "86%", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>{t("mcpb.title")}</div>
@@ -8152,7 +8353,7 @@ ${(r.output || "").slice(0, 2000)}`;
       : ln.startsWith("diff --git") ? "var(--fg-sub)" : "var(--fg-sub2)";
     return (
       <div className="sz-backdrop" onClick={() => this.setState({ commitView: null })}
-        style={{ position: "fixed", inset: 0, zIndex: 230, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("commitView"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(cv.hash, "commitView")} className="sz-pop" onClick={e => e.stopPropagation()}
           style={{ width: 820, maxWidth: "94%", height: "78%", display: "flex", flexDirection: "column", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 16 }}>
           <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -8357,7 +8558,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (list.length < 2) return null;
     const sel = s.mruSel % list.length;
     return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 210, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.2)" }}>
+      <div style={{ position: "fixed", inset: 0, zIndex: overlayZ("mru"), display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.2)" }}>
         <div className="sz-pop" style={{ minWidth: 320, maxWidth: 520, background: "var(--bg-popup)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: 6 }}>
           {list.map((rel, i) => (
             <div key={rel} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 12px", borderRadius: 7, background: i === sel ? "var(--accent-soft)" : "transparent", transition: "background var(--dur-fast) var(--ease)" }}>
@@ -8399,7 +8600,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const closeAsk = () => this.closeOverlay("askClose", { askClose: null });
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeAsk}
-        style={{ position: "fixed", inset: 0, zIndex: 220, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("askClose"), background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("misc.unsavedTitle"), "askClose")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
           style={{ width: 380, maxWidth: "90%", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 12, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{t("misc.unsavedTitle")}</div>
@@ -8878,6 +9079,7 @@ ${(r.output || "").slice(0, 2000)}`;
       case "commitView": this.setState({ commitView: null }); return;
       case "mcpb": if (!s.mcpb?.busy) void this.closeBundle(); return;
       case "confirmAsk": this.answerConfirm(false); return;   // Esc = 취소
+      case "extAsk": this.answerExtension(undefined); return;  // 확장에는 "취소" 로 간다
       case "import": this.closeImport(); return;
       case "tour": this.endTour(); return;
     }
@@ -9501,7 +9703,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const isLast = cur === TOUR_STEPS.length - 1;
     const tourBtn: React.CSSProperties = { padding: "5px 14px", fontSize: 11.5, borderRadius: 7, cursor: "pointer", fontFamily: SUIT };
     return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 240 }} aria-modal="true" role="dialog"
+      <div style={{ position: "fixed", inset: 0, zIndex: overlayZ("tour") }} aria-modal="true" role="dialog"
         onClick={e => { if (e.target === e.currentTarget) { /* 배경 클릭은 무시(오작동 방지) */ } }}>
         {rect
           ? <div className="sz-tour-hole" style={{ position: "fixed", left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderRadius: 9, pointerEvents: "none" }} />
@@ -10645,7 +10847,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const segBtn = (on: boolean): React.CSSProperties => ({ flex: 1, height: 30, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", borderRadius: 7, color: on ? "var(--fg)" : "var(--fg-sub2)", background: on ? "var(--accent-soft)" : "transparent", border: `1px solid ${on ? "var(--accent)" : "var(--w10)"}` });
     return (
       <div className={out ? "sz-backdrop-out" : "sz-backdrop"} onClick={closeSettings}
-        style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        style={{ position: "fixed", inset: 0, zIndex: overlayZ("settings"), background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div {...this.dialogProps(t("settings.title"), "settings")} className={out ? "sz-pop-out" : "sz-pop"} onClick={e => e.stopPropagation()}
           style={{ width: 480, maxWidth: "92%", maxHeight: "88vh", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--bd-popup)", borderRadius: 14, boxShadow: "var(--shadow-pop)", padding: "18px 20px" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
