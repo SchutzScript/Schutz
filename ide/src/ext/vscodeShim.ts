@@ -3,8 +3,10 @@
 // Node/네이티브 의존이나 미구현 API를 쓰는 확장은 실패(캐치되어 보고). "단순 확장"용.
 import monaco from "../editor/monacoSetup";
 import { getLang } from "../i18n";
+import * as projectModels from "../editor/projectModels";
 import { makeDocIndex } from "./shimDoc";
 import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
+import { toMarkers, toLocations, toEdits } from "./shimLang";
 import { setShimDocSource } from "./extHost";
 
 export interface ShimDeps {
@@ -107,6 +109,23 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
     { Position, Range, Selection },
   );
   const relOf = (arg: any) => relOfWith(deps.workspaceRoot(), arg);
+  /** 프로바이더에 넘길 문서.
+   *
+   *  vscode 는 프로바이더의 첫 인자로 **TextDocument** 를 준다고 약속한다. 그런데
+   *  여기서는 Monaco 모델을 그대로 넘기고 있었다. 모델에는 `getText`·`lineAt`·
+   *  `fileName` 이 없으므로, 그걸 부르는 프로바이더는 첫 줄에서 던지고 바깥
+   *  try/catch 가 그 예외를 삼켰다 — 확장 입장에서는 "결과가 없다" 와 구별되지 않는다.
+   *  자동완성과 호버가 등록은 되는데 아무것도 안 나오던 이유다.
+   *
+   *  워크스페이스 밖 모델(diff·미리보기)은 상대 경로가 없어 문서를 못 만든다. 그때는
+   *  예전처럼 모델을 넘긴다 — 없는 것보다는 낫다. */
+  const docForModel = (model: monaco.editor.ITextModel): any => {
+    try {
+      const rel = projectModels.relFor(model.uri.toString());
+      if (rel) { const d = docs.docFor(rel); if (d) return d; }
+    } catch { /* */ }
+    return model;
+  };
   // 사건을 쏠 때 쓸 통로. 확장마다 덮어써도 같은 것을 가리키므로 문제 없다.
   setShimDocSource((rel) => docs.docFor(rel), (rel) => docs.editorFor(rel));
   const folder = () => {
@@ -129,7 +148,7 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
           triggerCharacters: triggers,
           async provideCompletionItems(model, position) {
             try {
-              const items = await provider.provideCompletionItems(model, new Position(position.lineNumber - 1, position.column - 1), { triggerKind: 0 }, null);
+              const items = await provider.provideCompletionItems(docForModel(model), new Position(position.lineNumber - 1, position.column - 1), { triggerKind: 0 }, null);
               const list = Array.isArray(items) ? items : (items?.items ?? []);
               const word = model.getWordUntilPosition(position);
               const range = { startLineNumber: position.lineNumber, startColumn: word.startColumn, endLineNumber: position.lineNumber, endColumn: word.endColumn };
@@ -157,7 +176,7 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
         const d = monaco.languages.registerHoverProvider(lang, {
           async provideHover(model, position) {
             try {
-              const h = await provider.provideHover(model, new Position(position.lineNumber - 1, position.column - 1), null);
+              const h = await provider.provideHover(docForModel(model), new Position(position.lineNumber - 1, position.column - 1), null);
               if (!h) return undefined;
               const contents = (h.contents || []).map((c: any) => ({ value: typeof c === "string" ? c : (c?.value ?? "") }));
               return { contents };
@@ -168,10 +187,91 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
       }
       return { dispose() { for (const d of created) { try { d.dispose(); } catch { /* */ } const i = disposables.indexOf(d); if (i >= 0) disposables.splice(i, 1); } } };
     },
-    registerDefinitionProvider() { return noopDisposable; },
+    registerDefinitionProvider(selector: any, provider: any) {
+      const created: monaco.IDisposable[] = [];
+      for (const lang of langIdsFromSelector(selector)) {
+        const d = monaco.languages.registerDefinitionProvider(lang, {
+          async provideDefinition(model, position) {
+            try {
+              const res = await provider.provideDefinition(docForModel(model), new Position(position.lineNumber - 1, position.column - 1), null);
+              // uri 는 확장이 만든 것(우리 Uri 셰임이거나 문자열)이라 monaco.Uri 로 다시 세운다.
+              return toLocations(res).map(l => ({ uri: monaco.Uri.parse(String(l.uri?.toString?.() ?? l.uri)), range: l.range }));
+            } catch { return []; }
+          },
+        });
+        disposables.push(d); created.push(d);
+      }
+      return { dispose() { for (const d of created) { try { d.dispose(); } catch { /* */ } const i = disposables.indexOf(d); if (i >= 0) disposables.splice(i, 1); } } };
+    },
     registerCodeActionsProvider() { return noopDisposable; },
-    registerDocumentFormattingEditProvider() { return noopDisposable; },
-    createDiagnosticCollection(name?: string) { return { set() {}, delete() {}, clear() {}, dispose() {}, name }; },
+    registerDocumentFormattingEditProvider(selector: any, provider: any) {
+      const created: monaco.IDisposable[] = [];
+      for (const lang of langIdsFromSelector(selector)) {
+        const d = monaco.languages.registerDocumentFormattingEditProvider(lang, {
+          async provideDocumentFormattingEdits(model) {
+            try {
+              const edits = await provider.provideDocumentFormattingEdits(docForModel(model), { tabSize: 2, insertSpaces: true }, null);
+              return toEdits(edits);
+            } catch { return []; }
+          },
+        });
+        disposables.push(d); created.push(d);
+      }
+      return { dispose() { for (const d of created) { try { d.dispose(); } catch { /* */ } const i = disposables.indexOf(d); if (i >= 0) disposables.splice(i, 1); } } };
+    },
+    /** 린터가 찾아낸 문제를 실제로 화면에 올린다.
+     *
+     *  예전엔 set/delete/clear 가 전부 빈 함수였다. 린터 확장은 파일을 다 읽고 문제를
+     *  찾아 넘긴 뒤 아무 일도 일어나지 않는 것을 봤다 — 밑줄도, 문제 패널의 한 줄도 없다.
+     *
+     *  owner 를 확장마다 나눠 둔다. 한 이름을 나눠 쓰면 나중에 set 하는 확장이 앞
+     *  확장의 진단을 지운다. */
+    createDiagnosticCollection(name?: string) {
+      const owner = "ext:" + ext.id + ":" + (name || "default");
+      // 이 컬렉션이 마커를 올려 둔 모델들. clear/dispose 때 되짚어 지우려면 필요하다 —
+      // 안 들고 있으면 "지웠다" 고 하고 옛 문제가 화면에 남는다.
+      const touched = new Set<string>();
+      const modelFor = (uri: any) => {
+        const key = String(uri?.toString?.() ?? uri ?? "");
+        if (!key) return null;
+        try { return monaco.editor.getModel(monaco.Uri.parse(key)); } catch { return null; }
+      };
+      const put = (uri: any, list: any) => {
+        const m = modelFor(uri);
+        if (!m) return;   // 안 열린 파일 — 열릴 때 확장이 다시 진단한다
+        const markers = toMarkers(list);
+        monaco.editor.setModelMarkers(m, owner, markers);
+        if (markers.length) touched.add(m.uri.toString()); else touched.delete(m.uri.toString());
+      };
+      const clearAll = () => {
+        for (const key of touched) {
+          try { const m = monaco.editor.getModel(monaco.Uri.parse(key)); if (m) monaco.editor.setModelMarkers(m, owner, []); } catch { /* 사라진 모델 */ }
+        }
+        touched.clear();
+      };
+      const coll = {
+        name: name || "default",
+        // vscode 는 set(uri, diags) 와 set(entries[]) 둘 다 받는다.
+        set(a: any, b?: any) {
+          if (Array.isArray(a) && b === undefined) { for (const [u, list] of a) put(u, list); return; }
+          put(a, b);
+        },
+        delete(uri: any) { put(uri, []); },
+        clear: clearAll,
+        dispose() { clearAll(); },
+        // 확장이 자기 진단을 되읽는 흐름이 있다. 빈 함수로 두면 "없다" 로 오해한다.
+        get(uri: any) { const m = modelFor(uri); return m ? monaco.editor.getModelMarkers({ owner, resource: m.uri }) : []; },
+        has(uri: any) { const m = modelFor(uri); return !!m && touched.has(m.uri.toString()); },
+        forEach(cb: (uri: any, diags: any[]) => void) {
+          for (const key of touched) {
+            try { const u = monaco.Uri.parse(key); cb(u, monaco.editor.getModelMarkers({ owner, resource: u })); } catch { /* */ }
+          }
+        },
+      };
+      // 확장이 dispose 를 잊어도 재로드 때 정리된다 — 안 그러면 옛 진단이 계속 남는다.
+      disposables.push({ dispose: clearAll });
+      return coll;
+    },
     setLanguageConfiguration() { return noopDisposable; },
   };
 
