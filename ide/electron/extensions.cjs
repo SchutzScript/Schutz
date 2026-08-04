@@ -9,11 +9,35 @@ function stateFile(app) { return path.join(extDir(app), ".state.json"); }
 /** 확장 id 검증 — 경로 구분자·'..' 금지 (슬러그만 허용) */
 function validExtId(id) { return typeof id === "string" && /^[A-Za-z0-9._-]+$/.test(id) && id !== "." && id !== ".."; }
 
+/** id → 실제 폴더. 폴더 이름과 id 는 **대개** 같지만 반드시 같지는 않다.
+ *
+ *  scan 은 VS Code 확장의 id 를 package.json 의 `publisher.name` 으로 만든다.
+ *  .vsix 로 설치하면 폴더도 그 이름이라 맞아떨어지지만, 폴더를 직접 넣는 길이 열려
+ *  있고("확장 폴더 열기" 버튼이 그러라고 있다) 그때는 어긋난다. 어긋나면 엔트리·테마·
+ *  아이콘·문법 **파일을 하나도 못 읽는다** — 목록에는 멀쩡히 뜨는데 "엔트리 파일을
+ *  찾을 수 없음" 만 나온다. scan 이 이미 dir 을 알고 돌려주는데 읽기 쪽이 그걸 버리고
+ *  id 로 다시 만들고 있었다.
+ *
+ *  폴더 이름이 id 와 같은 흔한 경우는 statSync 한 번으로 끝나고, 어긋난 것만 스캔한다. */
+const folderMemo = new Map();
+function extFolder(app, id) {
+  const direct = path.resolve(extDir(app), id);
+  try { if (fs.statSync(direct).isDirectory()) return direct; } catch { /* 없다 — 아래에서 찾는다 */ }
+  const memo = folderMemo.get(id);
+  // 기억해 둔 것도 지워졌을 수 있다(확장 삭제). 그러면 다시 찾는다.
+  if (memo) { try { if (fs.statSync(memo).isDirectory()) return memo; } catch { folderMemo.delete(id); } }
+  for (const e of scan(app)) if (e.id === id) { folderMemo.set(id, e.dir); return e.dir; }
+  return direct;   // 못 찾으면 원래 자리 — 읽기가 ENOENT 로 실패한다(조용히 다른 곳을 읽지 않는다)
+}
+
 /** 확장 디렉터리 내부로 경로를 안전하게 해석. 이탈 시 throw.
  *  id 는 슬러그 검증, 최종 경로는 base 컨테인먼트(구분자 포함)로 확인. */
 function safeExtPath(app, id, rel) {
   if (!validExtId(id)) throw new Error("잘못된 확장 id");
-  const base = path.resolve(extDir(app), id);
+  const base = extFolder(app, id);
+  // scan 이 준 값이라도 확장 디렉터리 안인지 다시 본다 — 경로 가드는 한 곳에만 둔다.
+  const root = path.resolve(extDir(app));
+  if (base !== root && !base.startsWith(root + path.sep)) throw new Error("경로 이탈");
   const full = path.resolve(base, rel || "");
   if (full !== base && !full.startsWith(base + path.sep)) throw new Error("경로 이탈");
   return full;
