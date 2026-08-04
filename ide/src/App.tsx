@@ -5311,6 +5311,10 @@ ${(r.output || "").slice(0, 2000)}`;
       toast: (k, m) => this.toast(k, m),
       showPanel: (title, html) => this.openO({ extPanel: { title, html } }),
       getActiveFile: () => this.state.active[this._focusSlot] || null,
+      // 셰임이 진짜 문서·편집기를 만들 수 있게 — 이게 없어서 확장이 현재 파일을
+      // 못 읽고 조용히 무동작했다.
+      workspaceRoot: () => this.state.workspace?.root ?? null,
+      openFiles: () => this.allOpen().filter(rel => !this.parseDiffKey(rel) && !this.parsePreviewKey(rel)),
     });
     // VS Code 확장(선언형) — 테마·스니펫·언어설정 적용
     const vres = await vscodeExt.loadVscodeExtensions();
