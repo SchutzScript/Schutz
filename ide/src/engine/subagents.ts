@@ -63,7 +63,7 @@ export function providerFor(
   const mapped = alias[want] ?? (configured.includes(want) ? want : "");
   if (mapped && configured.includes(mapped)) return mapped;
   if (configured.includes(caller)) return caller;
-  return configured[0];
+  return configured[0] ?? null;   // 위에서 빈 목록을 걸렀지만, 타입도 그걸 알아야 한다
 }
 
 /**

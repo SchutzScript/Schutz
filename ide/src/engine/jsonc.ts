@@ -59,7 +59,7 @@ function dropTrailingCommas(text: string): string {
     }
     if (c === ",") {
       let j = i + 1;
-      while (j < n && /\s/.test(text[j])) j++;
+      while (j < n && /\s/.test(text[j] ?? "")) j++;   // 빈 문자열은 \s 에 안 걸려 여기서 멈춘다
       if (text[j] === "}" || text[j] === "]") { i++; continue; }  // 버린다
     }
     out += c; i++;

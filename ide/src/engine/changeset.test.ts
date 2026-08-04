@@ -66,7 +66,7 @@ describe("summarizeChanges", () => {
       P({ rel: "a.ts", status: "accepted" }),
       P({ rel: "a.ts", status: "pending" }),
     ]);
-    expect(r[0].status).toBe("pending");
+    expect(r[0]!.status).toBe("pending");
   });
 
   it("전부 수락이면 accepted", () => {
@@ -74,7 +74,7 @@ describe("summarizeChanges", () => {
       P({ rel: "a.ts", status: "accepted" }),
       P({ rel: "a.ts", status: "accepted" }),
     ]);
-    expect(r[0].status).toBe("accepted");
+    expect(r[0]!.status).toBe("accepted");
   });
 
   it("실패가 섞이면 실패가 이긴다 — 조용히 성공으로 보이면 안 된다", () => {
@@ -82,7 +82,7 @@ describe("summarizeChanges", () => {
       P({ rel: "a.ts", status: "accepted" }),
       P({ rel: "a.ts", status: "failed" }),
     ]);
-    expect(r[0].status).toBe("failed");
+    expect(r[0]!.status).toBe("failed");
   });
 
   it("같은 파일을 두 에이전트가 건드리면 둘 다 기록한다", () => {
@@ -91,7 +91,7 @@ describe("summarizeChanges", () => {
       P({ rel: "a.ts", agent: "gpt" }),
       P({ rel: "a.ts", agent: "claude" }),
     ]);
-    expect(r[0].agents).toEqual(["claude", "gpt"]);
+    expect(r[0]!.agents).toEqual(["claude", "gpt"]);
   });
 
   it("빈 입력은 빈 목록", () => {

@@ -106,7 +106,7 @@ describe("user_config", () => {
     const f = okOf(withUc).userConfig;
     expect(f.map(x => x.key)).toEqual(["api_key", "units", "dirs"]);
     expect(f[0]).toMatchObject({ required: true, sensitive: true, title: "API 키" });
-    expect(f[1].default).toBe("metric");
+    expect(f[1]!.default).toBe("metric");
     expect(f[2]).toMatchObject({ title: "dirs", multiple: true });
   });
   it("기본값으로 입력칸을 채운다", () => {
