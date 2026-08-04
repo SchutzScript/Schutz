@@ -7,6 +7,7 @@ import * as projectModels from "../editor/projectModels";
 import { makeDocIndex } from "./shimDoc";
 import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
 import { toMarkers, toLocations, toEdits } from "./shimLang";
+import { flattenDefaults, fullKey, readValue, hasValue, inspectValue, sectionValues, affects } from "./config";
 import { setShimDocSource } from "./extHost";
 
 export interface ShimDeps {
@@ -103,7 +104,7 @@ function relOfWith(root: string | null, arg: any): string | null {
   return root ? stripRoot(root, p) : String(p);
 }
 
-export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string }) {
+export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; contributes?: any }) {
   const docs = makeDocIndex(
     { root: deps.workspaceRoot, activeRel: deps.getActiveFile, openRels: deps.openFiles },
     { Position, Range, Selection },
@@ -342,14 +343,45 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string })
     withProgress: (_opts: any, task: any) => Promise.resolve(task({ report() {} }, { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event })),
   };
 
+  // ── 설정 ──
+  // 확장은 자기 기본값을 package.json 의 contributes.configuration 에 적어 두고
+  // `get(key)` 를 인자 없이 부른다. 예전 셰임은 그 선언을 아예 안 읽어서 그런 호출이
+  // 전부 undefined 였다 — 확장은 "설정이 꺼져 있다" 로 읽고 기능을 접었다.
+  const cfgDefaults = flattenDefaults(ext.contributes);
+  const CFG_NS = "schutz.extconfig." + ext.id;
+  const readStored = (): Record<string, any> => {
+    try { return JSON.parse(localStorage.getItem(CFG_NS) || "{}"); } catch { return {}; }
+  };
+  const writeStored = (o: Record<string, any>) => {
+    try { localStorage.setItem(CFG_NS, JSON.stringify(o)); } catch { /* 용량초과 */ }
+  };
+  const cfgChanged = new EventEmitter<any>();
+
+  const getConfiguration = (section?: string) => {
+    const src = { defaults: cfgDefaults, stored: readStored() };
+    const key = (k: string) => fullKey(section, k);
+    // vscode 의 설정 객체는 값을 **속성으로도** 노출한다(`cfg.enable`). 그렇게 읽는
+    // 확장이 흔해서, 아래 메서드보다 먼저 얹고 메서드가 덮어쓰게 둔다.
+    return Object.assign(sectionValues(src, section), {
+      get: (k: string, def?: any) => readValue(src, key(k), def),
+      has: (k: string) => hasValue(src, key(k)),
+      inspect: (k: string) => inspectValue(src, key(k)),
+      update: (k: string, value: any) => {
+        const full = key(k);
+        const next = readStored();
+        // undefined 는 "기본값으로 되돌린다" 는 뜻이다(vscode 규약). 그대로 저장하면
+        // 사용자가 undefined 를 골랐다는 뜻이 되어 선언 기본값이 영영 안 돌아온다.
+        if (value === undefined) delete next[full]; else next[full] = value;
+        writeStored(next);
+        cfgChanged.fire({ affectsConfiguration: (q: string) => affects([full], q) });
+        return Promise.resolve();
+      },
+    });
+  };
+
   const workspace = {
-    getConfiguration: (_section?: string) => ({
-      get: (_key: string, def?: any) => def,
-      has: () => false,
-      update: () => Promise.resolve(),
-      inspect: () => undefined,
-    }),
-    onDidChangeConfiguration: new EventEmitter().event,
+    getConfiguration,
+    onDidChangeConfiguration: cfgChanged.event,
     onDidChangeTextDocument: editorEvents.docChanged.event,
     onDidOpenTextDocument: editorEvents.docOpened.event,
     onDidCloseTextDocument: editorEvents.docClosed.event,
