@@ -89,11 +89,11 @@ same table the app dispatches from, so it cannot drift from what actually happen
 
 **Terminal** — A real PTY terminal (xterm.js + node-pty) with ANSI color, scrollback, and multiple tabs, alongside a log tab showing live agent activity.
 
-**MCP** — A built-in Model Context Protocol host. Import existing servers, generate one from a program, or drop an `.mcpb` bundle onto the window — the install dialog shows the exact command before anything runs. Manage them from the title bar and expose their tools to the agent loop.
+**MCP** — A built-in Model Context Protocol host, speaking revision 2025-06-18 and falling back to whatever a server negotiates. Import existing servers, generate one from a program, or drop an `.mcpb` bundle onto the window — the install dialog shows the exact command before anything runs. Tools, resources and prompts are all read; tools are exposed to the agent loop.
 
 **Debugging** — Breakpoints, call stack, variables, and stepping via DAP (Python/debugpy today).
 
-**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
+**Extensions** — Install VS Code extensions from Open VSX, with TextMate grammars and icon themes. The `vscode` shim gives them the active editor for real: reading the document, moving the selection, and editing through the model so `Ctrl+Z` still works. Schutz-native extensions can register commands, show panels, and subscribe to what happens in the IDE — files opened and saved, proposals accepted or rejected, agent turns starting and ending.
 
 **Localization** — The full UI ships in Korean, English, German, and Japanese.
 
@@ -126,8 +126,14 @@ npm run dist:linux # Linux build
 
 The ecosystem work that used to sit in Phase 3 has shipped: VS Code extensions, Claude Code
 skills and subagents, MCP servers over stdio and HTTP, and `.mcpb` bundles are all in the app
-today. What is still thin is how much of the VS Code extension API the shim covers — an
-extension that reads the active editor currently gets nothing back.
+today. The VS Code shim reads and edits the active document, and MCP speaks all three of its
+pillars rather than tools alone.
+
+Where it is still thin, specifically: the shim has no quick-pick or input box, cannot open a
+file that is not already in a tab, and does not implement `document.save()` — those return an
+error rather than an empty value, so an extension that needs them fails loudly instead of
+doing nothing. MCP resources and prompts are readable and shown in the panel, but are not yet
+offered to the agent as tools.
 
 ## Contributing
 
