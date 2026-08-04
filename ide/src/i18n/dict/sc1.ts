@@ -83,4 +83,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc1.desktop_only_project": { ko: "프로젝트 열기는 데스크톱 앱에서만 가능합니다. Schutz 앱(설치본 또는 npm run electron)에서 실행해 주세요.", en: "Opening a project is only available in the desktop app. Please run it in the Schutz app (installed build or npm run electron).", de: "Ein Projekt kann nur in der Desktop-App geöffnet werden. Bitte führen Sie es in der Schutz-App aus (Installation oder npm run electron).", ja: "プロジェクトを開けるのはデスクトップアプリのみです。Schutz アプリ（インストール版または npm run electron）で実行してください。" },
   "sc1.orig_not_found": { ko: "원문을 찾을 수 없습니다 (파일이 변경됨)", en: "Original text not found (file changed)", de: "Originaltext nicht gefunden (Datei geändert)", ja: "元のテキストが見つかりません (ファイルが変更されました)" },
   "sc1.orig_multiple": { ko: "원문이 여러 번 존재합니다", en: "Original text occurs multiple times", de: "Originaltext kommt mehrfach vor", ja: "元のテキストが複数存在します" },
+  // 밖에서 사라졌는데 저장 안 한 편집이 있는 파일. 버퍼는 남겨 두고 알린다 —
+  // 조용히 지우면 되돌릴 방법이 없고, 조용히 남기면 다음에 껐을 때 사라진다.
+  "sc1.goneButDirty": { ko: "{files} 이(가) 디스크에서 사라졌습니다 — 저장하지 않은 내용은 편집기에 남아 있습니다. 저장하면 파일이 다시 만들어집니다.", en: "{files} disappeared from disk — your unsaved changes are still in the editor. Saving recreates the file.", de: "{files} ist von der Festplatte verschwunden — die ungespeicherten Änderungen sind noch im Editor. Beim Speichern wird die Datei neu angelegt.", ja: "{files} がディスクから消えました — 未保存の変更はエディターに残っています。保存するとファイルが作り直されます。" },
 };

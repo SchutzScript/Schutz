@@ -1,5 +1,6 @@
 import monaco, { languageOf } from "./monacoSetup";
 import * as lsp from "./lspClient";
+import { decideStale } from "../engine/staleModels";
 
 /**
  * 프로젝트 파일 모델 스토어 (모듈 싱글턴).
@@ -206,9 +207,21 @@ export function rekeyUnder(root: string, oldRel: string, newRel: string): void {
 }
 
 /** owned 모델 중 present 집합에 없는 rel 제거 — 외부 삭제/브랜치 전환으로 사라진 파일의 stale 모델·진단·문제패널 항목 정리.
- *  present 가 불완전(트리 truncated)할 때 호출하면 실존 파일 모델을 잘못 지우므로 호출측이 완전할 때만 넘길 것. */
-export function dropMissing(root: string, present: Set<string>): void {
-  for (const rel of [...relIndex.keys()]) if (!present.has(rel)) drop(root, rel);
+ *  present 가 불완전(트리 truncated)할 때 호출하면 실존 파일 모델을 잘못 지우므로 호출측이 완전할 때만 넘길 것.
+ *
+ *  **저장 안 한 편집이 있는 모델은 남긴다.** 예전엔 dirty 검사 없이 전부 폐기해서,
+ *  밖에서 파일이 사라지면(브랜치 전환·stash·다른 편집기의 이름 바꾸기 식 저장) 그
+ *  버퍼의 미저장 편집이 경고도 되돌리기도 없이 파괴됐다.
+ *
+ *  깨끗한 모델까지 남기면 안 된다 — dirtyRels 가 없는 경로를 계속 내주고 모두 저장이
+ *  사용자가 지운 파일을 되살린다. 되살아나는 일은 사용자가 직접 저장을 눌렀을 때만
+ *  일어나야 하고, 그때는 화면에 dirty 표시가 떠 있다.
+ *
+ *  남긴 rel 을 돌려준다 — 호출측이 사용자에게 알릴 수 있게. */
+export function dropMissing(root: string, present: Set<string>, isDirty?: (rel: string) => boolean): string[] {
+  const { drop: gone, keep } = decideStale([...relIndex.keys()], present, isDirty ?? (() => false));
+  for (const rel of gone) drop(root, rel);
+  return keep;
 }
 /** 모든 non-dirty owned 모델을 디스크 내용으로 재로드 — 대량 변경(replace-all)/브랜치 전환 후 열지 않은 preload 모델의 stale 방지 */
 export async function reloadAll(root: string, readFile: (r: string, rel: string) => Promise<string>, isDirty: (rel: string) => boolean): Promise<void> {
