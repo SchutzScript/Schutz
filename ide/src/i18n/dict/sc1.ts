@@ -91,4 +91,8 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc1.switchDirtyBody": { ko: "{files}\n\n다른 프로젝트를 열면 이 내용은 사라집니다. 저장하고 열까요?", en: "{files}\n\nOpening another project discards them. Save first and open?", de: "{files}\n\nBeim Öffnen eines anderen Projekts gehen sie verloren. Zuerst speichern und öffnen?", ja: "{files}\n\n別のプロジェクトを開くとこの内容は失われます。保存してから開きますか？" },
   "sc1.switchDirtyOk": { ko: "저장하고 열기", en: "Save and open", de: "Speichern und öffnen", ja: "保存して開く" },
   "sc1.switchDirtyFailed": { ko: "저장을 끝내지 못해 프로젝트를 열지 않았습니다.", en: "Not all files could be saved, so the project was not opened.", de: "Nicht alle Dateien konnten gespeichert werden — das Projekt wurde nicht geöffnet.", ja: "保存を完了できなかったため、プロジェクトを開きませんでした。" },
+  // 휴지통에 들어가는 것은 디스크에 있던 내용뿐이다. 저장 안 한 편집은 버퍼에만 있어 되돌릴 수 없다.
+  "sc1.deleteDirtyWarn": { ko: "저장하지 않은 편집이 있습니다: {files}\n이 내용은 휴지통에 들어가지 않고 그대로 사라집니다.", en: "These have unsaved edits: {files}\nThat content does not go to the trash — it is lost.", de: "Diese haben ungespeicherte Änderungen: {files}\nDieser Inhalt landet nicht im Papierkorb — er geht verloren.", ja: "未保存の変更があります: {files}\nこの内容はごみ箱に入らず、そのまま失われます。" },
+  // 버리기는 파일의 변경을 전부 없앤다 — 저장 안 한 편집도 그 파일의 변경이다.
+  "sc1.discardDirtyWarn": { ko: "이 파일에 저장하지 않은 편집이 있습니다. 그것도 함께 사라집니다.", en: "This file has unsaved edits. They are discarded too.", de: "Diese Datei hat ungespeicherte Änderungen. Sie werden ebenfalls verworfen.", ja: "このファイルには未保存の変更があります。それも一緒に失われます。" },
 };
