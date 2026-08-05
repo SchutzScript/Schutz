@@ -1447,6 +1447,7 @@ ipcMain.on("schutz:termReconcile", (e, ids) => {
 });
 
 // ── 파일 워처 (외부 변경 감지) ──────────────────────────────────────────────
+const touchSet = require("./touchSet.cjs");
 const watchers = new Map(); // webContents.id → { watcher, timer }
 
 ipcMain.on("schutz:watchStart", (e, root) => {
@@ -1461,15 +1462,15 @@ ipcMain.on("schutz:watchStart", (e, root) => {
   // 어떤 파일이 움직였는지 모아 둔다. fs.watch 는 처음부터 이름을 주는데, 예전엔
   // 무시 규칙에만 쓰고 버려서 렌더러에는 "뭔가 바뀌었다" 는 빈 신호만 갔다.
   // 그래서 확장의 파일 감시자를 만들 수가 없었다.
-  let touched = new Set();
-  const MAX_TOUCHED = 2000;   // 대량 변경(브랜치 전환)에서 무한히 쌓이지 않게
+  // 상한은 있되 넘치면 넘쳤다고 말한다 — touchSet.cjs 에 사연이 있다.
+  const touched = touchSet.makeTouchSet();
   try {
     const watcher = fs.watch ? require("fs").watch(root, { recursive: true }, (_type, filename) => {
       if (filename) {
         const parts = String(filename).replace(/\\/g, "/").split("/");
         if (parts.some(seg => IGNORE_DIRS.has(seg))) return; // node_modules/.git 등 무시
         if (parts[parts.length - 1].endsWith(".schutz-tmp")) return; // 우리가 방금 만든 임시 파일 — 새로고침을 유발할 이유가 없다
-        if (touched.size < MAX_TOUCHED) touched.add(String(filename).replace(/\\/g, "/"));
+        touched.add(filename);
       }
       dirty = true;
       const cur = watchers.get(wid);
@@ -1478,9 +1479,10 @@ ipcMain.on("schutz:watchStart", (e, root) => {
         cur.timer = setTimeout(() => {
           if (dirty && !e.sender.isDestroyed()) {
             dirty = false;
-            const rels = [...touched];
-            touched = new Set();
-            e.sender.send("schutz:fsChange", rels);
+            const d = touched.drain();
+            // overflow 를 함께 보낸다. 받는 쪽이 "이 목록이 전부" 라고 믿으면 안 되는
+            // 경우를 알아야, 개별 이름 대신 트리 비교로 판정할 수 있다.
+            e.sender.send("schutz:fsChange", d.rels, d.overflow);
           }
         }, 350);
       }

@@ -52,7 +52,9 @@ contextBridge.exposeInMainWorld("schutz", {
   onFsChange: (cb) => {
     // 바뀐 파일들의 상대 경로를 함께 넘긴다. 예전엔 인자 없이 불러서, 무엇이
     // 움직였는지 아는 쪽(메인)의 정보가 렌더러에 닿지 않았다.
-    const h = (_e, rels) => cb(Array.isArray(rels) ? rels : []);
+    // overflow=true 면 이 목록이 전부가 아니다(상한에 걸려 이름이 잘렸다).
+    // 받는 쪽은 개별 이름 대신 트리 비교로 판정해야 한다.
+    const h = (_e, rels, overflow) => cb(Array.isArray(rels) ? rels : [], !!overflow);
     ipcRenderer.on("schutz:fsChange", h);
     return () => ipcRenderer.removeListener("schutz:fsChange", h);
   },
