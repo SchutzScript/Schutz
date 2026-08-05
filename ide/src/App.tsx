@@ -1224,6 +1224,29 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   /** 경로로 워크스페이스 열기 (다이얼로그 없이 — 복원/최근용) */
   async openWorkspacePath(root: string) {
     if (!window.schutz) return;
+    // 프로젝트를 바꾸면 아래에서 모델을 통째로 버린다(disposeAll) — 저장 안 한 편집이
+    // 경고도 되돌리기도 없이 사라진다. 프로젝트 전환은 아주 흔한 동작이라 더 나쁘다.
+    //
+    // 버릴지 물어보지 않고 **저장할지**만 묻는다. 버리는 쪽을 버튼으로 주면 한 번의
+    // 오클릭으로 작업이 사라지는데, 되돌릴 방법이 없다. 정말 버리고 싶으면 편집기에서
+    // 되돌리거나 탭을 닫으면 된다 — 그건 되돌릴 수 있는 길이다.
+    const dirty = this.dirtyFiles();
+    if (dirty.length) {
+      const ok = await this.askConfirm({
+        title: t("sc1.switchDirtyTitle"),
+        body: t("sc1.switchDirtyBody", { files: dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ` 외 ${dirty.length - 5}개` : "") }),
+        okLabel: t("sc1.switchDirtyOk"),
+      });
+      if (!ok) return;
+      await this.saveAllDirtyModels(true);
+      // 저장이 다 되지 않았으면(디스크가 그 사이 바뀌었거나 쓰기 실패) 열지 않는다.
+      // 여기서 그냥 열면 방금 못 지킨 것이 그대로 사라진다.
+      //
+      // paneDirty(React 상태)는 방금 부른 setState 가 아직 반영되기 전이라 못 믿는다 —
+      // 그걸 보면 저장에 성공하고도 "저장을 끝내지 못했다" 며 열지 않는다. 모델 쪽은
+      // markSaved 가 동기로 끝내 두므로 그쪽이 지금 이 순간의 사실이다.
+      if (projectModels.dirtyRels().length) { this.toast("error", t("sc1.switchDirtyFailed")); return; }
+    }
     try {
       const tree = await window.schutz.readTree(root);
       this.clearTimers();

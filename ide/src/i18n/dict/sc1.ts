@@ -86,4 +86,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   // 밖에서 사라졌는데 저장 안 한 편집이 있는 파일. 버퍼는 남겨 두고 알린다 —
   // 조용히 지우면 되돌릴 방법이 없고, 조용히 남기면 다음에 껐을 때 사라진다.
   "sc1.goneButDirty": { ko: "{files} 이(가) 디스크에서 사라졌습니다 — 저장하지 않은 내용은 편집기에 남아 있습니다. 저장하면 파일이 다시 만들어집니다.", en: "{files} disappeared from disk — your unsaved changes are still in the editor. Saving recreates the file.", de: "{files} ist von der Festplatte verschwunden — die ungespeicherten Änderungen sind noch im Editor. Beim Speichern wird die Datei neu angelegt.", ja: "{files} がディスクから消えました — 未保存の変更はエディターに残っています。保存するとファイルが作り直されます。" },
+  // 다른 프로젝트를 열기 전에. 프로젝트를 바꾸면 모델을 통째로 버리므로, 저장 안 한 편집은 그 순간 사라진다.
+  "sc1.switchDirtyTitle": { ko: "저장하지 않은 파일이 있습니다", en: "You have unsaved files", de: "Es gibt ungespeicherte Dateien", ja: "保存していないファイルがあります" },
+  "sc1.switchDirtyBody": { ko: "{files}\n\n다른 프로젝트를 열면 이 내용은 사라집니다. 저장하고 열까요?", en: "{files}\n\nOpening another project discards them. Save first and open?", de: "{files}\n\nBeim Öffnen eines anderen Projekts gehen sie verloren. Zuerst speichern und öffnen?", ja: "{files}\n\n別のプロジェクトを開くとこの内容は失われます。保存してから開きますか？" },
+  "sc1.switchDirtyOk": { ko: "저장하고 열기", en: "Save and open", de: "Speichern und öffnen", ja: "保存して開く" },
+  "sc1.switchDirtyFailed": { ko: "저장을 끝내지 못해 프로젝트를 열지 않았습니다.", en: "Not all files could be saved, so the project was not opened.", de: "Nicht alle Dateien konnten gespeichert werden — das Projekt wurde nicht geöffnet.", ja: "保存を完了できなかったため、プロジェクトを開きませんでした。" },
 };
