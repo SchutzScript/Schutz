@@ -147,7 +147,8 @@ interface SchutzApi {
   watchStop(): void;
   /** 바뀐 파일들의 워크스페이스 상대 경로. 감시자가 이름을 못 준 변경도 있으므로
    *  이 목록은 완전하지 않다 — 트리 비교로 보완해서 쓴다. */
-  onFsChange(cb: (rels: string[]) => void): () => void;
+  /** overflow=true 면 rels 가 전부가 아니다 — 이름이 상한에서 잘렸다. */
+  onFsChange(cb: (rels: string[], overflow?: boolean) => void): () => void;
   /** 저장 안 한 파일 목록을 메인에 알려 둔다 — 종료를 붙잡을지 메인이 이걸로 정한다.
    *  종료를 누른 뒤에 물어보면 늦다(그때는 트레이가 이미 사라진 뒤다). */
   reportDirty?(files: string[]): void;

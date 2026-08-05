@@ -4464,7 +4464,10 @@ ${(r.output || "").slice(0, 2000)}`;
   private _fsTouched = new Set<string>();
   /** 사라졌는데 미저장 편집이 있어 남겨 둔 파일들 — 이미 알린 것을 되풀이하지 않게. */
   private _goneTold = new Set<string>();
-  private onFsChange = (rels?: string[]) => {
+  /** 이번 알림 묶음에서 워처가 이름을 다 못 준 적이 있었나. syncFromDisk 가 지우고 간다. */
+  private _fsOverflow = false;
+  private onFsChange = (rels?: string[], overflow?: boolean) => {
+    if (overflow) this._fsOverflow = true;
     for (const r of rels ?? []) this._fsTouched.add(r);
     if (this._fsTimer) clearTimeout(this._fsTimer);
     this._fsTimer = setTimeout(() => void this.syncFromDisk(), 250);
@@ -4489,10 +4492,21 @@ ${(r.output || "").slice(0, 2000)}`;
       // 일 수 있다. 그때 트리 전체를 비교하면 멀쩡한 파일에 지워짐을 쏜다 — 그걸 받은
       // 확장은 인덱스에서 실제로 지운다. 그래서 **워처가 이름을 준 경로만** 본다.
       const capped = tree.truncated || ws.truncated;
+      const overflow = this._fsOverflow;
+      this._fsOverflow = false;
       const t = new Set(touched);
+      // 워처가 이름을 다 못 줬으면(overflow) 이름 목록으로 좁히는 것이 위험하다 —
+      // 잘려 나간 파일이 "아무 일 없었다" 가 되기 때문이다. 트리가 온전한 한
+      // 앞뒤 전체를 비교하는 쪽이 만들어짐·지워짐을 놓치지 않는다.
+      // 트리까지 잘렸으면(capped) 얘기가 다르다: 그때 전체를 비교하면 멀쩡한 파일에
+      // 지워짐을 쏘게 되므로, 덜 아는 쪽(이름 목록)을 그대로 쓴다.
       const delta = capped
         ? fsClassify(before.filter(r => t.has(r)), after.filter(r => t.has(r)), touched)
         : fsClassify(before, after, touched);
+      if (overflow && capped) {
+        // 둘 다 잘린 경우에만 정말로 모르는 채 넘어간다. 조용히 넘기지는 않는다.
+        console.warn("[fs] 변경 이름과 트리가 모두 상한에 걸렸습니다 — 이번 알림은 일부만 반영됩니다.");
+      }
       if (delta.created.length || delta.changed.length || delta.deleted.length) extHost.notifyFsDelta(delta);
     }
     // 사라진 파일(외부 삭제·브랜치 전환)의 stale 모델·진단·문제패널 항목 정리 — 트리 완전할 때만(truncated 면 실존 파일 오삭제 위험)
