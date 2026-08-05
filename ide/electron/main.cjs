@@ -833,6 +833,7 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
   const inc = globToMatcher(opts?.include);
   const exc = globToMatcher(opts?.exclude);
   let changed = 0, files = 0;
+  const skipped = [];   // UTF-8 이 아니라 건드리지 않은 파일
   async function walk(dirAbs, relBase, depth) {
     if (depth > MAX_DEPTH) return;
     let items;
@@ -850,8 +851,14 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
       const abs = path.join(dirAbs, it.name);
       let st; try { st = await fs.stat(abs); } catch { continue; }
       if (st.size > MAX_FILE_BYTES) continue;
-      let text; try { text = await fs.readFile(abs, "utf8"); } catch { continue; }
-      if (text.indexOf(String.fromCharCode(0)) >= 0) continue;
+      let buf; try { buf = await fs.readFile(abs); } catch { continue; }
+      // UTF-8 이 아니면 손대지 않는다. 여기가 readFile 보다 위험하다 — 사용자가 열어
+      // 보지도 않은 파일을 훑으며 쓰기 때문에, CP949 로 된 파일 하나가 치환 한 번에
+      // 조용히 파괴됐다(26바이트 → 39바이트, 한글이 전부 U+FFFD 로). 성공 토스트까지
+      // 떴다. 무엇을 건너뛰었는지는 아래에서 돌려준다 — 조용히 빼면 "다 됐다" 로 읽힌다.
+      const kind = encoding.detect(buf);
+      if (kind) { skipped.push(rel); continue; }
+      const text = buf.toString("utf8");
       re.lastIndex = 0;
       const matches = text.match(re);
       if (!matches || !matches.length) continue;
@@ -864,9 +871,9 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
   }
   // walk 가 중간에 죽으면 부분 결과가 남는다 — 성공인 척하지 말고 어디까지 됐는지 알린다
   try { await walk(root, "", 0); } catch (e) {
-    return { changed, files, partial: true, error: e && e.message ? e.message : String(e) };
+    return { changed, files, skipped, partial: true, error: e && e.message ? e.message : String(e) };
   }
-  return { changed, files };
+  return { changed, files, skipped };
 });
 
 // ── 에이전트 명령 실행 ─────────────────────────────────────────────────────
