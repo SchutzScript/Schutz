@@ -1124,7 +1124,13 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   async deleteAt(rel: string) {
     const ws = this.state.workspace;
     if (!ws || !window.schutz) return;
-    if (!await this.askConfirm({ title: t("confirm.deleteTitle"), body: t("sc1.confirm_delete", { rel }), okLabel: t("confirm.deleteOk"), danger: true })) return;
+    // 휴지통에 들어가는 것은 **디스크에 있던 내용**뿐이다. 저장 안 한 편집은 버퍼에만
+    // 있어서 되돌릴 방법이 없다 — 확인창이 "휴지통" 이라고 약속하는 이상, 그 약속이
+    // 닿지 않는 부분은 말해 줘야 한다.
+    const dirtyGone = this.dirtyUnder(rel);
+    const body = t("sc1.confirm_delete", { rel })
+      + (dirtyGone.length ? "\n\n" + t("sc1.deleteDirtyWarn", { files: dirtyGone.slice(0, 5).join(", ") + (dirtyGone.length > 5 ? ` 외 ${dirtyGone.length - 5}개` : "") }) : "");
+    if (!await this.askConfirm({ title: t("confirm.deleteTitle"), body, okLabel: t("confirm.deleteOk"), danger: true })) return;
     try {
       const del = await window.schutz.deleteEntry(ws.root, rel);
       projectModels.dropUnder(ws.root, rel); // 하위 파일 모델까지 dispose(옛 dirty 모델 잔존→Save All 이 삭제 파일 재생성하는 버그 방지)
@@ -5391,6 +5397,12 @@ ${(r.output || "").slice(0, 2000)}`;
   private anyDirty(): boolean {
     return this.dirtyFiles().length > 0;
   }
+  /** 이 경로(또는 그 아래)에서 저장 안 한 파일들. 되돌릴 수 없는 일을 하기 전에
+   *  무엇이 함께 사라지는지 말하려고 쓴다. */
+  private dirtyUnder(rel: string): string[] {
+    const prefix = rel + "/";
+    return this.dirtyFiles().filter(r => r === rel || r.startsWith(prefix));
+  }
   /** 저장 안 한 파일들. 종료를 붙잡을 때 메인이 이 목록을 그대로 보여 준다. */
   private dirtyFiles(): string[] {
     const fromPanes = Object.entries(this.state.paneDirty).filter(([, d]) => d).map(([rel]) => rel);
@@ -6617,8 +6629,31 @@ ${(r.output || "").slice(0, 2000)}`;
   }
 
   async gitDiscard(path: string, untracked: boolean) {
-    if (!await this.askConfirm({ title: t("confirm.discardTitle"), body: t("sc4.discardConfirm", { path }), okLabel: t("confirm.discardOk"), danger: true })) return;
-    await this.gitDo("discard", { path, untracked });
+    // 버리기는 디스크를 HEAD 로 되돌린다. 그런데 열린 버퍼는 안 건드려서, 패널은
+    // "변경 없음" 인데 편집기엔 그 변경이 그대로 남아 있었다 — 그러고 저장하면 방금
+    // 버린 것이 되살아난다. 절반만 버린 셈이다.
+    //
+    // 버리기가 뜻하는 것은 "이 파일의 변경을 전부 없앤다" 이고, 저장 안 한 편집도
+    // 그 파일의 변경이다. 그래서 함께 버리되, 되돌릴 수 없으니 미리 말한다.
+    const dirtyGone = this.dirtyUnder(path);
+    const body = t("sc4.discardConfirm", { path })
+      + (dirtyGone.length ? "\n\n" + t("sc1.discardDirtyWarn") : "");
+    if (!await this.askConfirm({ title: t("confirm.discardTitle"), body, okLabel: t("confirm.discardOk"), danger: true })) return;
+    const ok = await this.gitDo("discard", { path, untracked });
+    const ws = this.state.workspace;
+    if (ok === true && ws && window.schutz) {
+      // 디스크가 HEAD 로 돌아왔으니 버퍼도 거기에 맞춘다. isDirty=false 로 넘겨야
+      // 실제로 갈아 끼워진다(참이면 충돌로 보고 그대로 둔다).
+      for (const rel of dirtyGone) {
+        try { projectModels.reload(ws.root, rel, await window.schutz.readFile(ws.root, rel), false); }
+        catch { projectModels.drop(ws.root, rel); }   // 버리기가 파일 자체를 없앤 경우
+      }
+      if (dirtyGone.length) this.setState(st => {
+        const paneDirty = { ...st.paneDirty };
+        for (const rel of dirtyGone) delete paneDirty[rel];
+        return { paneDirty };
+      });
+    }
     void this.refreshWorkspace();
   }
 
