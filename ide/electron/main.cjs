@@ -285,13 +285,20 @@ ipcMain.handle("schutz:readTree", async (_e, root) => {
   return { root, name: path.basename(root), entries, branch, truncated: entries.length >= MAX_ENTRIES || depthCapped };
 });
 
+const encoding = require("./encoding.cjs");
 ipcMain.handle("schutz:readFile", async (_e, root, rel) => {
   const abs = safeJoin(root, rel);
   const st = await fs.stat(abs);
   if (st.size > MAX_FILE_BYTES) {
     throw new Error("파일이 너무 큽니다 (" + Math.round(st.size / 1024) + " KB)");
   }
-  return await fs.readFile(abs, "utf8");
+  // 바이트로 읽어 UTF-8 인지 먼저 본다. 예전엔 무조건 "utf8" 로 디코딩해서, UTF-8 이
+  // 아닌 파일은 깨진 글자로 열리고 **저장하는 순간 원본이 파괴됐다.** 되돌릴 수 없다.
+  // (UTF-16 파일은 열고 Ctrl+S 만 눌러도 바이트가 바뀌는 것을 확인했다.)
+  const buf = await fs.readFile(abs);
+  const kind = encoding.detect(buf);
+  if (kind) throw new Error(encoding.errorFor(kind));
+  return buf.toString("utf8");
 });
 
 /** 원자적 쓰기 — 같은 디렉터리에 임시 파일로 쓴 뒤 rename. 도중에 죽어도 반쪽짜리 파일이 남지 않는다.
