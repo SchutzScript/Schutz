@@ -100,7 +100,9 @@ interface SchutzApi {
   readTree(root: string): Promise<SchutzWorkspaceTree>;
   readFile(root: string, rel: string): Promise<string>;
   writeFile(root: string, rel: string, content: string): Promise<boolean>;
-  searchFiles(root: string, query: string, opts?: { max?: number; include?: string; exclude?: string; regex?: boolean; caseSensitive?: boolean; wholeWord?: boolean }): Promise<{ hits: { rel: string; line: number; col: number; preview: string }[]; truncated: boolean; error?: string }>;
+  /** truncated=히트 상한에서 잘림 · deepSkipped=깊이 상한 때문에 안 걸어 본 폴더가 있음
+   *  (둘은 다르다 — "결과가 없다" 와 "안 찾아봤다" 를 섞으면 안 된다) */
+  searchFiles(root: string, query: string, opts?: { max?: number; include?: string; exclude?: string; regex?: boolean; caseSensitive?: boolean; wholeWord?: boolean }): Promise<{ hits: { rel: string; line: number; col: number; preview: string }[]; truncated: boolean; deepSkipped?: boolean; error?: string }>;
   git(root: string, action: string, payload?: any): Promise<any>;
   httpGet(url: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number; json?: any; error?: string }>;
   lspLanguages(): Promise<string[]>;

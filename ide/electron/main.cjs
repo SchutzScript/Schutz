@@ -21,7 +21,11 @@ const IGNORE_DIRS = new Set([
   ".next", ".astro", "__pycache__", ".venv", "venv", "target", ".idea", ".vscode-test",
 ]);
 const MAX_ENTRIES = 4000;
-const MAX_DEPTH = 8;
+// 8 은 너무 얕았다. packages/app/src/features/x/components/y/z.ts 정도면 벌써 8이고,
+// 그보다 깊은 파일은 트리·검색·치환 **어디에도 안 나타났다** — 앱 안에서 찾을 방법이
+// 없었다는 뜻이다. node_modules 류는 IGNORE_DIRS 로 이미 빠지고 트리는 MAX_ENTRIES
+// 로 따로 묶여 있으므로, 깊이를 올려도 비용은 디렉터리 읽기 몇 번이다.
+const MAX_DEPTH = 16;
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — 에디터로 열 상한
 
 let winCounter = 0;
@@ -390,8 +394,11 @@ ipcMain.handle("schutz:searchFiles", async (_e, root, query, opts) => {
 
   // 1) 후보 파일 수집 (디렉터리 순회 — 저비용)
   const files = [];
+  // 깊이 때문에 안 걸어 본 곳이 있으면 알린다. 결과가 없다는 것과 안 찾아봤다는 것은
+  // 다르고, 검색은 "여기 없다" 의 근거로 쓰이기 때문에 그 차이가 중요하다.
+  let deepSkipped = false;
   async function walk(dirAbs, relBase, depth) {
-    if (depth > MAX_DEPTH) return;
+    if (depth > MAX_DEPTH) { deepSkipped = true; return; }
     let items;
     try { items = await fs.readdir(dirAbs, { withFileTypes: true }); } catch { return; }
     for (const it of items) {
@@ -429,7 +436,7 @@ ipcMain.handle("schutz:searchFiles", async (_e, root, query, opts) => {
   let idx = 0;
   const worker = async () => { while (idx < files.length && !truncated) { await processOne(files[idx++]); } };
   await Promise.all(Array.from({ length: Math.min(12, files.length) }, () => worker()));
-  return { hits, truncated };
+  return { hits, truncated, deepSkipped };
 });
 
 // ── Git 통합 ────────────────────────────────────────────────────────────────

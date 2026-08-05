@@ -8,6 +8,9 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "palette.optRegex": { ko: "정규식", en: "Regular expression", de: "Regulärer Ausdruck", ja: "正規表現" },
   "palette.searching": { ko: "검색 중…", en: "Searching…", de: "Suche läuft…", ja: "検索中…" },
   "palette.hitCount": { ko: "{n}건{plus}", en: "{n} matches{plus}", de: "{n} Treffer{plus}", ja: "{n}件{plus}" },
+  // 결과가 0일 때 침묵은 "없다" 로 읽힌다. 안 찾아본 곳이 있으면 그렇다고 말한다.
+  "palette.deepSkipped": { ko: "일부 미탐색", en: "not fully searched", de: "nicht vollständig durchsucht", ja: "一部未探索" },
+  "palette.deepSkippedWhy": { ko: "폴더가 너무 깊어 일부는 찾아보지 않았습니다. 결과가 없다고 없는 것은 아닙니다.", en: "Some folders were too deeply nested to search. No results does not mean nothing is there.", de: "Einige Ordner waren zu tief verschachtelt. Keine Treffer heißt nicht, dass nichts da ist.", ja: "フォルダーが深すぎて一部は探索していません。結果がない＝存在しない、ではありません。" },
   "palette.includeGlob": { ko: "포함 글롭 (예: src/**/*.ts, *.md)", en: "Include glob (e.g. src/**/*.ts, *.md)", de: "Einschluss-Glob (z. B. src/**/*.ts, *.md)", ja: "含めるグロブ (例: src/**/*.ts, *.md)" },
   "palette.excludeGlob": { ko: "제외 글롭", en: "Exclude glob", de: "Ausschluss-Glob", ja: "除外するグロブ" },
   "palette.replaceWith": { ko: "바꿀 내용", en: "Replace with", de: "Ersetzen durch", ja: "置換後の内容" },
