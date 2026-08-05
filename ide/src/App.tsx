@@ -31,6 +31,7 @@ import {
 import { resolveRenameTarget, isMove } from "./engine/movePath";
 import { applyProposal } from "./engine/editApply";
 import { planRun, langFor, LANGS as RUN_LANGS } from "./engine/runFile";
+import { AskQueue } from "./engine/askQueue";
 import { getRunOverride, getRunOverrides, setRunOverride } from "./settings";
 import { emptyNav, push as navPush, back as navBack, forward as navForward, current as navCurrent, dropMissing as navDropMissing, type NavState } from "./engine/navHistory";
 import { shouldProbeQuota } from "./engine/quotaPoll";
@@ -256,6 +257,9 @@ function accel(s: string): string {
   return [hasCtrl && "Ctrl", hasAlt && "Alt", hasShift && "Shift", key].filter(Boolean).join("+");
 }
 
+/** 승인 물음 하나. okLabel/cancelLabel 은 자리에 맞는 문구가 있을 때만 채운다(없으면 기본 허용/거부). */
+interface AskRunItem { command: string; rationale: string; agent: string; okLabel?: string; cancelLabel?: string }
+
 interface S {
   statusKey: "idle" | "thinking" | "tool" | "review" | "stopped";
   running: boolean;
@@ -366,9 +370,9 @@ interface S {
   extAskPicked: number[];
   /** validateInput 이 돌려준 문구. 있으면 확인을 막는다. */
   extAskErr: string | null;
-  /** 실행 승인 대기 중인 명령 (수동 정책일 때) */
-  /** 승인 대기. okLabel/cancelLabel 은 자리에 맞는 문구가 있을 때만 채운다(없으면 기본 허용/거부). */
-  askRun: { command: string; rationale: string; agent: string; okLabel?: string; cancelLabel?: string } | null;
+  /** 실행 승인 대기 중인 명령 (수동 정책일 때).
+   *  줄 맨 앞의 하나만 화면에 있다 — 뒤엣것은 AskQueue 가 들고 기다린다. */
+  askRun: AskRunItem | null;
   /** 제안 카드에서 diff 를 펼친 것 (id → true) */
   openDiffs: Record<string, boolean>;
   /** 트랜스크립트에서 펼친 도구 줄 */
@@ -2037,7 +2041,10 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
   private _runIds = new Set<string>();
   /** 백그라운드 서버 — 프리뷰 탭 rel → runId. 에이전트 중지와 수명을 분리한다. */
   private _bgRuns = new Map<string, string>();
-  private _askRunResolve: ((ok: boolean) => void) | null = null;
+  /** 승인 물음은 줄을 세운다 — 위임으로 실행이 동시에 여럿 돌기 때문이다.
+   *  예전엔 resolve 를 필드 하나에 담아, 두 번째 물음이 첫 번째를 덮고 그 실행을
+   *  영원히 await 에 매달아 뒀다(파일 락도 안 풀린 채로). askQueue.ts 에 사연이 있다. */
+  private _askRunQueue = new AskQueue<AskRunItem>();
   private _confirmResolve: ((ok: boolean) => void) | null = null;
 
   /** 인앱 확인 — window.confirm 을 대신한다.
@@ -2147,14 +2154,19 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
    *  labels 를 주면 버튼 문구를 갈아끼운다: 커밋 게이트처럼 "허용/거부" 가 어색한 자리를 위해. */
   private askRunApproval(command: string, rationale: string, agent: string, labels?: { ok: string; cancel: string }): Promise<boolean> {
     return new Promise<boolean>(resolve => {
-      this._askRunResolve = resolve;
-      this.setState({ askRun: { command, rationale, agent, okLabel: labels?.ok, cancelLabel: labels?.cancel } });
+      const item: AskRunItem = { command, rationale, agent, okLabel: labels?.ok, cancelLabel: labels?.cancel };
+      this._askRunQueue.add(item, resolve);
+      // 이미 무언가 물어보는 중이면 화면은 그대로 두고 줄에서 기다린다.
+      this.setState({ askRun: this._askRunQueue.current() });
     });
   }
   private answerRun(ok: boolean) {
-    const r = this._askRunResolve;
-    this._askRunResolve = null;
-    this.setState({ askRun: null }, () => r?.(ok));
+    // 화면을 먼저 비우고, 답을 푼 뒤, 다음 물음을 올린다 — 그래야 모달이 갈아끼워지는
+    // 것이 보이고, 답한 것과 다음 것을 헷갈리지 않는다.
+    this.setState({ askRun: null }, () => {
+      const next = this._askRunQueue.answer(ok);
+      if (next) this.setState({ askRun: next });
+    });
   }
 
   /** 켤 때 잔여 할당량 조회 — 헤더는 요청을 보내야 오므로 1토큰짜리 최소 요청을 한 번 던진다.
@@ -2394,7 +2406,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     if (!runId) return;
     // 승인 대기는 abort 로 안 깨진다(answerRun 만 resolve 한다). 중지가 그걸 거절로 풀어주지
     // 않으면 그 실행의 finally 가 영영 안 오고, running 이 모달을 답할 때까지 잡힌다.
-    if (this.state.askRun?.agent === id) this.answerRun(false);
+    // 보이는 것뿐 아니라 **줄에서 기다리는 것까지** 걷어낸다. 뒤에 서 있던 물음만
+    // 남으면, 중지한 에이전트가 나중에 모달로 되살아나고 그 실행은 계속 매달려 있다.
+    this.setState({ askRun: this._askRunQueue.cancelWhere(a => a.agent === id) });
     for (const [rel, holder] of [...this.fileLocks.entries()]) if (holder === runId) this.fileLocks.delete(rel);
     this.setAgent(id, { status: "stop", file: null });
     // 인라인 편집·MCP 생성은 세지 않는다 — 예전엔 abortCtls.size 라 그것들까지 셌고,
@@ -2412,7 +2426,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     // 전역 중지 — 역할을 가리지 않고 전부(인라인 편집·MCP 생성 포함).
     // 레코드는 남긴다: 각 루프의 finally 가 finish() 로 자기 정리를 마무리한다.
     this.engine.runs.cancelAll();
-    if (this._askRunResolve) this.answerRun(false);
+    this._askRunQueue.cancelAll(false);   // 줄 전체를 거절로 풀어 준다 — 매달린 실행을 남기지 않는다
+    this.setState({ askRun: null });
     this.abortCtls.clear();
     this.fileLocks.clear();
     this.clearTimers();
