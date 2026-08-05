@@ -16,9 +16,19 @@ const DEV_URL = process.env.SCHUTZ_DEV_URL || "http://localhost:4322";
 const isDev = !app.isPackaged;
 
 /** 트리 스캔에서 제외할 디렉터리 */
+// 순회에서 뺄 폴더. **여기 적힌 것만** 뺀다.
+//
+// 예전엔 이 목록과 별개로 "점으로 시작하는 폴더는 전부 건너뛴다(.github 만 예외)" 라는
+// 규칙이 세 순회에 각각 박혀 있었다. 그래서 .vscode/settings.json 도 .claude/agents/*.md
+// 도 트리에 안 나오고 검색에도 안 걸렸다 — 열려면 경로를 정확히 알아야 했고, 에이전트는
+// 그 파일들이 없는 줄 알았다. .github 만 예외였던 것이 그 규칙이 임시방편이었다는 표시다.
+// 무엇을 숨길지는 이 한 곳이 정한다.
 const IGNORE_DIRS = new Set([
   "node_modules", ".git", ".hg", ".svn", "dist", "out", "release",
   ".next", ".astro", "__pycache__", ".venv", "venv", "target", ".idea", ".vscode-test",
+  // 점 폴더를 일괄로 막던 규칙을 걷어냈으니, 무거운 것들은 이름으로 적어 둔다.
+  ".cache", ".turbo", ".parcel-cache", ".gradle", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+  ".tox", ".nuxt", ".output", ".svelte-kit", ".angular", ".yarn", ".pnpm-store", ".terraform", ".vs",
 ]);
 const MAX_ENTRIES = 4000;
 // 8 은 너무 얕았다. packages/app/src/features/x/components/y/z.ts 정도면 벌써 8이고,
@@ -266,7 +276,7 @@ ipcMain.handle("schutz:readTree", async (_e, root) => {
     });
     for (const it of items) {
       if (entries.length >= MAX_ENTRIES) return;
-      if (it.name.startsWith(".") && it.isDirectory() && it.name !== ".github") continue;
+      // 점으로 시작하는 폴더를 전부 숨기지 않는다 — 무엇을 숨길지는 IGNORE_DIRS 하나가 정한다.
       if (it.isDirectory() && IGNORE_DIRS.has(it.name)) continue;
       if (it.name.endsWith(".schutz-tmp")) continue;   // 원자적 쓰기 중의 임시 파일 — 트리에 잠깐 나타나면 안 된다
       const rel = relBase ? relBase + "/" + it.name : it.name;
@@ -403,7 +413,7 @@ ipcMain.handle("schutz:searchFiles", async (_e, root, query, opts) => {
     try { items = await fs.readdir(dirAbs, { withFileTypes: true }); } catch { return; }
     for (const it of items) {
       if (it.isSymbolicLink()) continue; // 심볼릭 링크는 따라가지 않음(워크스페이스 밖 접근/쓰기 방지)
-      if (it.name.startsWith(".") && it.isDirectory() && it.name !== ".github") continue;
+      // 점으로 시작하는 폴더를 전부 숨기지 않는다 — 무엇을 숨길지는 IGNORE_DIRS 하나가 정한다.
       if (it.isDirectory() && IGNORE_DIRS.has(it.name)) continue;
       const rel = relBase ? relBase + "/" + it.name : it.name;
       if (it.isDirectory()) { await walk(path.join(dirAbs, it.name), rel, depth + 1); continue; }
@@ -847,7 +857,7 @@ ipcMain.handle("schutz:replaceInFiles", async (_e, root, query, replacement, opt
     try { items = await fs.readdir(dirAbs, { withFileTypes: true }); } catch { return; }
     for (const it of items) {
       if (it.isSymbolicLink()) continue; // 심볼릭 링크는 따라가지 않음(워크스페이스 밖 접근/쓰기 방지)
-      if (it.name.startsWith(".") && it.isDirectory() && it.name !== ".github") continue;
+      // 점으로 시작하는 폴더를 전부 숨기지 않는다 — 무엇을 숨길지는 IGNORE_DIRS 하나가 정한다.
       if (it.isDirectory() && IGNORE_DIRS.has(it.name)) continue;
       const rel = relBase ? relBase + "/" + it.name : it.name;
       if (it.isDirectory()) { await walk(path.join(dirAbs, it.name), rel, depth + 1); continue; }
