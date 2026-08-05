@@ -214,8 +214,9 @@ interface SchutzApi {
     Promise<{ ok: boolean; quota?: QuotaInfo; error?: string }>;
   onQuota(cb: (line: string) => void): () => void;
 
-  /** error=정규식 거부 등으로 아무것도 안 함 · partial=도중 실패해 일부만 적용됨 */
-  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number; error?: string; partial?: boolean }>;
+  /** error=정규식 거부 등으로 아무것도 안 함 · partial=도중 실패해 일부만 적용됨
+   *  skipped=UTF-8 이 아니라 건드리지 않은 파일(쓰면 원본이 파괴된다) */
+  replaceInFiles(root: string, query: string, replacement: string, opts?: any): Promise<{ changed: number; files: number; error?: string; partial?: boolean; skipped?: string[] }>;
   cliCheck(): Promise<{ agents: Record<string, { ok: boolean; version: string; hasConfig: boolean }> }>;
   agentCommands(root: string | null): Promise<{ commands: { name: string; origin: "claude" | "codex"; scope: "user" | "project"; description: string; argHint: string; body: string }[] }>;
   cliChatCounts(): Promise<{ counts: Record<string, number> }>;

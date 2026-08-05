@@ -5259,6 +5259,11 @@ ${(r.output || "").slice(0, 2000)}`;
       if (r.error) { this.toast("error", t("sc3.replaceFailed") + r.error); return; }
       if (r.partial) this.toast("error", t("sc3.replacePartial", { files: r.files, changed: r.changed }));
       else this.toast("ok", t("sc3.replaceResult", { files: r.files, changed: r.changed }));
+      // UTF-8 이 아니라 건너뛴 파일은 반드시 말한다. 안 말하면 "전부 바꿨다" 로 읽히고,
+      // 그 파일들만 옛 이름이 남아 나중에 빌드가 깨진 뒤에야 알게 된다.
+      if (r.skipped?.length) {
+        this.toast("error", t("enc.replaceSkipped", { n: r.skipped.length, files: r.skipped.slice(0, 6).join(", ") }));
+      }
       // 모든 non-dirty owned 모델 재로드 — 열린 탭뿐 아니라 preload(닫힌) 모델도 디스크 반영(#8: 나중에 열면 stale 방지). dirty 는 위에서 차단됨.
       void projectModels.reloadAll(ws.root, (r, rel) => window.schutz!.readFile(r, rel), this.isDirtyRel);
       this.setState(st => { const pv = { ...st.paneVer }; for (const p of this.allOpen(st)) pv[p] = (pv[p] ?? 0) + 1; return { paneVer: pv }; });
