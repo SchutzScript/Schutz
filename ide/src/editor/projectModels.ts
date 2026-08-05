@@ -35,12 +35,44 @@ export function getByRel(rel: string): monaco.editor.ITextModel | null {
   return null;
 }
 
+/* ── BOM ────────────────────────────────────────────────────────────────────
+   UTF-8 BOM 은 **본문이 아니라 파일의 표식**이다. Monaco 도 그렇게 보고 따로 들고
+   있어서 getValue() 는 BOM 을 빼고 준다. 그런데 디스크에서 읽은 문자열에는 BOM 이
+   들어 있으므로, 그걸 그대로 기준선으로 삼으면 두 값이 영원히 다르다 —
+   **BOM 파일은 열자마자 "저장 안 함" 이 되고, 모두 저장이 손도 안 댄 파일을 고쳐
+   쓰면서 BOM 을 떼어 버린다.** 파일 전체가 바뀐 diff 가 되고, BOM 을 요구하는
+   도구에서는 빌드가 깨진다.
+
+   그래서 안쪽은 전부 BOM 없이 다룬다. 읽을 때 떼고, 있었다는 사실만 기억했다가,
+   디스크에 쓸 때만 도로 붙인다. 비교·오프셋 계산은 전부 BOM 없는 문자열로 도니
+   한 글자씩 밀리는 일도 없다. */
+const BOM = "\uFEFF";
+const hadBom = new Map<string, boolean>();   // uri → BOM 이 있었나
+function splitBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(BOM.length) : text;
+}
+/** 디스크에 쓸 문자열 — 원래 BOM 이 있었으면 도로 붙인다. 없으면 null. */
+export function diskText(rel: string): string | null {
+  const key = relIndex.get(rel);
+  if (!key) return null;
+  const m = owned.get(key);
+  if (!m || m.isDisposed()) return null;
+  return (hadBom.get(key) ? BOM : "") + m.getValue();
+}
+/** 이 파일이 BOM 을 달고 있었나 — 모델 밖에서 쓴 텍스트를 저장할 때 필요하다. */
+export function hasBom(rel: string): boolean {
+  const key = relIndex.get(rel);
+  return !!key && hadBom.get(key) === true;
+}
+
 /** 모델 확보 — 이미 있으면 재사용(중복 URI createModel throw 회피) */
 export function ensure(root: string, rel: string, content: string, lang?: string): monaco.editor.ITextModel {
   const uri = uriFor(root, rel);
   const key = uri.toString();
   const existing = monaco.editor.getModel(uri);
   if (existing) { owned.set(key, existing); relIndex.set(rel, key); savedContent.set(key, existing.getValue()); return existing; }
+  if (content.startsWith(BOM)) hadBom.set(key, true);
+  content = splitBom(content);
   const language = lang ?? languageOf(rel);
   const model = monaco.editor.createModel(content, language, uri);
   owned.set(key, model);
@@ -149,6 +181,9 @@ export function reload(root: string, rel: string, content: string, isDirty: bool
   const m = getByRel(rel);
   if (!m) { if (isTsLike(rel)) ensure(root, rel, content); return; }
   const key = uriFor(root, rel).toString();
+  // 디스크에서 온 문자열이라 BOM 이 붙어 있을 수 있다. 안쪽 비교는 전부 BOM 없이 한다.
+  hadBom.set(key, content.startsWith(BOM));
+  content = splitBom(content);
   const prevSaved = savedContent.get(key);
   // 디스크가 실제로 바뀌었고(이전 기준선과 다름) 버퍼와도 다르면 충돌 — 저장 전에 사용자에게 물어야 한다
   if (isDirty && m.getValue() !== content && prevSaved !== undefined && prevSaved !== content) {
@@ -167,6 +202,7 @@ export function clearExternalChange(rel: string): void { externalChanged.delete(
 export function drop(root: string, rel: string): void {
   const uri = uriFor(root, rel);
   const key = uri.toString();
+  hadBom.delete(key);
   const m = owned.get(key);
   if (m && !m.isDisposed()) { try { lsp.didClose(key, m.getLanguageId()); } catch { /* */ } m.dispose(); }
   owned.delete(key);
@@ -200,9 +236,12 @@ export function rekeyUnder(root: string, oldRel: string, newRel: string): void {
     if (!m || m.isDisposed()) { drop(root, r); continue; }
     const value = m.getValue();
     const saved = savedContent.get(oldKey);
+    const bom = hadBom.get(oldKey) === true;
     drop(root, r);                         // 옛 모델 폐기 + lsp.didClose
     ensure(root, to, value);               // 새 URI 모델(값=버퍼) + lsp.didOpen
-    if (saved !== undefined) savedContent.set(uriFor(root, to).toString(), saved); // 디스크(=옛 saved) 기준 유지 → dirty 델타 보존
+    const newKey = uriFor(root, to).toString();
+    if (bom) hadBom.set(newKey, true);          // 이름이 바뀌어도 BOM 은 그 파일의 것이다
+    if (saved !== undefined) savedContent.set(newKey, saved); // 디스크(=옛 saved) 기준 유지 → dirty 델타 보존
   }
 }
 
@@ -232,6 +271,7 @@ export async function reloadAll(root: string, readFile: (r: string, rel: string)
 }
 
 export function disposeAll(): void {
+  hadBom.clear();
   for (const m of owned.values()) { try { if (!m.isDisposed()) m.dispose(); } catch { /* */ } }
   owned.clear();
   relIndex.clear();
