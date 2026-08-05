@@ -163,7 +163,9 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onConfirm, onStatus
           if (!ok) return;
         }
         try {
-          await window.schutz.writeFile(root, rel, text);
+          // BOM 은 본문이 아니라 파일의 표식이라 모델 밖에 있다 — 도로 붙여 써야
+          // 손대지 않은 표식이 조용히 사라지지 않는다. 기준선은 BOM 없는 값으로 둔다.
+          await window.schutz.writeFile(root, rel, projectModels.diskText(rel) ?? text);
           projectModels.markSaved(root, rel, text);
           savedRef.current = text;
           setDirty(false);

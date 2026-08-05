@@ -813,7 +813,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         if (silent || !await this.askConfirm({ title: t("confirm.overwriteTitle"), body: t("sc1.externalChangedOverwrite", { rel }), okLabel: t("confirm.overwriteOk"), danger: true })) { failed.push(rel + " (" + t("sc1.externalChangedSkipped") + ")"); continue; }
       }
       try {
-        await window.schutz.writeFile(ws.root, rel, content);
+        // BOM 은 본문이 아니라 파일의 표식이라 모델 밖에 있다 — 도로 붙여 써야
+        // 손대지 않은 표식이 조용히 사라지지 않는다. 기준선은 BOM 없는 값으로 둔다.
+        await window.schutz.writeFile(ws.root, rel, projectModels.diskText(rel) ?? content);
         projectModels.markSaved(ws.root, rel, content);
         this.notifySaved(rel);
         this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
@@ -1916,7 +1918,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         if (exists) throw new Error(t("proposal.fileExists"));
         newContent = eff;
         await this.captureBefore(ws.root, p);
-        await window.schutz.writeFile(ws.root, p.rel, newContent);
+        await window.schutz.writeFile(ws.root, p.rel, this.forDisk(p.rel, newContent));
         await this.markAfter(ws.root, p);
         const tree = await window.schutz.readTree(ws.root);
         this.setState({ workspace: tree });
@@ -1933,7 +1935,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         if (res.ok === false) throw new Error(t(res.error === "multiple" ? "sc1.orig_multiple" : "sc1.orig_not_found"));
         newContent = res.text;
         await this.captureBefore(ws.root, p);
-        await window.schutz.writeFile(ws.root, p.rel, newContent);
+        await window.schutz.writeFile(ws.root, p.rel, this.forDisk(p.rel, newContent));
         await this.markAfter(ws.root, p);
         editStart = res.start;
         editEnd = res.end;
@@ -5388,6 +5390,16 @@ ${(r.output || "").slice(0, 2000)}`;
   private isDirtyRel = (rel: string): boolean => !!this.state.paneDirty[rel] || projectModels.isDirty(rel);
   /** 이 파일에 편집을 얹을 **기준 텍스트** — 미저장 버퍼가 있으면 그 내용, 없으면 null(호출측이 디스크를 읽는다).
    *  디스크를 기준으로 쓰면 그 write 가 미저장 편집을 조용히 덮는다. */
+  /** 디스크에 쓸 문자열로 맞춘다.
+   *
+   *  BOM 은 본문이 아니라 파일의 표식이다. 기준 텍스트가 모델에서 왔으면 BOM 이 빠져
+   *  있고, 디스크에서 왔으면 붙어 있다 — 그대로 쓰면 전자에서 표식이 조용히 사라진다.
+   *  한 번 떼고 그 파일이 원래 갖고 있었는지로만 다시 붙인다(두 번 붙지 않게). */
+  private forDisk(rel: string, text: string): string {
+    const BOM = "﻿";
+    const body = text.startsWith(BOM) ? text.slice(BOM.length) : text;
+    return (projectModels.hasBom(rel) || text.startsWith(BOM)) ? BOM + body : body;
+  }
   private baseTextFor(root: string, rel: string): string | null {
     if (!this.isDirtyRel(rel)) return null;
     const m = projectModels.getByRel(rel);
@@ -5596,7 +5608,7 @@ ${(r.output || "").slice(0, 2000)}`;
         // 사람이 없는 자리에서 남의 편집을 지우는 것보다 낫다.
         if (ext !== null && ext !== content) return false;
         try {
-          await window.schutz.writeFile(ws.root, rel, content);
+          await window.schutz.writeFile(ws.root, rel, projectModels.diskText(rel) ?? content);
           projectModels.markSaved(ws.root, rel, content);
           this.notifySaved(rel);
           this.setState(st => ({ paneDirty: { ...st.paneDirty, [rel]: false } }));
