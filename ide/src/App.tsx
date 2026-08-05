@@ -521,6 +521,8 @@ interface S {
   searchSel: number;
   searchBusy: boolean;
   searchTruncated: boolean;
+  /** 깊이 상한 때문에 안 걸어 본 폴더가 있었다 — "없음" 을 단정하지 못한다 */
+  searchDeep: boolean;
   /** 미저장 탭 닫기 확인 */
   askClose: { rel: string; slot: number } | null;
   /** 진단(문제 패널) */
@@ -725,7 +727,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     slashSel: 0,
     quickOpen: false, quickQuery: "", quickSel: 0,
     symOpen: false, symQuery: "", symSel: 0, symLoading: false, symResults: [],
-    searchOpen: false, searchQuery: "", searchResults: [], searchSel: 0, searchBusy: false, searchTruncated: false,
+    searchOpen: false, searchQuery: "", searchResults: [], searchSel: 0, searchBusy: false, searchTruncated: false, searchDeep: false,
     askClose: null,
     problems: [], tsLargeProject: false,
     cmdOpen: false, cmdQuery: "", cmdSel: 0, modelPickFor: null,
@@ -3448,9 +3450,15 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         // 모델이 "전부 봤다"고 착각하고 없는 파일이 없다고 단정하는 것을 막는다.
         const shown = all.slice(0, LIST_MAX);
         const cut = all.length - shown.length;
-        this.setTool(toolId, { st: "done", note: t("sc2.noteCount", { n: all.length }) + (cut ? " · " + t("sc2.noteCut") : "") });
-        if (!all.length) return glob ? `(${glob} 에 맞는 파일 없음)` : "(빈 워크스페이스)";
-        return shown.join("\n") + (cut ? `\n\n… ${cut}개 더 있음(전체 ${all.length}). glob 으로 좁혀서 다시 부르세요.` : "");
+        this.setTool(toolId, { st: "done", note: t("sc2.noteCount", { n: all.length }) + (cut || ws.truncated ? " · " + t("sc2.noteCut") : "") });
+        // 트리 자체가 잘렸으면(파일 4000개 초과·깊이 8단계 초과) 이 목록은 **전부가 아니다.**
+        // 화면에는 잘렸다고 적어 두면서 모델에게는 말하지 않고 있었다. 그래서 없는 게
+        // 아니라 안 걸어 본 파일을 "없다" 로 읽고, 이미 있는 파일을 새로 만들곤 했다.
+        const partial = ws.truncated
+          ? "\n\n주의: 이 워크스페이스는 파일이 너무 많거나 깊어 목록이 잘려 있습니다. 여기 없다고 파일이 없는 것은 아닙니다 — 확인하려면 search_files 를 쓰세요."
+          : "";
+        if (!all.length) return (glob ? `(${glob} 에 맞는 파일 없음)` : "(빈 워크스페이스)") + partial;
+        return shown.join("\n") + (cut ? `\n\n… ${cut}개 더 있음(전체 ${all.length}). glob 으로 좁혀서 다시 부르세요.` : "") + partial;
       }
       if (call.name === "search_files") {
         const query = String(call.input?.query ?? "");
@@ -3470,9 +3478,12 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
           return "검색 오류: " + r.error;
         }
         this.setTool(toolId, { st: "done", note: t("sc2.noteHits", { n: r.hits.length }) + (r.truncated ? " · " + t("sc2.noteCut") : "") });
-        if (!r.hits.length) return `"${query}" 에 대한 결과 없음.`;
+        // 깊이 때문에 안 걸어 본 폴더가 있으면 반드시 붙인다 — 검색은 "여기 없다" 의
+        // 근거로 쓰이는데, 안 찾아본 것과 없는 것이 같은 답으로 나오면 안 된다.
+        const deep = r.deepSkipped ? "\n\n주의: 폴더가 너무 깊어 일부는 찾아보지 않았습니다. 결과가 없다고 없는 것은 아닙니다." : "";
+        if (!r.hits.length) return `"${query}" 에 대한 결과 없음.` + deep;
         const body = r.hits.map(h => `${h.rel}:${h.line}: ${h.preview.slice(0, SEARCH_PREVIEW)}`).join("\n");
-        return body + (r.truncated ? `\n\n… 결과가 상한(${SEARCH_MAX})에서 잘렸습니다. include 로 좁히세요.` : "");
+        return body + (r.truncated ? `\n\n… 결과가 상한(${SEARCH_MAX})에서 잘렸습니다. include 로 좁히세요.` : "") + deep;
       }
       if (call.name === "read_file") {
         const rel = String(call.input?.path ?? "");
@@ -5242,7 +5253,7 @@ ${(r.output || "").slice(0, 2000)}`;
     const seq = ++this._searchSeq;
     if (!ws || !window.schutz || query.trim().length < 2) {
       this._shownQuery = ""; this._shownOpts = "";
-      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false });
+      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false, searchDeep: false });
       return;
     }
     this.setState({ searchBusy: true });
@@ -5251,10 +5262,10 @@ ${(r.output || "").slice(0, 2000)}`;
       const r = await window.schutz.searchFiles(ws.root, query, { max: 500, ...opts });
       if (seq !== this._searchSeq) return; // 최신 쿼리만 반영
       this._shownQuery = query; this._shownOpts = JSON.stringify(opts);
-      this.setState({ searchResults: r.hits ?? [], searchBusy: false, searchTruncated: !!r.truncated, searchSel: 0 });
+      this.setState({ searchResults: r.hits ?? [], searchBusy: false, searchTruncated: !!r.truncated, searchDeep: !!r.deepSkipped, searchSel: 0 });
     } catch {
       if (seq !== this._searchSeq) return;
-      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false });
+      this.setState({ searchResults: [], searchBusy: false, searchTruncated: false, searchDeep: false });
     }
   }
 
@@ -8956,6 +8967,10 @@ ${(r.output || "").slice(0, 2000)}`;
             <span style={{ flex: "none", marginRight: 14, marginLeft: 6, fontSize: 11, color: "var(--fg-dim)", fontFamily: MONO }}>
               {s.searchBusy ? t("palette.searching") : hits.length > 0 ? t("palette.hitCount", { n: hits.length, plus: s.searchTruncated ? "+" : "" }) : ""}
             </span>
+            {/* 안 찾아본 곳이 있으면 말한다 — 특히 결과가 0일 때, 침묵이 "없다" 로 읽힌다. */}
+            {!s.searchBusy && s.searchDeep && (
+              <span title={t("palette.deepSkippedWhy")} style={{ flex: "none", marginRight: 14, fontSize: 11, color: "var(--warn)" }}>{t("palette.deepSkipped")}</span>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8, padding: "6px 14px 6px 26px", borderBottom: "1px solid var(--w08)" }}>
             <input value={s.searchOpts.include} onChange={e => this.setState(st => ({ searchOpts: { ...st.searchOpts, include: e.target.value } }), () => this.onSearchInput(this.state.searchQuery))}
