@@ -906,8 +906,12 @@ ipcMain.handle("schutz:runCommand", async (e, opts) => {
   const root = String(opts?.cwd || "");
   const command = String(opts?.command || "").trim();
   if (!command) return { ok: false, error: "빈 명령" };
+  // 열려 있는 워크스페이스에서만 돈다. 예전엔 존재하는 디렉터리이기만 하면 됐다 —
+  // 렌더러가 넘긴 아무 경로에서나(홈 디렉터리라도) 명령이 돌 수 있었다는 뜻이다.
+  // 다른 fs 핸들러는 전부 assertRoot 를 태우는데 여기만 빠져 있었다.
+  try { assertRoot(root); } catch { return { ok: false, error: "열려 있지 않은 워크스페이스" }; }
   let rootOk = false;
-  try { rootOk = !!root && require("fs").existsSync(root); } catch { rootOk = false; }
+  try { rootOk = require("fs").existsSync(root); } catch { rootOk = false; }
   if (!rootOk) return { ok: false, error: "워크스페이스가 없습니다" };
 
   const id = String(opts.id || ("run" + Date.now()));
@@ -936,7 +940,9 @@ ipcMain.handle("schutz:runCommand", async (e, opts) => {
 
     let child;
     try {
-      // shell:true — 사용자가 터미널에 치는 것과 같은 해석. cwd 로 워크스페이스에 가둔다.
+      // shell:true — 사용자가 터미널에 치는 것과 같은 해석. cwd 는 워크스페이스에서
+      // **시작한다**는 뜻일 뿐, 경계가 아니다(명령이 cd 든 절대경로든 쓸 수 있다).
+      // 진짜 경계는 그 위의 승인 게이트다 — 여기 주석이 "가둔다" 고 잘못 적혀 있었다.
       child = spawn(command, { cwd: root, shell: true, env: process.env, windowsHide: true });
     } catch (err) {
       return finish({ ok: false, error: err && err.message ? err.message : String(err) });

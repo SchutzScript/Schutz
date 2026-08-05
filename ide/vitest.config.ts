@@ -26,7 +26,7 @@ export default defineConfig({
       "src/theme.test.ts",
       "src/editor/monacoColors.test.ts",
       "src/opening/**/*.test.ts",
-      "src/uiMode.test.ts", "src/asyncErrors.test.ts",
+      "src/uiMode.test.ts", "src/asyncErrors.test.ts", "src/encodingNote.test.ts",
       "src/agentTimeline.test.ts",
       "src/conversations.test.ts",
       "src/cliChats.test.ts",
