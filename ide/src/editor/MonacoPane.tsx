@@ -6,17 +6,9 @@ import * as projectModels from "./projectModels";
 import { t } from "../i18n";
 import { useLang } from "../i18n/useLang";
 
-/** 메인이 "UTF-8 이 아니라 안 열었다" 고 답한 경우를 사람 말로 바꾼다.
- *  왜 안 열리는지 말해 주지 않으면 그냥 고장 난 편집기로 보인다. */
-function encodingMessage(raw: string): string {
-  const mark = "SCHUTZ_ENCODING:";
-  const i = raw.indexOf(mark);
-  if (i < 0) return raw;
-  const kind = raw.slice(i + mark.length).trim().split(/\s/)[0];
-  if (kind === "binary") return t("enc.binary");
-  if (kind === "utf16le" || kind === "utf16be") return t("enc.utf16");
-  return t("enc.notUtf8");
-}
+// 왜 안 열리는지 말해 주지 않으면 그냥 고장 난 편집기로 보인다.
+// 문구는 encodingNote 하나로 모았다 — 에이전트도 같은 문장을 받아야 한다.
+import { encodingMessage } from "../encodingNote";
 // @ts-ignore — monaco-vim 타입 미제공
 import { initVimMode } from "monaco-vim";
 

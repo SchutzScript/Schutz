@@ -32,6 +32,7 @@ import { resolveRenameTarget, isMove } from "./engine/movePath";
 import { applyProposal } from "./engine/editApply";
 import { planRun, langFor, LANGS as RUN_LANGS } from "./engine/runFile";
 import { AskQueue } from "./engine/askQueue";
+import { encodingMessage } from "./encodingNote";
 import { getRunOverride, getRunOverrides, setRunOverride } from "./settings";
 import { emptyNav, push as navPush, back as navBack, forward as navForward, current as navCurrent, dropMissing as navDropMissing, type NavState } from "./engine/navHistory";
 import { shouldProbeQuota } from "./engine/quotaPoll";
@@ -1955,7 +1956,8 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       // 그건 코드를 한 프레임에 갈아끼우고 에디터를 깜빡이게 하며 스크롤을 날렸다.
       await this.animateEditIntoModel(ws.root, p.rel, newContent, editStart, editEnd, p.find, p.replace);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      // 인코딩 거절 코드가 카드에 그대로 뜨지 않게 사람 말로 바꾼다.
+      const msg = encodingMessage(e instanceof Error ? e.message : String(e));
       this._proposalsById.set(id, { ...p, status: "failed", error: msg });
       this.setState(s => ({
         proposals: s.proposals.map(x => x.id === id ? { ...x, status: "failed" as const, error: msg } : x),
@@ -3610,7 +3612,9 @@ ${(r.output || "").slice(0, 2000)}`;
       return "알 수 없는 도구: " + call.name;
     } catch (e) {
       this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
-      return "오류: " + (e instanceof Error ? e.message : String(e));
+      // 인코딩 거절은 코드(`SCHUTZ_ENCODING:...`)로 온다. 그대로 넘기면 모델이 무슨
+      // 일인지 몰라 같은 파일을 계속 다시 읽으며 라운드를 태운다 — 사람 말로 바꾼다.
+      return "오류: " + encodingMessage(e instanceof Error ? e.message : String(e));
     }
   }
 
