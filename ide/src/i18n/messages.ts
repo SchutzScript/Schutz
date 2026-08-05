@@ -16,6 +16,7 @@ import { dict as d_runfile } from "./dict/runfile";
 import { dict as d_confirm } from "./dict/confirm";
 import { dict as d_extask } from "./dict/extask";
 import { dict as d_extview } from "./dict/extview";
+import { dict as d_enc } from "./dict/enc";
 import { dict as d_flowtree } from "./dict/flowtree";
 import { dict as d_dbg } from "./dict/dbg";
 import { dict as d_mcpui } from "./dict/mcpui";
@@ -44,7 +45,7 @@ export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
   ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_reg, ...d_key,
-  ...d_confirm, ...d_extask, ...d_extview, ...d_runfile, ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
+  ...d_confirm, ...d_extask, ...d_extview, ...d_enc, ...d_runfile, ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
   ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng, ...d_plug, ...d_review, ...d_cloud,
   // ── 공통 ────────────────────────────────────────────────
   "common.next": { ko: "다음", en: "Next", de: "Weiter", ja: "次へ" },
