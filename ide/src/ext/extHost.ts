@@ -4,6 +4,7 @@
 import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta, listExtViews, onExtViewsChanged } from "./vscodeShim";
 import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
 import { editorEvents } from "./vscodeShim";
+import { paneRegistry } from "../editor/MonacoPane";
 import { t } from "../i18n";
 
 export interface ExtCommand { id: string; title: string; run: (...args: any[]) => any; source: string; }
@@ -56,11 +57,50 @@ export function notifyExtensions(ev: HookEvent, payload: Record<string, unknown>
   // 빈 EventEmitter 였다 — onDidSaveTextDocument 를 구독한 확장은 영원히 안 불렸다.
   const rel = typeof payload.rel === "string" ? payload.rel : null;
   if (!rel) return;
+  // 활성 편집기 통지는 문서가 아직 없어도 걸어 둔다 — 새로 여는 파일은 이 시점에
+  // 모델도 페인도 없어서 shimDocFor 가 빈손으로 돌아온다. 예전엔 그 자리에서 함께
+  // 끊겨, 탭을 바꿔도 확장은 영영 못 듣고 데코레이션이 다시 그려지지 않았다.
+  if (ev === "file.open") notifyActiveEditor(rel);
   const doc = shimDocFor(rel);
   if (!doc) return;
-  if (ev === "file.open") { editorEvents.docOpened.fire(doc); editorEvents.activeChanged.fire(shimEditorFor(rel)); }
+  if (ev === "file.open") editorEvents.docOpened.fire(doc);
   else if (ev === "file.save") editorEvents.docSaved.fire(doc);
 }
+
+/** "이 편집기가 활성이다" 를 확장에게 알린다.
+ *
+ *  **페인이 실제로 떠 있을 때만 쏜다.** 아직 없으면 이 사건을 받은 확장이 곧장
+ *  setDecorations 를 불러도 붙일 자리가 없어 조용히 사라진다 — 데코레이션을 쓰는
+ *  확장은 거의 다 이 사건에 매달려 그리므로, 이르게 쏘면 안 쏜 것과 같다.
+ *
+ *  openFile 은 setState 전에 부르고, 탭을 바꿀 때 페인이 다시 마운트되지 않는
+ *  경우도 있다(모델만 갈아끼운다). 그래서 "있으면 쏘고 없으면 잠깐 기다린다".
+ *  기다림은 유한하다 — 못 뜨면 조용히 접는다. */
+let activeWait: ReturnType<typeof setTimeout> | null = null;
+let lastActiveRel: string | null = null;
+
+export function notifyActiveEditor(rel: string): void {
+  if (activeWait) { clearTimeout(activeWait); activeWait = null; }
+  if (!rel) return;
+  let tries = 0;
+  const attempt = () => {
+    activeWait = null;
+    const pane = paneRegistry.panes.get(rel);
+    if (!pane) {
+      // 페인이 아직 없다. 40ms 씩 최대 25번(1초) 기다린다 — 그 안에 안 뜨면
+      // 그 탭은 편집기가 아니거나(이미지·미리보기) 사용자가 다시 옮긴 것이다.
+      if (++tries <= 25) activeWait = setTimeout(attempt, 40);
+      return;
+    }
+    if (lastActiveRel === rel) return;   // 같은 파일로 두 번 쏘지 않는다
+    lastActiveRel = rel;
+    const ed = shimEditorFor(rel);
+    if (ed) editorEvents.activeChanged.fire(ed);
+  };
+  attempt();
+}
+
+paneRegistry.onReady = (rel: string) => notifyActiveEditor(rel);
 
 /** 사건을 쏠 때 쓸 문서 통로. makeVscodeApi 가 확장마다 인덱스를 만들지만,
  *  사건에는 확장과 무관한 문서 하나면 된다. */

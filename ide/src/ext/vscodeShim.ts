@@ -12,6 +12,7 @@ import { cleanText, ALIGN_LEFT, ALIGN_RIGHT, type StatusItem } from "./statusBar
 import { globToRegExp, dispatch as fsDispatch, type WatcherSpec, type FsDelta } from "./fsWatch";
 import { parseViews, containerTitle, normalizeTreeItem, type ViewDecl, type TreeRow } from "./views";
 import { collectEdits, groupByFile, sortForApply, hasOverlap, normalizeAction } from "./workspaceEdit";
+import { createDecoType, applyDecos, disposeAllDecos, type DecoTypeHandle } from "./decoStore";
 import { setShimDocSource } from "./extHost";
 
 /** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
@@ -85,8 +86,13 @@ export interface ShimDeps {
 
 const disposables: monaco.IDisposable[] = [];
 /** 이전 로드에서 등록한 Monaco 프로바이더 정리 (재로드 시 중복 방지) */
+/** 확장별로 만들어 둔 데코레이션 타입 — 정리 때 그려 둔 것까지 걷기 위해 들고 있다. */
+const decoTypesByExt = new Map<string, DecoTypeHandle[]>();
+
 export function disposeShimRegistrations() {
   for (const d of disposables.splice(0)) { try { d.dispose(); } catch { /* */ } }
+  for (const list of decoTypesByExt.values()) disposeAllDecos(list);
+  decoTypesByExt.clear();
 }
 
 // ── 기본 타입 ──────────────────────────────────────────────────
@@ -212,6 +218,10 @@ function relOfWith(root: string | null, arg: any): string | null {
 }
 
 export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; contributes?: any }) {
+  // 이 확장이 만든 데코레이션 타입. 확장이 내려갈 때 그려 둔 것까지 함께 걷는다 —
+  // 규칙만 남기고 가면 다음 확장이 만든 타입과 클래스가 섞인다.
+  const extDecoTypes: DecoTypeHandle[] = [];
+  decoTypesByExt.set(ext.id, extDecoTypes);
   const docs = makeDocIndex(
     { root: deps.workspaceRoot, activeRel: deps.getActiveFile, openRels: deps.openFiles, save: deps.saveFile },
     { Position, Range, Selection },
@@ -554,7 +564,18 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
       });
       return got == null ? undefined : String(got);
     },
-    createTextEditorDecorationType: () => ({ dispose() {}, key: "sz-deco" }),
+    // 예전엔 `() => ({ dispose() {}, key: "sz-deco" })` 였다. 확장은 성공을 받고
+    // 화면에는 아무것도 없었다 — 인라인 blame·커버리지 표시가 전부 여기 걸려 있었다.
+    createTextEditorDecorationType: (options: any) => {
+      const h = createDecoType(options);
+      if (h._szEmpty) {
+        // 옵션에서 알아들은 것이 하나도 없으면 그려도 보이는 것이 없다. 조용히
+        // 성공을 답하는 대신 말해 준다 — 그게 이 자리에서 없애려던 바로 그 모양이다.
+        console.warn(`[ext:${ext.id}] createTextEditorDecorationType: 그릴 수 있는 속성이 없습니다.`);
+      }
+      extDecoTypes.push(h);
+      return h;
+    },
     registerTreeDataProvider: (viewId: string, provider: any) => {
       const id = String(viewId);
       extViews.set(id, {
