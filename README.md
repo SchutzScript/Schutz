@@ -137,12 +137,17 @@ files, and the shim has no custom editors and no debug adapter API. Those three 
 `WorkspaceEdit` throws, and the other two are absent from the API object, so calling one is a
 `TypeError` rather than a quiet nothing.
 
-One gap does not behave that way, and saying otherwise here was worse than the gap itself:
-**`createTextEditorDecorationType` returns a working-looking handle and `setDecorations`
-accepts ranges, and nothing is ever drawn.** An extension doing inline blame or coverage
-highlighting gets a successful answer and no pixels. It is the one place left with the shape
-this project spent a release removing; it is named here until it is built rather than
-described as something it is not.
+Decorations used to sit in that list as the one gap that answered successfully and drew
+nothing. They now draw: `createTextEditorDecorationType` compiles the requested styling into
+a real rule, `setDecorations` puts it on the Monaco editor, and passing an empty array clears
+what that type drew. Inline blame and coverage highlighting work, `before`/`after` content
+included.
+
+Fixing it surfaced the reason such an extension would have appeared broken anyway:
+`onDidChangeActiveTextEditor` fired before the editor existed, and the notification was
+dropped on the way out, so opening a file delivered either nothing or the *previous* file's
+editor. Extensions that draw on editor changes — which is most of them — were being handed
+the wrong editor. The event now waits for the pane and fires once per file.
 
 ## Contributing
 

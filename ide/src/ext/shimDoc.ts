@@ -1,6 +1,7 @@
 import monaco from "../editor/monacoSetup";
 import * as projectModels from "../editor/projectModels";
 import { paneRegistry } from "../editor/MonacoPane";
+import { applyDecos } from "./decoStore";
 
 /**
  * vscode 셰임의 문서·편집기 — **실제 Monaco 모델에 연결한다.**
@@ -122,7 +123,13 @@ export function makeEditor(doc: any, rel: string, Position: any, Selection: any,
     revealRange(r: any) {
       try { api()?.editor.revealRangeInCenter({ startLineNumber: r.start.line + 1, startColumn: 1, endLineNumber: r.end.line + 1, endColumn: 1 }); } catch { /* */ }
     },
-    setDecorations() { /* 데코레이션 타입이 no-op 이라 여기도 no-op */ },
+    /** 이 파일을 띄운 팬이 없으면 그릴 자리가 없다 — 조용히 넘긴다(닫힌 탭에
+     *  그려 달라는 요청은 오류가 아니다). 열려 있으면 그 편집기에 실제로 붙는다. */
+    setDecorations(type: any, ranges: any) {
+      const e = api()?.editor;
+      if (!e) return;
+      applyDecos(e, type, ranges);
+    },
   };
 }
 

@@ -60,7 +60,19 @@ export interface PaneApi {
   editor: monaco.editor.IStandaloneCodeEditor;
   save: () => Promise<void>;
 }
-export const paneRegistry: { panes: Map<string, PaneApi>; focused: PaneApi | null } = {
+/** 페인 하나가 실제로 뜬 뒤에 부른다.
+ *
+ *  확장에게 "이 편집기가 활성이다" 를 알리는 시점이 여기여야 한다. 예전엔 openFile 이
+ *  setState 전에 알려서, 그 사건을 받은 확장이 곧장 setDecorations 를 불러도 붙일
+ *  편집기가 아직 없었다 — 조용히 아무 일도 안 일어났다. 데코레이션을 쓰는 확장은
+ *  거의 다 이 사건에 매달려 그린다.
+ *
+ *  훅 필드로 두는 이유는 순환 임포트를 피하기 위해서다(extHost 가 여기를 읽는다). */
+export const paneRegistry: {
+  panes: Map<string, PaneApi>;
+  focused: PaneApi | null;
+  onReady?: (rel: string) => void;
+} = {
   panes: new Map(),
   focused: null,
 };
@@ -193,6 +205,7 @@ function MonacoPaneImpl({ root, rel, onDirtyChange, onSaved, onConfirm, onStatus
 
       const api: PaneApi = { rel, editor, save };
       paneRegistry.panes.set(rel, api);
+      try { paneRegistry.onReady?.(rel); } catch { /* 확장이 던져도 페인은 살아 있어야 한다 */ }
       editor.onDidFocusEditorWidget(() => {
         paneRegistry.focused = api;
         const p = editor!.getPosition();
