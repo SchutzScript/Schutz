@@ -133,9 +133,16 @@ webview to the sidebar. MCP speaks all three of its pillars rather than tools al
 MCP resources and prompts are offered to the agent, not just listed in a panel.
 
 Where it is still thin, specifically: a `WorkspaceEdit` cannot create, delete or rename
-files, and the shim has no `TextEditor` decorations, no custom editors, and no debug adapter
-API. Each of those throws rather than returning an empty value, so an extension that needs
-one fails loudly instead of quietly doing nothing.
+files, and the shim has no custom editors and no debug adapter API. Those three fail loudly —
+`WorkspaceEdit` throws, and the other two are absent from the API object, so calling one is a
+`TypeError` rather than a quiet nothing.
+
+One gap does not behave that way, and saying otherwise here was worse than the gap itself:
+**`createTextEditorDecorationType` returns a working-looking handle and `setDecorations`
+accepts ranges, and nothing is ever drawn.** An extension doing inline blame or coverage
+highlighting gets a successful answer and no pixels. It is the one place left with the shape
+this project spent a release removing; it is named here until it is built rather than
+described as something it is not.
 
 ## Contributing
 

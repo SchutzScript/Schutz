@@ -757,7 +757,22 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
   const api: any = {
     version: "1.85.0",
     commands, window: window_, languages, workspace,
-    env: { appName: "Schutz", language: getLang(), machineId: "schutz", openExternal: () => Promise.resolve(true), clipboard: { writeText: () => Promise.resolve(), readText: () => Promise.resolve("") } },
+    // env 셋이 전부 성공을 답하고 아무것도 안 했다. openExternal 은 true 를 돌려주며
+    // 브라우저를 열지 않았고(그 IPC 는 진작 있었다), 클립보드는 어디에도 쓰지 않고
+    // 늘 빈 문자열을 읽었다. 확장 입장에서는 "썼는데 비어 있다" 라 자기 버그로 보인다.
+    env: {
+      appName: "Schutz", language: getLang(), machineId: "schutz",
+      openExternal: async (target: any) => {
+        const url = String(target?.toString?.() ?? target ?? "");
+        if (!url) return false;
+        const r = await window.schutz?.openExternal(url);
+        return !!r?.ok;   // 메인이 http/https/mailto 만 연다 — 거절도 그대로 전한다
+      },
+      clipboard: {
+        writeText: (text: string) => navigator.clipboard.writeText(String(text ?? "")),
+        readText: () => navigator.clipboard.readText(),
+      },
+    },
     Uri: UriShim, Position, Range, Selection, Location, Disposable, EventEmitter,
     MarkdownString, CompletionItem, CompletionItemKind, Hover, ThemeIcon, ThemeColor,
     WorkspaceEdit, CodeAction, CodeActionKind,
