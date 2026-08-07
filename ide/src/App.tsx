@@ -70,6 +70,7 @@ import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco, { languageOf, applyTsPaths, revalidateTs } from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
 import * as proposalDeco from "./editor/proposalDeco";
+import * as symbolIndex from "./editor/symbolIndex";
 import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
 import * as lspConv from "./editor/lspConverters";
@@ -3467,6 +3468,25 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         if (!all.length) return (glob ? `(${glob} 에 맞는 파일 없음)` : "(빈 워크스페이스)") + partial;
         return shown.join("\n") + (cut ? `\n\n… ${cut}개 더 있음(전체 ${all.length}). glob 으로 좁혀서 다시 부르세요.` : "") + partial;
       }
+      if (call.name === "find_symbol") {
+        const query = String(call.input?.query ?? "").trim();
+        this.addTool(toolId, agentId, t("sc2.verbSymbol"), query);
+        if (!query) {
+          this.setTool(toolId, { st: "done", note: t("sc2.noteError") });
+          return "오류: query 가 비었습니다.";
+        }
+        const r = await symbolIndex.findSymbols(query, 60);
+        this.setTool(toolId, { st: "done", note: t("sc2.noteHits", { n: r.hits.length }) });
+        // 색인이 아예 없는 것과 찾아봤는데 없는 것은 다르다. 섞으면 모델이 "그런 심볼은
+        // 없다" 고 단정하고 넘어간다.
+        if (!r.sources.length) {
+          return "이 워크스페이스에는 심볼 색인이 없습니다(TypeScript 프로젝트가 아니거나 해당 언어 서버가 없음). search_files 로 찾으세요.";
+        }
+        if (!r.hits.length) {
+          return `"${query}" 로 찾은 심볼 없음. 색인은 있습니다(${r.sources.join(", ")}) — 이름이 다르거나 색인이 없는 언어의 파일일 수 있으니 search_files 도 해 보세요.`;
+        }
+        return r.hits.map(h => `${h.rel}:${h.line}:${h.column}  ${h.container ? h.container + "." : ""}${h.name}`).join(String.fromCharCode(10));
+      }
       if (call.name === "search_files") {
         const query = String(call.input?.query ?? "");
         this.addTool(toolId, agentId, t("sc2.verbSearch"), query);
@@ -5414,8 +5434,16 @@ ${(r.output || "").slice(0, 2000)}`;
     this.setState({ symLoading: true });
     this._symTimer = setTimeout(async () => {
       try {
-        const raw = await lspClient.workspaceSymbols(q);
-        const results = lspConv.toWorkspaceSymbols(raw).slice(0, 200);
+        // 예전엔 lspClient 만 물어봤다. TS/JS 는 LSP 세션이 아니라 Monaco 내장 워커가
+        // 맡으므로, TypeScript 프로젝트에서는 Ctrl+T 가 늘 빈 목록이었다(이 저장소가 그렇다).
+        const r = await symbolIndex.findSymbols(q, 200);
+        // uri 자리에는 진짜 파일 uri 를 넣는다 — 아래 jumpToSymbol·경로 표시가 그걸 판다.
+        const wsRoot = (this.state.workspace?.root ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+        const results = r.hits.map(h => ({
+          name: h.name, container: h.container, kind: h.kind,
+          uri: monaco.Uri.file(wsRoot + "/" + h.rel).toString(),
+          range: { startLineNumber: h.line, startColumn: h.column, endLineNumber: h.line, endColumn: h.column },
+        }));
         // 현재 쿼리와 여전히 일치할 때만 반영
         if (this.state.symQuery.trim() === q) this.setState({ symResults: results, symLoading: false });
       } catch { this.setState({ symResults: [], symLoading: false }); }

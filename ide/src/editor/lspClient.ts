@@ -177,6 +177,14 @@ export async function executeCommand(languageId: string, command: string, args: 
 }
 
 /** 살아있는 모든 세션에 workspace/symbol 질의 후 병합 (Ctrl+T) — 새 서버는 안 띄움 */
+/** 살아 있는 세션 수. 0 이면 이 워크스페이스에는 LSP 색인이 없다 —
+ *  "심볼 없음" 과 "찾아볼 곳이 없음" 을 가르는 데 쓴다. */
+export function liveSessionCount(): number {
+  let n = 0;
+  for (const [, s] of sessions) if (!s.dead) n++;
+  return n;
+}
+
 export async function workspaceSymbols(query: string): Promise<any[]> {
   const out: any[] = [];
   for (const [, s] of sessions) {

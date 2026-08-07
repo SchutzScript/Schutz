@@ -305,6 +305,21 @@ export const WORKSPACE_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "find_symbol",
+    description:
+      "이름으로 심볼(함수·클래스·타입·변수)의 정의 자리를 찾는다. " +
+      "search_files 는 텍스트를 찾으므로 주석·문자열·호출부까지 다 걸리지만, 이것은 정의만 준다. " +
+      "'X 가 어디 정의돼 있지' 류의 질문에는 이쪽이 정확하고 빠르다. " +
+      "언어에 색인이 없으면 결과 대신 그렇다고 알려 준다 — 그때는 search_files 로 가라.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "심볼 이름 또는 그 일부" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "read_file",
     description:
       "워크스페이스의 파일 내용을 읽는다. 줄 번호가 붙어서 온다. " +
