@@ -99,7 +99,8 @@ same table the app dispatches from, so it cannot drift from what actually happen
 
 ## Design principles
 
-- **Provider-agnostic** — Claude, OpenAI, Grok, and GLM today, behind a swappable adapter
+- **Provider-agnostic** — Claude, OpenAI, Grok, GLM and Gemini today, plus any OpenAI-compatible
+  server you point it at, all behind a swappable adapter
 - **Observable by default** — every AI action surfaces in the UI
 - **Human-in-the-loop** — every change can be accepted, rejected, or reverted
 - **Progressive fidelity** — validate the experience first, then deepen it at the editor core
@@ -121,8 +122,19 @@ npm run dist:linux # Linux build
 ## Roadmap
 
 - **Phase 1** — validate the core experience *(done)*
-- **Phase 2** — deepen renderer-level visual effects at the editor core *(in progress)*
-- **Phase 3** — more providers (Gemini, local/OpenAI-compatible endpoints) and codebase indexing
+- **Phase 2** — the four editing-visualization pillars *(done)*
+- **Phase 3** — more providers *(done)* and codebase indexing *(next, as a 0.4 preview)*
+
+Phase 2 was originally written as "fork Code-OSS", on the assumption that the visual effects
+were impossible through the extension API. That fork never happened and should not: the app
+has its own renderer already (Electron + React + Monaco), so the reason for forking never
+applied. [docs/PHASE2-SURVEY.md](docs/PHASE2-SURVEY.md) audits the four pillars against the
+code and closes the fork item as not-applicable. The three things the design named and the
+code lacked — a ghost cursor, a rationale tooltip on the changed line, and accept/reject
+CodeLens — now exist.
+
+Providers: Claude, GPT, Grok, GLM, Gemini, and any OpenAI-compatible server you point it at —
+Ollama, LM Studio, llama.cpp, or a corporate proxy. A local server needs an address, not a key.
 
 The ecosystem work that used to sit in Phase 3 has shipped: VS Code extensions, Claude Code
 skills and subagents, MCP servers over stdio and HTTP, and `.mcpb` bundles are all in the app

@@ -68,6 +68,7 @@ import { XtermView } from "./editor/XtermView";
 import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco, { languageOf, applyTsPaths, revalidateTs } from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
+import * as proposalDeco from "./editor/proposalDeco";
 import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
 import * as lspConv from "./editor/lspConverters";
@@ -4963,6 +4964,19 @@ ${(r.output || "").slice(0, 2000)}`;
     return parseFindings(out);
   }
 
+  /** 대기 중인 제안을 편집기 위에 반영한다 — 사유 툴팁과 수락/거절 렌즈. */
+  private syncProposalMarks() {
+    proposalDeco.ensureRegistered({
+      accept: id => void this.acceptProposal(id),
+      reject: id => this.rejectProposal(id),
+    });
+    proposalDeco.refresh(
+      this.state.proposals
+        .filter(p => p.status === "pending" && !this.parseDiffKey(p.rel))
+        .map(p => ({ id: p.id, rel: p.rel, find: p.find, rationale: p.rationale, agent: p.agent, range: p.range ?? null })),
+    );
+  }
+
   componentDidMount() {
     window.addEventListener("resize", this._clampChatOnResize);
     applyTheme(getThemeId());
@@ -5899,6 +5913,9 @@ ${(r.output || "").slice(0, 2000)}`;
       this.setState({ openingPhase: "intro" });
     }
     if (_ps) this._restoreClosedFocus(_ps);
+    // 대기 중인 제안을 코드 옆에 그린다(사유 툴팁 + 수락/거절 CodeLens).
+    // 목록이 실제로 바뀐 판에만 — 매 렌더마다 CodeLens 를 다시 요청하면 깜빡인다.
+    if (_ps && _ps.proposals !== this.state.proposals) this.syncProposalMarks();
     // 저장 안 한 파일 목록을 메인에 맞춰 둔다 — 종료를 붙잡을지 여기서 정해진다.
     this.reportDirty();
     // 모드가 바뀌면 Monaco 를 다시 재어준다. automaticLayout 은 display:none 안에서
