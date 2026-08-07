@@ -88,6 +88,8 @@ export const KEY_STORE = {
   gpt: "schutz.key.gpt",
   grok: "schutz.key.grok",
   glm: "schutz.key.glm",
+  gemini: "schutz.key.gemini",
+  local: "schutz.key.local",
 } as const;
 
 export type ProviderId = keyof typeof KEY_STORE;
@@ -109,6 +111,40 @@ export function setStoredKey(provider: ProviderId, key: string): void {
   }
 }
 
+// ── 엔드포인트 주소 ────────────────────────────────────────────────────────
+//
+// 주소가 프로바이더에 상수로 박혀 있었다. 벤더 넷은 그래도 됐지만, 로컬 모델
+// (Ollama·LM Studio·llama.cpp)은 **주소가 곧 설정**이다 — 사람마다 포트가 다르고
+// 원격 서버에 띄워 두기도 한다. 사내 프록시를 태우는 경우도 같은 문제다.
+// 그래서 프로바이더마다 주소를 덮어쓸 수 있게 한다. 비워 두면 기본값이다.
+
+const ENDPOINT_PREFIX = "schutz.endpoint.";
+
+export function getEndpoint(provider: string): string {
+  try { return (localStorage.getItem(ENDPOINT_PREFIX + provider) ?? "").trim(); } catch { return ""; }
+}
+
+export function setEndpoint(provider: string, url: string): void {
+  try {
+    const v = String(url ?? "").trim();
+    if (v) localStorage.setItem(ENDPOINT_PREFIX + provider, v);
+    else localStorage.removeItem(ENDPOINT_PREFIX + provider);
+  } catch { /* storage 불가 환경이면 무시 */ }
+}
+
+/** `http://host:port` 만 주면 나머지를 채워 준다 — 사람이 적는 것은 보통 그것뿐이다. */
+export function chatUrlFrom(base: string): string {
+  const b = String(base ?? "").trim().replace(/\/+$/, "");
+  if (!b) return "";
+  if (/\/chat\/completions$/.test(b)) return b;
+  if (/\/v\d[^/]*$/.test(b)) return b + "/chat/completions";
+  return b + "/v1/chat/completions";
+}
+
+/** 같은 주소의 모델 목록 엔드포인트. */
+export function modelsUrlFrom(chatUrl: string): string {
+  return String(chatUrl ?? "").replace(/\/chat\/completions$/, "/models");
+}
 
 // ── 앱 내 OAuth 토큰 저장 (구독 계정 인증) ─────────────────────────────────
 

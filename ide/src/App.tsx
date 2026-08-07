@@ -13,8 +13,9 @@ import {
   WORKSPACE_TOOLS, DELEGATE_TOOL,
 } from "./ai/claude";
 import { PROVIDERS_MAP, testProvider, getManagerId, setManagerId } from "./ai/registry";
-import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, ModelOpt } from "./ai/models";
-import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, freshOAuth, getModelOverride, setModelOverride } from "./ai/provider";
+import { LOCAL_PROVIDER } from "./ai/openaiCompat";
+import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, GEMINI_MODELS, ModelOpt } from "./ai/models";
+import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, freshOAuth, getModelOverride, setModelOverride, getEndpoint, setEndpoint } from "./ai/provider";
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
 import { PreviewPane } from "./editor/PreviewPane";
@@ -520,6 +521,8 @@ interface S {
   searchResults: SearchHit[];
   searchSel: number;
   searchBusy: boolean;
+  /** 로컬 서버가 들고 있는 모델 id 들. 우리가 알 수 없어 서버에 물어본다. */
+  localModels: string[];
   searchTruncated: boolean;
   /** 깊이 상한 때문에 안 걸어 본 폴더가 있었다 — "없음" 을 단정하지 못한다 */
   searchDeep: boolean;
@@ -727,6 +730,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     slashSel: 0,
     quickOpen: false, quickQuery: "", quickSel: 0,
     symOpen: false, symQuery: "", symSel: 0, symLoading: false, symResults: [],
+    localModels: [],
     searchOpen: false, searchQuery: "", searchResults: [], searchSel: 0, searchBusy: false, searchTruncated: false, searchDeep: false,
     askClose: null,
     problems: [], tsLargeProject: false,
@@ -1521,6 +1525,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         ((/^(gpt-|o\d|chatgpt)/.test(q)) && connectedId("gpt")) ||
         (q.startsWith("grok") && connectedId("grok")) ||
         (q.startsWith("glm") && connectedId("glm")) ||
+        (q.startsWith("gemini") && connectedId("gemini")) ||
         AGDEF.find(d => this.modelChannel(d.id))?.id;
       if (guess) {
         const ch = this.modelChannel(guess)!;
@@ -1600,8 +1605,19 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   async testConn(id: string) {
     this.setState(st => ({ testMsg: { ...st.testMsg, [id]: t("sc1.checking") } }));
+    // 로컬은 연결 확인이 곧 모델 목록 읽기다 — 무엇을 고를 수 있는지도 그때 정해진다.
+    if (id === "local") { await this.refreshLocalModels(); }
     const r = await testProvider(id);
     this.setState(st => ({ testMsg: { ...st.testMsg, [id]: r.ok ? t("sc1.connected_ok") : "⚠️ " + r.message.slice(0, 120) } }));
+  }
+
+  /** 로컬 서버가 들고 있는 모델을 물어본다. 못 물으면 목록을 비우고 넘어간다 —
+   *  그때는 사용자가 이름을 직접 적을 수 있어야 하므로 조용히 실패하지 않는다. */
+  async refreshLocalModels(): Promise<void> {
+    const p = LOCAL_PROVIDER;
+    const r = await p.listModels();
+    if (r.ok && r.models?.length) this.setState({ localModels: r.models });
+    else this.setState(st => ({ localModels: [], testMsg: { ...st.testMsg, local: "⚠️ " + (r.error || t("reg.apiKeyEmpty")).slice(0, 120) } }));
   }
 
   private _cliOff: (() => void) | null = null;
@@ -2264,6 +2280,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }
     if (id === "grok") return getStoredKey("grok").trim() ? "grok-4" : null;
     if (id === "glm") return getStoredKey("glm").trim() ? "glm-4.6" : null;
+    if (id === "gemini") return getStoredKey("gemini").trim() ? "gemini-3-pro" : null;
+    // 로컬은 주소가 곧 연결이다. 어떤 모델을 받아 뒀는지는 서버만 안다.
+    if (id === "local") return getEndpoint("local") ? (getModelOverride("local") || this.state.localModels[0] || "…") : null;
     return null;
   }
 
@@ -2284,6 +2303,12 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     }
     if (id === "grok") return getStoredKey("grok").trim() ? { overrideKey: "grok", options: GROK_MODELS, current: getModelOverride("grok") || "grok-4" } : null;
     if (id === "glm") return getStoredKey("glm").trim() ? { overrideKey: "glm", options: GLM_MODELS, current: getModelOverride("glm") || "glm-4.6" } : null;
+    if (id === "gemini") return getStoredKey("gemini").trim() ? { overrideKey: "gemini", options: GEMINI_MODELS, current: getModelOverride("gemini") || "gemini-3-pro" } : null;
+    if (id === "local") {
+      if (!getEndpoint("local")) return null;
+      const opts = this.state.localModels.map(m => ({ id: m, label: m }));
+      return { overrideKey: "local", options: opts, current: getModelOverride("local") || opts[0]?.id || "" };
+    }
     return null;
   }
 
@@ -11498,10 +11523,12 @@ ${(r.output || "").slice(0, 2000)}`;
               <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
                 <span style={{ flex: "none", width: 52, fontSize: 12, fontWeight: 600, color: d.color }}>{d.name}</span>
                 <input
-                  type="password"
-                  defaultValue={getStoredKey(d.id as any)}
-                  onChange={e => setStoredKey(d.id as any, e.target.value.trim())}
-                  placeholder={t("settings.apiKeyPlaceholder")}
+                  // 로컬 서버는 키가 아니라 **주소**가 설정이다. 같은 자리에서 그것을 받는다 —
+                  // 키 칸만 있으면 "키를 안 넣었으니 미설정" 으로 보여 영원히 못 쓴다.
+                  type={d.id === "local" ? "text" : "password"}
+                  defaultValue={d.id === "local" ? getEndpoint("local") : getStoredKey(d.id as any)}
+                  onChange={e => (d.id === "local" ? setEndpoint("local", e.target.value.trim()) : setStoredKey(d.id as any, e.target.value.trim()))}
+                  placeholder={d.id === "local" ? t("settings.endpointPlaceholder") : t("settings.apiKeyPlaceholder")}
                   style={{ flex: 1, minWidth: 0, background: "var(--bg-root)", border: "1px solid var(--w10)", borderRadius: 7, height: 30, padding: "0 11px", color: "var(--fg)", fontSize: 11.5, fontFamily: MONO, outline: "none" }}
                 />
                 <button className="hv05" onClick={() => void this.testConn(d.id)}

@@ -1,6 +1,7 @@
 import {
   AgentProvider, AgentTurnRequest, AgentEvent, NeutralMsg, ToolDef,
   ProviderId, getStoredKey, getOAuth, freshOAuth, getModelOverride,
+  getEndpoint, chatUrlFrom, modelsUrlFrom,
 } from "./provider";
 import { t } from "../i18n";
 import { retryPlan, sleep } from "./retry";
@@ -8,9 +9,11 @@ import { retryPlan, sleep } from "./retry";
 export interface CompatConfig {
   id: ProviderId;
   label: string;
-  /** chat/completions 엔드포인트 전체 URL */
+  /** chat/completions 엔드포인트 전체 URL — 설정에서 덮어쓸 수 있다(로컬·프록시) */
   url: string;
   defaultModel: string;
+  /** 키 없이 쓰는 엔드포인트(로컬 서버). 키를 안 넣었다고 미설정으로 보지 않는다. */
+  keyless?: boolean;
 }
 
 /** OpenAI Chat Completions 호환 어댑터 — GPT(OpenAI) / Grok(xAI) / GLM(Zhipu) 공용 */
@@ -23,9 +26,33 @@ export class OpenAICompatProvider implements AgentProvider {
     this.label = cfg.label;
   }
 
+  /** 지금 쓸 주소. 설정에 적어 둔 것이 있으면 그것이 이긴다. */
+  endpoint(): string {
+    return chatUrlFrom(getEndpoint(this.cfg.id)) || this.cfg.url;
+  }
+
   isConfigured(): boolean {
     if (this.cfg.id === "gpt" && getOAuth("codex")) return true;
+    // 로컬 서버는 키를 요구하지 않는다. 키 없음을 미설정으로 보면 영원히 못 쓴다.
+    if (this.cfg.keyless) return this.endpoint().length > 0;
     return getStoredKey(this.cfg.id).trim().length > 0;
+  }
+
+  /** 서버가 실제로 들고 있는 모델 목록. 로컬은 사용자가 무엇을 받아 뒀는지 우리가 모른다. */
+  async listModels(signal?: AbortSignal): Promise<{ ok: boolean; models?: string[]; error?: string }> {
+    const url = modelsUrlFrom(this.endpoint());
+    const key = getStoredKey(this.cfg.id).trim();
+    try {
+      const res = await fetch(url, { headers: key ? { authorization: "Bearer " + key } : {}, signal });
+      if (!res.ok) return { ok: false, error: "HTTP " + res.status };
+      const j = await res.json();
+      const list = Array.isArray(j?.data) ? j.data : Array.isArray(j?.models) ? j.models : [];
+      const ids = list.map((m: any) => String(m?.id ?? m?.name ?? "")).filter(Boolean);
+      return { ok: true, models: ids };
+    } catch (e) {
+      // 서버가 안 떠 있는 것과 주소가 틀린 것을 "네트워크 오류" 로 뭉뚱그리지 않는다.
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   private toNative(transcript: NeutralMsg[], system?: string): any[] {
@@ -183,8 +210,15 @@ export class OpenAICompatProvider implements AgentProvider {
       yield* this.streamCodexBackend(req);
       return;
     }
-    if (!apiKey) {
+    // 로컬 서버는 키를 요구하지 않는다. 여기서 키만 보고 막으면, 주소를 제대로 적어
+    // 두고도 "API 키가 없습니다" 로 끝난다 — 넣을 키가 없는 서버인데.
+    if (!apiKey && !this.cfg.keyless) {
       yield { type: "error", message: t("oai.apiKeyNotSet", { label: this.label }) };
+      yield { type: "done" };
+      return;
+    }
+    if (this.cfg.keyless && !this.endpoint()) {
+      yield { type: "error", message: t("oai.localNoEndpoint") };
       yield { type: "done" };
       return;
     }
@@ -196,11 +230,12 @@ export class OpenAICompatProvider implements AgentProvider {
     for (let attempt = 1; ; attempt++) {
       let netErr = false;
       try {
-        res = await fetch(this.cfg.url, {
+        res = await fetch(this.endpoint(), {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            authorization: "Bearer " + apiKey,
+            // 로컬 서버는 키를 안 받는다. 빈 Bearer 를 보내면 거부하는 구현이 있다.
+            ...(apiKey ? { authorization: "Bearer " + apiKey } : {}),
           },
           body: JSON.stringify({
             model: req.model || getModelOverride(this.cfg.id) || this.cfg.defaultModel,
@@ -310,6 +345,23 @@ export const GROK_PROVIDER = new OpenAICompatProvider({
   id: "grok", label: "Grok",
   url: "https://api.x.ai/v1/chat/completions",
   defaultModel: "grok-4",
+});
+
+// Google 이 OpenAI 호환 엔드포인트를 내주므로 전용 어댑터가 필요 없다. 도구 호출도
+// chat/completions 의 tool_calls 형식으로 흘러 아래 스트림 처리 경로를 그대로 탄다.
+export const GEMINI_PROVIDER = new OpenAICompatProvider({
+  id: "gemini", label: "Gemini",
+  url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+  defaultModel: "gemini-3-pro",
+});
+
+// 로컬 모델(Ollama · LM Studio · llama.cpp). 셋 다 OpenAI 호환 서버라 프로토콜은 같고,
+// 다른 것은 주소와 "키가 없다" 는 사실뿐이다. 기본값은 Ollama 의 기본 포트.
+export const LOCAL_PROVIDER = new OpenAICompatProvider({
+  id: "local", label: "Local",
+  url: "http://localhost:11434/v1/chat/completions",
+  defaultModel: "llama3.1",
+  keyless: true,
 });
 
 export const GLM_PROVIDER = new OpenAICompatProvider({

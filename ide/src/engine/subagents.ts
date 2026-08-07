@@ -59,6 +59,7 @@ export function providerFor(
     gpt: "gpt", openai: "gpt", o3: "gpt", "gpt-5": "gpt",
     grok: "grok", xai: "grok",
     glm: "glm", zhipu: "glm",
+    gemini: "gemini", google: "gemini",
   };
   const mapped = alias[want] ?? (configured.includes(want) ? want : "");
   if (mapped && configured.includes(mapped)) return mapped;

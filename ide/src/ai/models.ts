@@ -42,6 +42,14 @@ export const GROK_MODELS: ModelOpt[] = [
   { id: "grok-3", label: "Grok 3" },
 ];
 
+/** Gemini — OpenAI 호환 엔드포인트로 붙는다(전용 어댑터 없이 같은 코드를 탄다). */
+export const GEMINI_MODELS: ModelOpt[] = [
+  opt("gemini-3-pro", "model.gemini3Pro"),
+  { id: "gemini-3-flash", label: "Gemini 3 Flash" },
+  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+];
+
 export const GLM_MODELS: ModelOpt[] = [
   opt("glm-4.6", "model.glm46"),
   { id: "glm-4.5", label: "GLM-4.5" },
