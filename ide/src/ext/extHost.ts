@@ -29,6 +29,14 @@ export interface HostDeps {
   saveFile: (rel: string) => Promise<boolean>;
   readFile: (rel: string) => Promise<string | null>;
   revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
+  /** WorkspaceEdit 의 파일 만들기·지우기·이름 바꾸기 — 셰임이 그대로 받아 쓴다. */
+  fileOps?: {
+    exists: (rel: string) => boolean;
+    isDirty: (rel: string) => boolean;
+    create: (rel: string, content: string, overwrite: boolean) => Promise<boolean>;
+    remove: (rel: string) => Promise<boolean>;
+    rename: (from: string, to: string, overwrite: boolean) => Promise<boolean>;
+  };
 }
 
 let commands: ExtCommand[] = [];
@@ -246,7 +254,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, saveFile: d.saveFile, readFile: d.readFile, revealInView: d.revealInView, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, saveFile: d.saveFile, readFile: d.readFile, revealInView: d.revealInView, fileOps: d.fileOps, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
