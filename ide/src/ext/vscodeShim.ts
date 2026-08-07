@@ -2,7 +2,7 @@
 // 지원: commands · window 메시지/출력채널 · languages(완성/호버/정의) · workspace 설정 · 기본 타입.
 // Node/네이티브 의존이나 미구현 API를 쓰는 확장은 실패(캐치되어 보고). "단순 확장"용.
 import monaco from "../editor/monacoSetup";
-import { getLang } from "../i18n";
+import { getLang, t } from "../i18n";
 import * as projectModels from "../editor/projectModels";
 import { makeDocIndex } from "./shimDoc";
 import { normalizePicks, normalizeButtons, type PromptReq } from "./prompt";
@@ -13,6 +13,7 @@ import { globToRegExp, dispatch as fsDispatch, type WatcherSpec, type FsDelta } 
 import { parseViews, containerTitle, normalizeTreeItem, type ViewDecl, type TreeRow } from "./views";
 import { collectEdits, groupByFile, sortForApply, hasOverlap, normalizeAction } from "./workspaceEdit";
 import { createDecoType, applyDecos, disposeAllDecos, type DecoTypeHandle } from "./decoStore";
+import { planFileOps, deletedBy, badPath, type FileOp } from "./fileOps";
 import { setShimDocSource } from "./extHost";
 
 /** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
@@ -82,6 +83,15 @@ export interface ShimDeps {
   readFile: (rel: string) => Promise<string | null>;
   /** 트리 뷰에서 한 줄을 펼쳐 보여 준다. */
   revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
+  /** WorkspaceEdit 의 파일 만들기·지우기·이름 바꾸기. 앱이 모델 정리와 트리 갱신까지
+   *  맡는다 — 셰임이 디스크만 건드리면 열린 버퍼가 실제 파일과 어긋난다. */
+  fileOps?: {
+    exists: (rel: string) => boolean;
+    isDirty: (rel: string) => boolean;
+    create: (rel: string, content: string, overwrite: boolean) => Promise<boolean>;
+    remove: (rel: string) => Promise<boolean>;
+    rename: (from: string, to: string, overwrite: boolean) => Promise<boolean>;
+  };
 }
 
 const disposables: monaco.IDisposable[] = [];
@@ -122,6 +132,22 @@ class CompletionItem { label: any; kind?: number; detail?: string; documentation
 class Hover { contents: any[]; range?: Range; constructor(contents: any, range?: Range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } }
 class ThemeIcon { constructor(public id: string) {} }
 class ThemeColor { constructor(public id: string) {} }
+/** WorkspaceEdit 이 적어 두는 파일 조작 — 아직 상대 경로로 풀기 전이다. */
+interface RawFileOp {
+  kind: "create" | "delete" | "rename";
+  uri: any; toUri?: any;
+  overwrite?: boolean; ignoreIfExists?: boolean; ignoreIfNotExists?: boolean;
+  contents?: any;
+}
+
+/** createFile 의 contents 는 Uint8Array 로 온다. 없으면 빈 파일이고, 확장은 보통
+ *  그 뒤에 편집으로 채운다. */
+function decodeContents(v: any): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return new TextDecoder().decode(v); } catch { return ""; }
+}
+
 /** 확장이 편집을 모아 담는 그릇. 이게 없어서 `new vscode.WorkspaceEdit()` 가 첫 줄에서
  *  죽었고, 편집을 담은 코드 액션은 확장이 만들 수조차 없었다. */
 class WorkspaceEdit {
@@ -147,11 +173,21 @@ class WorkspaceEdit {
     }
     return [...by.values()].map(v => [v.uri, v.list] as [any, any[]]);
   }
-  // 파일 만들기·지우기·이름 바꾸기는 아직 안 한다. 조용히 넘기면 확장은 파일이
-  // 생긴 줄 알고 다음 단계로 간다.
-  createFile() { throw new Error("WorkspaceEdit.createFile 미지원"); }
-  deleteFile() { throw new Error("WorkspaceEdit.deleteFile 미지원"); }
-  renameFile() { throw new Error("WorkspaceEdit.renameFile 미지원"); }
+  /** 파일 조작. 적어만 두고 실제 실행은 applyEdit 이 한다 — 무엇을 할지 다 모은 뒤에
+   *  판단해야 "하나라도 못 하면 아무것도 안 한다" 를 지킬 수 있다.
+   *
+   *  여기서는 uri 를 그대로 들고 있는다. 워크스페이스 루트를 아는 것은 applyEdit 쪽이라
+   *  상대 경로로 바꾸는 것도 거기서 한다. */
+  _ops: RawFileOp[] = [];
+  createFile(uri: any, options?: any, _meta?: any) {
+    this._ops.push({ kind: "create", uri, overwrite: !!options?.overwrite, ignoreIfExists: !!options?.ignoreIfExists, contents: options?.contents });
+  }
+  deleteFile(uri: any, options?: any, _meta?: any) {
+    this._ops.push({ kind: "delete", uri, ignoreIfNotExists: !!options?.ignoreIfNotExists });
+  }
+  renameFile(from: any, to: any, options?: any, _meta?: any) {
+    this._ops.push({ kind: "rename", uri: from, toUri: to, overwrite: !!options?.overwrite, ignoreIfNotExists: !!options?.ignoreIfNotExists });
+  }
 }
 class CodeAction {
   edit?: any; command?: any; diagnostics?: any[]; isPreferred?: boolean;
@@ -232,32 +268,108 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
    *
    *  모델을 거치므로 Ctrl+Z 로 되돌릴 수 있고, 저장 기준선도 어긋나지 않는다.
    *  안 열린 파일은 손대지 않는다 — 디스크에 직접 쓰면 되돌릴 방법이 없다. */
-  /** WorkspaceEdit 의 uri 로 모델을 찾는다.
+  /** 편집 그룹의 키(uri 문자열)에서 상대 경로를 뽑는다.
    *
-   *  `uri.toString()` 은 퍼센트 인코딩된 `file:///c%3A/…` 라, 루트 문자열을 떼는 방식으론
-   *  절대 안 맞는다. 모델 색인이 uri 문자열 그대로를 들고 있으므로 그쪽에 먼저 물어보고,
-   *  안 되면 경로로 떼 본다. */
-  const modelForUri = (uriKey: string): monaco.editor.ITextModel | null => {
+   *  키는 `uri.toString()` 이라 퍼센트 인코딩돼 있다(`file:///c%3A/...`). 그대로
+   *  relOf 에 넣으면 루트와 안 맞아 빈손으로 온다 — 아직 만들어지지 않은 파일은
+   *  모델로도 찾을 수 없어서, 그 둘이 겹치면 "만들고 나서 편집" 이 통째로 거절됐다. */
+  const relForKey = (uriKey: string): string | null => {
     const byUri = projectModels.relFor(uriKey);
-    if (byUri) return projectModels.getByRel(byUri);
-    const rel = relOf(uriKey);
+    if (byUri) return byUri;
+    // `file:///c%3A/...` 를 먼저 사람 경로로 되돌린다. 그냥 relOf 에 넣으면 루트와
+    // 안 맞는데, stripRoot 는 안 맞을 때 **받은 문자열을 그대로 돌려준다** — 그래서
+    // null 이 아니라 uri 문자열이 상대 경로 행세를 했고, 아직 없는 파일을 만들려던
+    // 편집이 "모델을 못 찾았다" 로 접혔다.
+    let raw = String(uriKey || "");
+    if (/^file:\/\//i.test(raw)) {
+      try { raw = decodeURIComponent(raw.replace(/^file:\/\/\/?/i, "")); } catch { /* 망가진 인코딩 */ }
+    }
+    const rel = relOf(raw);
+    // stripRoot 가 손대지 못한 값(루트 밖·uri 그대로)은 상대 경로가 아니다.
+    if (!rel || badPath(rel)) return null;
+    return rel;
+  };
+
+  const modelForUri = (uriKey: string): monaco.editor.ITextModel | null => {
+    const rel = relForKey(uriKey);
     return rel ? projectModels.getByRel(rel) : null;
   };
 
-  const applyWorkspaceEdit = (we: any): boolean => {
-    const files = groupByFile(collectEdits(we));
-    if (!files.length) return false;
-    const jobs: { model: monaco.editor.ITextModel; edits: { range: any; text: string }[] }[] = [];
-    for (const f of files) {
-      const model = modelForUri(f.key);
-      // 하나라도 못 쓰면 아무것도 안 쓴다. 반만 적용된 편집은 확장도 사용자도
-      // 되돌릴 수 없는 상태를 만든다.
-      if (!model || model.isDisposed()) return false;
-      if (hasOverlap(f.edits)) return false;
-      jobs.push({ model, edits: sortForApply(f.edits) });
+  const applyWorkspaceEdit = async (we: any): Promise<boolean> => {
+    // ── 1. 파일 조작을 먼저 확정한다 ──
+    // 텍스트 편집과 달리 되돌릴 수 없으므로, 무엇을 할지 전부 정한 뒤에 손을 댄다.
+    const raw: RawFileOp[] = Array.isArray(we?._ops) ? we._ops : [];
+    const fileOps: FileOp[] = [];
+    for (const r of raw) {
+      const rel = relOf(r.uri);
+      const to = r.toUri ? relOf(r.toUri) : undefined;
+      // 워크스페이스 밖이면 relOf 가 빈손으로 온다. planFileOps 가 거절하도록 그대로 넘긴다.
+      fileOps.push({
+        kind: r.kind, rel: rel ?? String(r.uri?.toString?.() ?? r.uri ?? ""),
+        ...(r.kind === "rename" ? { to: to ?? String(r.toUri?.toString?.() ?? r.toUri ?? "") } : {}),
+        overwrite: r.overwrite, ignoreIfExists: r.ignoreIfExists, ignoreIfNotExists: r.ignoreIfNotExists,
+        ...(r.kind === "create" ? { content: decodeContents(r.contents) } : {}),
+      });
     }
-    for (const j of jobs) {
-      j.model.pushEditOperations([], j.edits.map(e => ({ range: e.range, text: e.text })), () => null);
+
+    const files = groupByFile(collectEdits(we));
+    if (!files.length && !fileOps.length) return false;
+
+    let plan: FileOp[] = [];
+    if (fileOps.length) {
+      if (!deps.fileOps) return false;   // 앱이 통로를 안 준 경우(브라우저 프리뷰 등)
+      const decided = planFileOps(fileOps, {
+        exists: rel => deps.fileOps!.exists(rel),
+        isDirty: rel => deps.fileOps!.isDirty(rel),
+      });
+      // 못 하겠으면 텍스트 편집도 손대지 않는다 — 반만 적용된 리팩터가 제일 나쁘다.
+      if (decided.ok !== true) { deps.toast("error", t("exth.fileOpRefused", { why: decided.reason })); return false; }
+      plan = decided.ops;
+    }
+
+    // ── 2. 텍스트 편집을 검사한다 ──
+    // 이 판에서 사라질 파일에 걸린 편집은 버린다(지워질 파일을 고칠 이유가 없다).
+    // 이 판에서 새로 만들어질 파일은 아직 모델이 없으므로 파일 조작 뒤에 다시 찾는다.
+    const gone = deletedBy(plan);
+    const willCreate = new Set(plan.filter(o => o.kind === "create").map(o => o.rel));
+    const renamedTo = new Map(plan.filter(o => o.kind === "rename").map(o => [o.rel, o.to as string]));
+    const pending: { key: string; edits: { range: any; text: string }[] }[] = [];
+    for (const f of files) {
+      const rel = relForKey(f.key);
+      if (rel && gone.has(rel)) continue;
+      if (hasOverlap(f.edits)) return false;
+      const fresh = rel && (willCreate.has(rel) || renamedTo.has(rel));
+      if (!fresh) {
+        const model = modelForUri(f.key);
+        if (!model || model.isDisposed()) return false;
+      }
+      pending.push({ key: f.key, edits: sortForApply(f.edits) });
+    }
+
+    // ── 3. 실행 ──
+    for (const op of plan) {
+      let ok = false;
+      try {
+        if (op.kind === "create") ok = await deps.fileOps!.create(op.rel, op.content ?? "", !!op.overwrite);
+        else if (op.kind === "delete") ok = await deps.fileOps!.remove(op.rel);
+        else ok = await deps.fileOps!.rename(op.rel, op.to as string, !!op.overwrite);
+      } catch { ok = false; }
+      // 여기서 실패하면 앞의 것은 이미 벌어진 뒤다. 되돌릴 수는 없으니 어디까지
+      // 됐는지 말하고 멈춘다 — 조용히 성공으로 답하는 것보다 낫다.
+      if (!ok) { deps.toast("error", t("exth.fileOpFailed", { rel: op.kind === "rename" ? op.rel + " → " + op.to : op.rel })); return false; }
+    }
+
+    const root = deps.workspaceRoot();
+    for (const p of pending) {
+      let model = modelForUri(p.key);
+      if ((!model || model.isDisposed()) && root) {
+        // 방금 만든 파일은 아직 모델이 없다. 여기서 세워 두면 편집이 모델을 거치므로
+        // Ctrl+Z 로 되돌릴 수 있고, 저장 기준선도 어긋나지 않는다.
+        const rel = relForKey(p.key);
+        if (rel) { try { model = projectModels.ensure(root, rel, ""); } catch { model = null; } }
+      }
+      if (!model || model.isDisposed()) continue;
+      model.pushEditOperations([], p.edits.map(e => ({ range: e.range, text: e.text })), () => null);
     }
     return true;
   };
@@ -738,7 +850,7 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
     },
     /** 확장이 직접 편집을 적용한다. 예전엔 이 함수 자체가 없어서, WorkspaceEdit 를
      *  만들 수 있었더라도 쓸 데가 없었다. */
-    applyEdit: (we: any) => Promise.resolve(applyWorkspaceEdit(we)),
+    applyEdit: (we: any) => applyWorkspaceEdit(we),
     openTextDocument: async (arg?: any) => {
       const rel = relOf(arg);
       if (!rel) throw new Error("openTextDocument: 경로가 필요합니다");

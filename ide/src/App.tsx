@@ -1067,20 +1067,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
     try {
       await window.schutz.renameEntry(ws.root, rel, relTo);
       if (isMove(rel, relTo)) this.toast("ok", t("move.moved", { to: relTo }));
-      const remap = (p: string) => p === rel ? relTo : p.startsWith(rel + "/") ? relTo + p.slice(rel.length) : p;
       projectModels.rekeyUnder(ws.root, rel, relTo); // 하위 모델을 새 경로로 재생성(미저장 버퍼·dirty 보존, 옛 경로 잔존 없음)
       await this.refreshWorkspace();
-      this.setState(s => {
-        const collapsed: Record<string, boolean> = {};
-        for (const [k, v] of Object.entries(s.collapsed)) collapsed[remap(k)] = v; // 접힘 상태 이동
-        const paneDirty: Record<string, boolean> = {};
-        for (const [k, v] of Object.entries(s.paneDirty)) paneDirty[remap(k)] = v; // dirty 도 새 경로로 이동(버퍼 보존됨)
-        return {
-          tabs: s.tabs.map(t => t.map(remap)),
-          active: s.active.map(remap),
-          collapsed, paneDirty,
-        };
-      });
+      this.remapPath(rel, relTo);
     } catch (e) { this.toast("error", t("sc1.rename_failed") + (e instanceof Error ? e.message : String(e))); }
   }
 
@@ -1146,16 +1135,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       // 휴지통이 안 되는 환경에선 영구 삭제됐다는 사실을 반드시 알린다 — 되돌릴 방법이 없다
       if (del && del.trashed === false) this.toast("info", t("sc1.deleted_permanently", { rel }));
       await this.refreshWorkspace();
-      const gone = (p: string) => p !== rel && !p.startsWith(rel + "/");
-      this.setState(s => {
-        const tabs = s.tabs.map(t => t.filter(gone));
-        const active = s.active.map((a, i) => (gone(a) ? a : (tabs[i][tabs[i].length - 1] ?? "")));
-        const collapsed: Record<string, boolean> = {};
-        for (const [k, v] of Object.entries(s.collapsed)) if (gone(k)) collapsed[k] = v; // 삭제 경로 접힘키 제거
-        const paneDirty: Record<string, boolean> = {};
-        for (const [k, v] of Object.entries(s.paneDirty)) if (gone(k)) paneDirty[k] = v;
-        return { tabs, active, collapsed, paneDirty };
-      });
+      this.forgetPath(rel);
     } catch (e) { this.toast("error", t("sc1.delete_failed") + (e instanceof Error ? e.message : String(e))); }
   }
 
@@ -4564,6 +4544,33 @@ ${(r.output || "").slice(0, 2000)}`;
     } catch { if (!stale()) this.setState({ git: null }); }
   }
 
+  /** 지워진 경로(와 그 하위)를 탭·접힘·dirty 표시에서 걷어낸다.
+   *  트리 삭제와 확장의 WorkspaceEdit 이 같은 정리를 해야 해서 여기로 모았다. */
+  private forgetPath(rel: string) {
+    const gone = (p: string) => p !== rel && !p.startsWith(rel + "/");
+    this.setState(s => {
+      const tabs = s.tabs.map(t => t.filter(gone));
+      const active = s.active.map((a, i) => (gone(a) ? a : (tabs[i][tabs[i].length - 1] ?? "")));
+      const collapsed: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(s.collapsed)) if (gone(k)) collapsed[k] = v;
+      const paneDirty: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(s.paneDirty)) if (gone(k)) paneDirty[k] = v;
+      return { tabs, active, collapsed, paneDirty };
+    });
+  }
+
+  /** 옮겨진 경로(와 그 하위)를 탭·접힘·dirty 표시에서 새 이름으로 따라가게 한다. */
+  private remapPath(rel: string, relTo: string) {
+    const remap = (p: string) => p === rel ? relTo : p.startsWith(rel + "/") ? relTo + p.slice(rel.length) : p;
+    this.setState(s => {
+      const collapsed: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(s.collapsed)) collapsed[remap(k)] = v;
+      const paneDirty: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(s.paneDirty)) paneDirty[remap(k)] = v;
+      return { tabs: s.tabs.map(t => t.map(remap)), active: s.active.map(remap), collapsed, paneDirty };
+    });
+  }
+
   /** 브랜치 전환 */
   async gitCheckout(branch: string) {
     if (this.anyDirty()) { this.toast("error", t("sc3.unsavedChanges")); return; }
@@ -5671,6 +5678,60 @@ ${(r.output || "").slice(0, 2000)}`;
         try { return await window.schutz.readFile(ws.root, rel); } catch { return null; }
       },
       revealInView: (viewId, element, expand) => this.revealExtViewRow(viewId, element, expand),
+      // 확장의 WorkspaceEdit 파일 조작. 디스크만 건드리면 열린 버퍼가 실제 파일과
+      // 어긋나므로 모델 정리·트리 갱신까지 여기서 함께 한다.
+      fileOps: {
+        exists: rel => !!this.state.workspace?.entries.some(e => !e.dir && e.rel === rel),
+        isDirty: rel => this.isDirtyRel(rel),
+        create: async (rel, content, overwrite) => {
+          const ws = this.state.workspace;
+          if (!ws || !window.schutz) return false;
+          try {
+            await window.schutz.writeFile(ws.root, rel, content);
+            // 이미 열려 있던 파일을 덮어썼으면 모델도 새 내용으로 맞춘다.
+            if (overwrite) projectModels.reload(ws.root, rel, content, false);
+            await this.refreshWorkspace();
+            // 탭으로 연다. 확장은 보통 파일을 만든 뒤 편집으로 채우는데, 그 편집은
+            // vscode 와 마찬가지로 **버퍼에만** 들어간다(저장은 따로다). 탭이 없으면
+            // 저장 안 한 내용이 어디에도 안 보이는 채로 남는다 — 만든 줄도 모른다.
+            this.openFile(rel);
+            return true;
+          } catch { return false; }
+        },
+        remove: async rel => {
+          const ws = this.state.workspace;
+          if (!ws || !window.schutz) return false;
+          try {
+            const r = await window.schutz.deleteEntry(ws.root, rel);
+            if (!r?.ok) return false;
+            // 미저장 편집은 planFileOps 가 이미 막았으므로 여기서 버려도 잃을 것이 없다.
+            projectModels.dropUnder(ws.root, rel);
+            this.forgetPath(rel);
+            await this.refreshWorkspace();
+            return true;
+          } catch { return false; }
+        },
+        rename: async (from, to, overwrite) => {
+          const ws = this.state.workspace;
+          if (!ws || !window.schutz) return false;
+          try {
+            // 덮어쓰기면 목적지를 먼저 치운다 — renameEntry 는 조용한 파괴를 막으려고
+            // 이미 있는 이름을 거부한다.
+            if (overwrite && this.state.workspace?.entries.some(e => !e.dir && e.rel === to)) {
+              const d = await window.schutz.deleteEntry(ws.root, to);
+              if (!d?.ok) return false;
+              projectModels.dropUnder(ws.root, to);
+              this.forgetPath(to);
+            }
+            await window.schutz.renameEntry(ws.root, from, to);
+            // 열린 버퍼와 dirty 를 새 경로로 옮긴다 — drop 하면 미저장 편집이 사라진다.
+            projectModels.rekeyUnder(ws.root, from, to);
+            this.remapPath(from, to);
+            await this.refreshWorkspace();
+            return true;
+          } catch { return false; }
+        },
+      },
       postToView: (viewId, msg) => {
         const f = this._viewFrames.get(viewId);
         try { f?.contentWindow?.postMessage({ __schutzToView: true, data: msg }, "*"); } catch { /* 사라진 프레임 */ }
