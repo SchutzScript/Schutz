@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+## [0.3.0] — What it could not see, and what it could lose
+
+Two things ran through this release. The app was losing work it had promised to keep, and it was answering questions about files it had never actually looked at. Both failed the same way: quietly, with a successful-looking answer.
+
+On top of that, three new things: it talks to more models, extensions can do considerably more, and a proposal now appears in the code rather than only on a card.
+
+### Your unsaved work stops disappearing
+
+Every one of these was reproduced in the running app before it was fixed, and each is a place where edits vanished with no warning and no undo.
+
+- **Files deleted or renamed outside the app** took your unsaved buffer with them. They are kept now, and you are told they are orphaned so you can decide.
+- **Quitting** with unsaved files did nothing visible: `beforeunload` cancels `app.quit()` in Electron with no dialog at all. There is now a real prompt with save / discard / cancel — and "save" that does not finish does not quit.
+- **Switching projects** dropped unsaved edits without asking.
+- **Discarding in git** only half-discarded, and the delete confirmation promised something it did not do.
+- **Undo of an agent run** reloaded every open model from disk, including files the run never touched — while the screen said unsaved edits would be left alone.
+
+### Files it could not see
+
+- **Anything nested deeper than 8 levels was invisible** to the tree, to search, and to replace — all three walked with the same cap. `packages/app/src/features/x/components/y/z.ts` is already 8. The limit is 16 now.
+- **Dot-directories were hidden wholesale.** `.vscode/settings.json`, `.claude/agents/*.md` and friends appeared in no listing and matched no search; `.github` had been carved out as a special case, which was the tell. What is hidden is now decided in one place.
+- **Neither the tree nor search said when it had stopped early**, so "no results" and "never looked" arrived as the same answer. Both now say which it was — including to the agent, which had been told nothing at all.
+
+### Files it could destroy
+
+- **Opening a non-UTF-8 file corrupted it.** Everything was decoded as UTF-8, so a UTF-16 file grew from 16 to 20 bytes on open-and-save alone, and a CP949 Korean file turned to replacement characters the moment you edited one line. Such files are now refused, with an explanation.
+- **Replace-across-files did the same thing**, on files you never opened — and reported success. Non-UTF-8 files are skipped and named.
+- **A UTF-8 BOM was stripped by opening the file.** Monaco keeps the BOM outside the model, so the baseline never matched and "save all" rewrote untouched files.
+
+### More models
+
+Gemini, and any OpenAI-compatible server you point it at — Ollama, LM Studio, llama.cpp, or a corporate proxy. The address is a setting rather than a constant, a local server is not treated as unconfigured just because it has no API key, and its model list is read from the server, since only the server knows what you have pulled.
+
+### Extensions
+
+- **Decorations draw.** `createTextEditorDecorationType` used to return a working-looking handle that drew nothing — the last place in the shim that answered successfully and did nothing.
+- **`onDidChangeActiveTextEditor` handed over the wrong editor.** It fired before the editor existed and the notification was dropped on the way out, so opening a file delivered either nothing or the *previous* file's editor. Extensions that draw on editor changes were drawing onto whatever was open before.
+- **`WorkspaceEdit` can create, delete and rename files.** All-or-nothing: if one operation cannot be done, none are. A file with unsaved edits is neither deleted nor overwritten.
+- **`env.openExternal` and `env.clipboard` do their jobs** instead of reporting success and doing nothing.
+
+### Proposals in the code
+
+A pending proposal is marked on the line it changes; hovering shows why. Accept and reject are CodeLens on that line, not only buttons on the card. While an edit types itself in, a ghost caret shows the exact character being written.
+
+This completes the four editing-visualization pillars. The original plan for that phase was to fork Code-OSS; the fork never happened and should not, since this app has had its own renderer from the start. [docs/PHASE2-SURVEY.md](docs/PHASE2-SURVEY.md) audits the pillars against the code.
+
+### Also
+
+- The app survives a main-process crash instead of vanishing, and writes a crash log.
+- Async failures that used to disappear are surfaced.
+- The tour teaches both modes rather than only the one you are in.
+- Shell commands run only in the open workspace.
+- MCP resources and prompts are offered to the agent, not just listed.
+
+
 ## [0.2.0] — Everything the extension host said it could do
 
 The previous release fixed behaviour the app claimed to have. This one does the same thing one layer out: an extension could load, report success, and then do nothing at all, because most of what it asked for was answered by a function that returned an empty value.
