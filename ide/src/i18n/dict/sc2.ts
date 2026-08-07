@@ -42,6 +42,7 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "sc2.noteCount": { ko: "{n}개", en: "{n} items", de: "{n} Einträge", ja: "{n}件" },
   "sc2.verbRead": { ko: "읽기", en: "Read", de: "Lesen", ja: "読み取り" },
   "sc2.verbSearch": { ko: "검색", en: "Search", de: "Suche", ja: "検索" },
+  "sc2.verbSymbol": { ko: "심볼 찾기", en: "Find symbol", de: "Symbol suchen", ja: "シンボル検索" },
   "sc2.verbPlan": { ko: "계획", en: "Plan", de: "Plan", ja: "計画" },
   "sc2.noteSteps": { ko: "{n}단계", en: "{n} steps", de: "{n} Schritte", ja: "{n}ステップ" },
   "sc2.noteHits": { ko: "{n}곳", en: "{n} hits", de: "{n} Treffer", ja: "{n}件" },

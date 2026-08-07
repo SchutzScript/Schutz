@@ -23,6 +23,9 @@ function uriFor(root: string, rel: string): monaco.Uri {
   return monaco.Uri.file(base + "/" + rel);
 }
 
+/** 지금 열린 워크스페이스 루트. 모델이 없는 uri 를 상대 경로로 뗄 때 필요하다. */
+export function currentRootPath(): string | null { return currentRoot; }
+
 export function relFor(uriString: string): string | null {
   if (!currentRoot) return null;
   for (const [rel, u] of relIndex) if (u === uriString) return rel;
