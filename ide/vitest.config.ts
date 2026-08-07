@@ -19,7 +19,7 @@ export default defineConfig({
       "src/engine/**/*.test.ts",
       "src/gameEngine/**/*.test.ts",
       "src/review/**/*.test.ts",
-      "src/ai/retry.test.ts",
+      "src/ai/retry.test.ts", "src/ai/endpoint.test.ts",
       "src/keymap.test.ts",
       "src/overlays.test.ts",
       "src/ext/hooks.test.ts", "src/ext/prompt.test.ts", "src/ext/shimLang.test.ts", "src/ext/config.test.ts", "src/ext/statusBar.test.ts", "src/ext/fsWatch.test.ts", "src/ext/views.test.ts", "src/ext/workspaceEdit.test.ts", "src/ext/decorations.test.ts", "src/ext/fileOps.test.ts", "src/mcp/mcpExtras.test.ts",

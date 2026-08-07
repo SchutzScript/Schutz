@@ -1,6 +1,6 @@
 import { AgentProvider } from "./provider";
 import { ClaudeProvider } from "./claude";
-import { GPT_PROVIDER, GROK_PROVIDER, GLM_PROVIDER } from "./openaiCompat";
+import { GPT_PROVIDER, GROK_PROVIDER, GLM_PROVIDER, GEMINI_PROVIDER, LOCAL_PROVIDER } from "./openaiCompat";
 import { t } from "../i18n";
 
 /** 앱 전역 프로바이더 레지스트리 */
@@ -9,6 +9,8 @@ export const PROVIDERS_MAP: Record<string, AgentProvider> = {
   gpt: GPT_PROVIDER,
   grok: GROK_PROVIDER,
   glm: GLM_PROVIDER,
+  gemini: GEMINI_PROVIDER,
+  local: LOCAL_PROVIDER,
 };
 
 /**

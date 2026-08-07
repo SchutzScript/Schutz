@@ -13,6 +13,13 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
     ja: "応答に失敗しました: {detail}",
   },
   // 도구 인자 JSON 이 깨진 경우 — 조용히 빈 입력으로 넘기면 빈 경로 제안이 만들어진다
+  // 로컬 모델은 키가 아니라 주소가 설정이다 — 없을 때 "API 키" 를 말하면 엉뚱한 데를 찾게 한다.
+  "oai.localNoEndpoint": {
+    ko: "로컬 서버 주소가 설정돼 있지 않습니다. 설정에서 주소를 적어 주세요(예: http://localhost:11434).",
+    en: "No local server address is set. Add one in settings (e.g. http://localhost:11434).",
+    de: "Keine lokale Serveradresse gesetzt. Bitte in den Einstellungen eintragen (z. B. http://localhost:11434).",
+    ja: "ローカルサーバーのアドレスが設定されていません。設定で指定してください（例: http://localhost:11434）。",
+  },
   "oai.badToolArgs": {
     ko: "도구 '{name}' 의 인자를 해석하지 못해 건너뛰었습니다.",
     en: "Skipped tool '{name}' — its arguments could not be parsed.",

@@ -199,6 +199,8 @@ export const MESSAGES: Record<string, Msg> = {
   "settings.apiKeysTitle": { ko: "AI 프로바이더 API 키", en: "AI Provider API Keys", de: "API-Schlüssel der KI-Anbieter", ja: "AIプロバイダー APIキー" },
   "settings.apiKeysOptional": { ko: "(선택 — 구독 인증이 우선)", en: "(optional — subscription auth takes priority)", de: "(optional — Abo-Anmeldung hat Vorrang)", ja: "(任意 — サブスク認証が優先)" },
   "settings.apiKeyPlaceholder": { ko: "API 키 (비우면 미사용)", en: "API key (leave empty to disable)", de: "API-Schlüssel (leer = deaktiviert)", ja: "APIキー(空欄で未使用)" },
+  "settings.endpointPlaceholder": { ko: "서버 주소 (예: http://localhost:11434)", en: "Server address (e.g. http://localhost:11434)", de: "Serveradresse (z. B. http://localhost:11434)", ja: "サーバーアドレス (例: http://localhost:11434)" },
+  "settings.localNote": { ko: "로컬 서버는 API 키가 필요 없습니다. 주소만 맞으면 됩니다.", en: "A local server needs no API key — only the address has to be right.", de: "Ein lokaler Server braucht keinen API-Schlüssel — nur die Adresse muss stimmen.", ja: "ローカルサーバーに APIキーは不要です。アドレスが合っていれば動きます。" },
   "settings.test": { ko: "테스트", en: "Test", de: "Testen", ja: "テスト" },
   "settings.keysNote": { ko: "키는 이 기기(localStorage)에만 저장됩니다. [테스트]는 실제 API를 1회 호출해 연결을 검증합니다.", en: "Keys are stored only on this device (localStorage). [Test] makes one real API call to verify the connection.", de: "Schlüssel werden nur auf diesem Gerät (localStorage) gespeichert. [Test] ruft die API einmal auf, um die Verbindung zu prüfen.", ja: "キーはこの端末(localStorage)にのみ保存されます。[テスト]は実際にAPIを1回呼び出して接続を確認します。" },
   "settings.editor": { ko: "에디터", en: "Editor", de: "Editor", ja: "エディタ" },

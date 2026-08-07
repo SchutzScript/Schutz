@@ -11,5 +11,6 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
   "model.gpt52Mini": { ko: "GPT-5.2 Mini · 저비용", en: "GPT-5.2 Mini · Low cost", de: "GPT-5.2 Mini · Günstig", ja: "GPT-5.2 Mini · 低コスト" },
   "model.grok4": { ko: "Grok 4 (기본)", en: "Grok 4 (default)", de: "Grok 4 (Standard)", ja: "Grok 4 (デフォルト)" },
   "model.glm46": { ko: "GLM-4.6 (기본)", en: "GLM-4.6 (default)", de: "GLM-4.6 (Standard)", ja: "GLM-4.6 (デフォルト)" },
+  "model.gemini3Pro": { ko: "Gemini 3 Pro (기본)", en: "Gemini 3 Pro (default)", de: "Gemini 3 Pro (Standard)", ja: "Gemini 3 Pro (デフォルト)" },
   "model.glm45Air": { ko: "GLM-4.5 Air · 경량", en: "GLM-4.5 Air · Lightweight", de: "GLM-4.5 Air · Leichtgewicht", ja: "GLM-4.5 Air · 軽量" },
 };

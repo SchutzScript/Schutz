@@ -15,6 +15,8 @@ export const AGDEF: AgentDef[] = [
   { id: "gpt", name: "GPT", model: "5.2", mgr: false, color: "#8FA8C0" },
   { id: "grok", name: "Grok", model: "4.1", mgr: false, color: "#C4A882" },
   { id: "glm", name: "GLM", model: "4.6", mgr: false, color: "#A99BC0" },
+  { id: "gemini", name: "Gemini", model: "3 Pro", mgr: false, color: "#9FB8C8" },
+  { id: "local", name: "Local", model: "직접 지정", mgr: false, color: "#A8A8A0" },
 ];
 
 export interface AgentState {
