@@ -13,6 +13,13 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
     ja: "応答に失敗しました: {detail}",
   },
   // 도구 인자 JSON 이 깨진 경우 — 조용히 빈 입력으로 넘기면 빈 경로 제안이 만들어진다
+  // 도구를 못 쓰는 모델이면 에이전트가 말만 하고 끝난다 — 앱이 고장 난 것처럼 보인다.
+  "oai.noToolCalls": {
+    ko: "{agent} 이(가) 도구를 한 번도 쓰지 않았습니다. 이 모델은 도구 호출(tool use)을 지원하지 않을 수 있습니다 — 그러면 파일을 고치지 못하고 말로만 답합니다.",
+    en: "{agent} has not used a tool once. This model may not support tool calling — if so it can only talk, not change files.",
+    de: "{agent} hat kein einziges Werkzeug benutzt. Dieses Modell unterstützt möglicherweise keine Tool-Aufrufe — dann kann es nur reden, keine Dateien ändern.",
+    ja: "{agent} が一度もツールを使いませんでした。このモデルはツール呼び出しに対応していない可能性があります — その場合、ファイルは変更できず会話だけになります。",
+  },
   // 로컬 모델은 키가 아니라 주소가 설정이다 — 없을 때 "API 키" 를 말하면 엉뚱한 데를 찾게 한다.
   "oai.localNoEndpoint": {
     ko: "로컬 서버 주소가 설정돼 있지 않습니다. 설정에서 주소를 적어 주세요(예: http://localhost:11434).",

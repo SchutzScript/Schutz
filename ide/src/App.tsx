@@ -14,6 +14,7 @@ import {
 } from "./ai/claude";
 import { PROVIDERS_MAP, testProvider, getManagerId, setManagerId } from "./ai/registry";
 import { LOCAL_PROVIDER } from "./ai/openaiCompat";
+import { freshState as freshToolSupport, observe as observeToolSupport, type ToolSupportState } from "./ai/toolSupport";
 import { CLAUDE_MODELS, CODEX_MODELS, OPENAI_MODELS, GROK_MODELS, GLM_MODELS, GEMINI_MODELS, ModelOpt } from "./ai/models";
 import { Message, ToolCall, ToolDef, NeutralMsg, AgentProvider, getStoredKey, setStoredKey, getOAuth, setOAuth, freshOAuth, getModelOverride, setModelOverride, getEndpoint, setEndpoint } from "./ai/provider";
 import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
@@ -3763,6 +3764,10 @@ ${(r.output || "").slice(0, 2000)}`;
         }
         finalText = turnText || finalText;
 
+        // 이 모델이 도구를 쓸 줄 아는지 관찰한다. 못 쓰는 모델(작은 로컬 모델이 그렇다)은
+        // 말만 하고 끝나서 앱이 고장 난 것처럼 보인다 — 그럴 때 한 번 알려 준다.
+        this.observeToolUse(agentId, !!tools?.length, calls.length);
+
         if (stopReason !== "tool_use" || calls.length === 0) break;
 
         transcript.push({ role: "assistant", text: turnText || undefined, calls });
@@ -4975,6 +4980,17 @@ ${(r.output || "").slice(0, 2000)}`;
         .filter(p => p.status === "pending" && !this.parseDiffKey(p.rel))
         .map(p => ({ id: p.id, rel: p.rel, find: p.find, rationale: p.rationale, agent: p.agent, range: p.range ?? null })),
     );
+  }
+
+  /** 프로바이더별 도구 사용 관찰. 세션 동안만 들고 있으면 된다 — 모델을 바꾸면
+   *  새로 보는 것이 맞다. */
+  private _toolSupport = new Map<string, ToolSupportState>();
+
+  private observeToolUse(agentId: string, sentTools: boolean, toolCalls: number) {
+    const prev = this._toolSupport.get(agentId) ?? freshToolSupport();
+    const { next, tell } = observeToolSupport(prev, { sentTools, toolCalls });
+    this._toolSupport.set(agentId, next);
+    if (tell) this.toast("info", t("oai.noToolCalls", { agent: this.agDef(agentId).name }));
   }
 
   componentDidMount() {
