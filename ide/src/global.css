@@ -100,6 +100,30 @@ button:disabled { opacity: .55; cursor: default !important; }
    .sz-ai-typing 은 지금 쓰고 있는 줄, .sz-ai-changed 는 다 쓴 뒤 잠깐 남는 잔광. */
 .sz-ai-typing { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .sz-ai-changed { background: color-mix(in srgb, var(--accent) 9%, transparent); animation: szAiFade 1.4s var(--ease) both; }
+/* 유령 커서 — AI 가 쓰고 있는 바로 그 자리. 길이 0 데코레이션의 ::before 라
+   글자를 밀지 않도록 폭을 0 으로 두고 테두리로만 그린다. */
+.sz-ai-caret::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  border-left: 2px solid var(--accent);
+  animation: szCaretBlink 1s steps(2, start) infinite;
+}
+@keyframes szCaretBlink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: .25; } }
+/* 모션을 줄이겠다고 한 사람에게 깜빡이는 것을 들이밀지 않는다. */
+@media (prefers-reduced-motion: reduce) {
+  .sz-ai-caret::before { animation: none; }
+}
+
+/* 아직 수락하지 않은 제안이 걸린 자리. 마우스를 올리면 왜 바꾸는지가 뜬다.
+   git 거터(초록/노랑/빨강)와 색이 겹치지 않게 황토색 밑줄로만 표시한다 —
+   이미 적용된 변경과 아직 아닌 제안은 눈에서 갈려야 한다. */
+.sz-prop-pending {
+  border-bottom: 1px dashed rgba(196,168,130,.85);
+  background: color-mix(in srgb, #C4A882 8%, transparent);
+}
 @keyframes szAiFade { from { background-color: color-mix(in srgb, var(--accent) 20%, transparent); } to { background-color: transparent; } }
 
 /* 확장 상세 README */

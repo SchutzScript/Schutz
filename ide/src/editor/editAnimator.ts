@@ -102,10 +102,19 @@ export async function typeEdit(
       const head = posAt(model, startOffset + written);
       if (editor && !editor.getModel()?.isDisposed()) {
         // 쓰고 있는 줄을 강조 — git 거터와 별개 채널
-        decoIds = editor.deltaDecorations(decoIds, [{
-          range: new monaco.Range(head.lineNumber, 1, head.lineNumber, 1),
-          options: { isWholeLine: true, className: "sz-ai-typing", overviewRuler: undefined },
-        }]);
+        decoIds = editor.deltaDecorations(decoIds, [
+          {
+            range: new monaco.Range(head.lineNumber, 1, head.lineNumber, 1),
+            options: { isWholeLine: true, className: "sz-ai-typing", overviewRuler: undefined },
+          },
+          // 유령 커서 — AI 가 **지금 어느 글자에** 쓰고 있는지. 줄 하이라이트만으로는
+          // 긴 줄에서 눈이 어디를 따라가야 할지 알 수 없다. 길이 0 범위에 붙이는
+          // 가짜 요소라 텍스트를 밀지 않는다.
+          {
+            range: new monaco.Range(head.lineNumber, head.column, head.lineNumber, head.column),
+            options: { beforeContentClassName: "sz-ai-caret" },
+          },
+        ]);
         if (opts.reveal !== false) editor.revealLineInCenterIfOutsideViewport(head.lineNumber, 0 /* Smooth */);
       }
       await delay(tickMs);
