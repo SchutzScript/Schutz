@@ -71,6 +71,7 @@ import monaco, { languageOf, applyTsPaths, revalidateTs } from "./editor/monacoS
 import * as projectModels from "./editor/projectModels";
 import * as proposalDeco from "./editor/proposalDeco";
 import * as symbolIndex from "./editor/symbolIndex";
+import { missingFor as missingLspFor, shouldTell as shouldTellLsp, type ServerRow } from "./engine/lspHint";
 import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
 import * as lspConv from "./editor/lspConverters";
@@ -2502,6 +2503,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   openFile(path: string) {
     extHost.notifyExtensions("file.open", { rel: path });
+    void this.maybeTellMissingServer(path);
     this.navRecord(path);
     this._touchMru(path);
     this._cancelPendingClose(path); // 닫힘 애니 중 재오픈 시 뒤늦은 제거 취소
@@ -5000,6 +5002,27 @@ ${(r.output || "").slice(0, 2000)}`;
         .filter(p => p.status === "pending" && !this.parseDiffKey(p.rel))
         .map(p => ({ id: p.id, rel: p.rel, find: p.find, rationale: p.rationale, agent: p.agent, range: p.range ?? null })),
     );
+  }
+
+  /** 아는 언어 서버 목록(없는 것 포함). 처음 필요할 때 한 번 읽는다. */
+  private _lspCatalog: ServerRow[] | null = null;
+  private _lspTold = new Set<string>();
+
+  /** 이 언어에 서버가 없으면 한 번 알려 준다.
+   *
+   *  없으면 하이라이트만 되고 정의·진단·심볼이 조용히 없다 — 사용자는 앱이 원래
+   *  그런 줄 안다. 언어당 한 번만, 그리고 그 언어 파일을 실제로 열었을 때만 말한다. */
+  private async maybeTellMissingServer(rel: string) {
+    if (!window.schutz?.lspCatalog) return;
+    const lang = languageOf(rel);
+    if (!shouldTellLsp(this._lspTold, lang)) return;
+    if (!this._lspCatalog) {
+      try { this._lspCatalog = await window.schutz.lspCatalog(); } catch { this._lspCatalog = []; }
+    }
+    const row = missingLspFor(this._lspCatalog, lang);
+    if (!row) return;
+    this._lspTold.add(lang);
+    this.toast("info", t("sc3.lspMissing", { lang: row.languageId, cmd: row.command, install: row.install }));
   }
 
   /** 프로바이더별 도구 사용 관찰. 세션 동안만 들고 있으면 된다 — 모델을 바꾸면

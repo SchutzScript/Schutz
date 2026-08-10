@@ -106,6 +106,8 @@ interface SchutzApi {
   git(root: string, action: string, payload?: any): Promise<any>;
   httpGet(url: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number; json?: any; error?: string }>;
   lspLanguages(): Promise<string[]>;
+  /** 아는 언어 서버 전부(설치 안 된 것 포함) — 없는 것을 사용자에게 말하기 위해. */
+  lspCatalog(): Promise<{ languageId: string; command: string; install: string; available: boolean }[]>;
   lspStart(languageId: string, root: string): Promise<{ ok: boolean; serverId?: string; reason?: string }>;
   lspSend(serverId: string, message: any): void;
   lspStop(serverId: string): void;

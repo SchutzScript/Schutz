@@ -1,6 +1,6 @@
 // LSP 서버 호스트 — 언어 서버를 spawn하고 stdio JSON-RPC(Content-Length 프레임)를 렌더러 IPC로 브리지.
 const crypto = require("crypto");
-const { registry } = require("./lspRegistry.cjs");
+const { registry, catalog } = require("./lspRegistry.cjs");
 
 const servers = new Map(); // serverId → { child, buffer, senderId }
 
@@ -31,10 +31,18 @@ function frame(message) {
 }
 
 function init(ipcMain) {
+  // 레지스트리를 미리 지어 둔다. 짓는 데 `where` 를 언어 수만큼 **동기로** 돌리므로
+  // 처음 물어보는 쪽(파일 열기)이 그 값을 다 치른다 — 실측으로 몇 초씩 늦었다.
+  // 앱이 뜬 직후 조용히 해 두면 그 자리가 사라진다.
+  setTimeout(() => { try { registry(); } catch { /* 없으면 없는 대로 */ } }, 0);
+
   ipcMain.handle("schutz:lspLanguages", () => {
     const reg = registry();
     return Object.keys(reg).filter(k => reg[k].available);
   });
+
+  // 설치된 것만이 아니라 **아는 것 전부**를 준다 — 없는 것을 말해 주려면 그것도 알아야 한다.
+  ipcMain.handle("schutz:lspCatalog", () => catalog());
 
   ipcMain.handle("schutz:lspStart", (e, { languageId, root }) => {
     const reg = registry();

@@ -1,5 +1,12 @@
 // sc3 도메인 번역 사전 (App.tsx CLI 턴 / git / 인라인 편집 / 디버그 / 검색 / 확장)
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
+  // 언어 서버가 없으면 하이라이트만 된다 — 조용히 두면 앱이 원래 그런 줄 안다.
+  "sc3.lspMissing": {
+    ko: "{lang} 은(는) 언어 서버가 없어 하이라이트만 됩니다. {cmd} 를 설치하면 정의·진단·심볼이 켜집니다 — {install}",
+    en: "{lang} has no language server, so only highlighting works. Install {cmd} to turn on definitions, diagnostics and symbols — {install}",
+    de: "Für {lang} gibt es keinen Sprachserver — nur Hervorhebung. Mit {cmd} kommen Definitionen, Diagnosen und Symbole — {install}",
+    ja: "{lang} は言語サーバーがないためハイライトのみです。{cmd} を入れると定義・診断・シンボルが有効になります — {install}",
+  },
   "sc3.whoCodex": { ko: "Codex · 구독", en: "Codex · Subscription", de: "Codex · Abo", ja: "Codex · サブスク" },
   "sc3.whoClaude": { ko: "Claude · 구독", en: "Claude · Subscription", de: "Claude · Abo", ja: "Claude · サブスク" },
   "sc3.verbEdit": { ko: "편집", en: "Edit", de: "Bearbeiten", ja: "編集" },
