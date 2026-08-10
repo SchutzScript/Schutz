@@ -135,3 +135,63 @@ export async function findSymbols(query: string, max = 100): Promise<SymbolAnswe
   const ordered = [...hits.filter(h => !isTestPath(h.rel)), ...hits.filter(h => isTestPath(h.rel))];
   return { hits: ordered.slice(0, max), sources, capped: ts.capped };
 }
+
+// ── 참조 찾기 ───────────────────────────────────────────────────────────────
+//
+// "이거 누가 쓰지" 는 심볼 찾기의 반대 방향이고, grep 으로는 답이 안 나온다 — 같은
+// 이름의 다른 것과 주석까지 다 걸리기 때문이다. TS 워커는 getNavigateToItems 와 달리
+// getReferencesAtPosition 을 내준다(실측 확인).
+
+export interface RefHit { rel: string; line: number; column: number }
+
+export interface RefAnswer {
+  /** 어느 정의를 기준으로 찾았나. 못 정하면 null. */
+  at: { rel: string; line: number; name: string } | null;
+  hits: RefHit[];
+  /** 이름이 여러 군데 정의돼 있어 고를 수 없었다 — 어디를 뜻하는지 되물어야 한다. */
+  ambiguous: { rel: string; line: number }[];
+  /** 심볼 색인 자체가 없다. */
+  noIndex: boolean;
+}
+
+/** 이름으로 정의를 찾고, 그 자리에서 참조를 묻는다. */
+export async function findReferences(name: string, inFile?: string): Promise<RefAnswer> {
+  const q = String(name ?? "").trim();
+  if (!q) return { at: null, hits: [], ambiguous: [], noIndex: false };
+
+  const found = await findSymbols(q, 50);
+  if (!found.sources.length) return { at: null, hits: [], ambiguous: [], noIndex: true };
+
+  // 이름이 정확히 같은 것만 남긴다. 부분 일치까지 세면 엉뚱한 것을 기준으로 잡는다.
+  let exact = found.hits.filter(h => h.name === q);
+  if (inFile) exact = exact.filter(h => h.rel === inFile || h.rel.endsWith("/" + inFile));
+  if (!exact.length) return { at: null, hits: [], ambiguous: [], noIndex: false };
+  if (exact.length > 1) {
+    return { at: null, hits: [], ambiguous: exact.map(h => ({ rel: h.rel, line: h.line })), noIndex: false };
+  }
+
+  const def = exact[0]!;
+  const model = projectModels.getByRel(def.rel);
+  if (!model || model.isDisposed()) return { at: null, hits: [], ambiguous: [], noIndex: false };
+
+  const ts: any = (monaco.languages as any).typescript;
+  if (!ts?.getTypeScriptWorker) return { at: { rel: def.rel, line: def.line, name: def.name }, hits: [], ambiguous: [], noIndex: false };
+
+  const offset = model.getOffsetAt({ lineNumber: def.line, column: def.column });
+  const hits: RefHit[] = [];
+  try {
+    const getWorker = await ts.getTypeScriptWorker();
+    const client = await getWorker(model.uri);
+    const refs: any[] = await client.getReferencesAtPosition(model.uri.toString(), offset);
+    for (const r of refs ?? []) {
+      const rel = projectModels.relFor(String(r?.fileName ?? ""));
+      if (!rel) continue;
+      const m = projectModels.getByRel(rel);
+      if (!m || m.isDisposed()) continue;
+      const pos = m.getPositionAt(Number(r?.textSpan?.start ?? 0));
+      hits.push({ rel, line: pos.lineNumber, column: pos.column });
+    }
+  } catch { /* 워커가 아직 모르는 파일 */ }
+
+  return { at: { rel: def.rel, line: def.line, name: def.name }, hits, ambiguous: [], noIndex: false };
+}

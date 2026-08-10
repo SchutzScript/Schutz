@@ -83,6 +83,8 @@ export interface ShimDeps {
   readFile: (rel: string) => Promise<string | null>;
   /** 트리 뷰에서 한 줄을 펼쳐 보여 준다. */
   revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
+  /** 확장이 중단점을 더하거나 뺀다. 앱이 실제 목록을 들고 있다. */
+  debugBreakpoints?: (op: "add" | "remove", bps: any[]) => void;
   /** WorkspaceEdit 의 파일 만들기·지우기·이름 바꾸기. 앱이 모델 정리와 트리 갱신까지
    *  맡는다 — 셰임이 디스크만 건드리면 열린 버퍼가 실제 파일과 어긋난다. */
   fileOps?: {
@@ -227,6 +229,30 @@ function langIdsFromSelector(sel: any): string[] {
 /** vscode 모듈 셰임 인스턴스 생성 — 확장별로 만든다(구독/컨텍스트 격리). */
 /** 셰임이 쏘는 편집기 사건들. 앱이 fireShimEvent 로 밀어 준다 — 예전엔 전부 아무도
  *  안 쏘는 빈 EventEmitter 라, 저장·열기를 구독한 확장은 영원히 안 불렸다. */
+/** 디버그 사건. 앱이 세션을 열고 닫을 때, 브레이크포인트가 움직일 때 쏜다.
+ *  확장이 "지금 디버그 중인가" 를 알 통로가 아예 없었다. */
+export const debugEvents = {
+  sessionStarted: new EventEmitter<any>(),
+  sessionEnded: new EventEmitter<any>(),
+  activeChanged: new EventEmitter<any>(),
+  breakpointsChanged: new EventEmitter<any>(),
+};
+
+/** 지금 디버그 상태 — 앱이 갱신하고 셰임이 읽는다. */
+let debugState: { active: any | null; breakpoints: any[] } = { active: null, breakpoints: [] };
+
+/** 앱이 디버그 상태를 알린다. 세션이 뜨고 지는 것과 중단점 목록. */
+export function setDebugState(next: { active: any | null; breakpoints: any[] }): void {
+  const wasActive = debugState.active;
+  const prevBps = debugState.breakpoints;
+  debugState = next;
+  if (!wasActive && next.active) { debugEvents.sessionStarted.fire(next.active); debugEvents.activeChanged.fire(next.active); }
+  else if (wasActive && !next.active) { debugEvents.sessionEnded.fire(wasActive); debugEvents.activeChanged.fire(undefined); }
+  if (prevBps.length !== next.breakpoints.length) {
+    debugEvents.breakpointsChanged.fire({ added: next.breakpoints, removed: [], changed: [] });
+  }
+}
+
 export const editorEvents = {
   activeChanged: new EventEmitter<any>(),
   selectionChanged: new EventEmitter<any>(),
@@ -906,6 +932,20 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
         readText: () => navigator.clipboard.readText(),
       },
     },
+    // 디버그 — **관찰과 중단점까지**. 디버거를 확장이 제공하는 것
+    // (registerDebugAdapterDescriptorFactory)은 아직 없다. 없는 것은 없는 대로
+    // 두어 부르면 TypeError 가 나게 한다 — 조용히 되는 척하지 않는다.
+    debug: {
+      get activeDebugSession() { return debugState.active ?? undefined; },
+      get breakpoints() { return debugState.breakpoints; },
+      onDidStartDebugSession: debugEvents.sessionStarted.event,
+      onDidTerminateDebugSession: debugEvents.sessionEnded.event,
+      onDidChangeActiveDebugSession: debugEvents.activeChanged.event,
+      onDidChangeBreakpoints: debugEvents.breakpointsChanged.event,
+      addBreakpoints: (bps: any[]) => { deps.debugBreakpoints?.("add", bps ?? []); },
+      removeBreakpoints: (bps: any[]) => { deps.debugBreakpoints?.("remove", bps ?? []); },
+    },
+    SourceBreakpoint: class { constructor(public location: any, public enabled = true) {} },
     Uri: UriShim, Position, Range, Selection, Location, Disposable, EventEmitter,
     MarkdownString, CompletionItem, CompletionItemKind, Hover, ThemeIcon, ThemeColor,
     WorkspaceEdit, CodeAction, CodeActionKind,

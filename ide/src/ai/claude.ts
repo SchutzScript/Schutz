@@ -320,6 +320,21 @@ export const WORKSPACE_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "find_references",
+    description:
+      "이 심볼을 **누가 쓰는지** 찾는다. 이름으로 정의를 잡은 뒤 그 자리에서 참조를 묻는다. " +
+      "고칠 때 무엇이 깨지는지 보려면 이걸 써라 — search_files 는 같은 이름의 다른 것과 주석까지 준다. " +
+      "이름이 여러 군데 정의돼 있으면 어디를 뜻하는지 되묻는다(path 로 좁혀라).",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "심볼 이름(정확히)" },
+        path: { type: "string", description: "같은 이름이 여럿일 때 정의가 있는 파일" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "read_file",
     description:
       "워크스페이스의 파일 내용을 읽는다. 줄 번호가 붙어서 온다. " +
