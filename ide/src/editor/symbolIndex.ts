@@ -35,6 +35,8 @@ export interface SymbolAnswer {
   sources: ("ts" | "lsp")[];
   /** 모델이 너무 많아 다 훑지 못했다 — "없다" 를 단정하면 안 되는 경우. */
   capped: boolean;
+  /** 파일이 너무 많아 색인을 아예 만들지 않았다. "이 언어는 지원 안 함" 과 다르다. */
+  tooBig: boolean;
 }
 
 /** 워커가 주는 파일 이름(모델 uri) → 워크스페이스 상대 경로 */
@@ -51,6 +53,7 @@ async function fromTypescript(query: string, max: number): Promise<{ hits: Symbo
   const models = monaco.editor.getModels()
     .filter(m => !m.isDisposed() && /typescript|javascript/.test(m.getLanguageId()) && projectModels.relFor(m.uri.toString()));
   if (!models.length) return { hits: [], available: false, capped: false };
+
 
   // Monaco 의 워커 프록시는 getNavigateToItems 를 노출하지 않는다(실측: "Missing
   // requestHandler or method"). 대신 파일별 navigation tree 를 주므로, 그걸 모아
@@ -113,10 +116,13 @@ function uriToRel(uri: string): string | null {
   return p.replace(/\\/g, "/").slice(root.length).replace(/^\/+/, "") || null;
 }
 
+/** 파일이 너무 많아 색인을 아예 안 만든 상태인가. 답을 고를 때 쓴다. */
+export function isTooBig(): boolean { return projectModels.isPreloadSkipped(); }
+
 /** 이름으로 심볼을 찾는다. 두 통로에 모두 물어보고 합친다. */
 export async function findSymbols(query: string, max = 100): Promise<SymbolAnswer> {
   const q = String(query ?? "").trim();
-  if (!q) return { hits: [], sources: [], capped: false };
+  if (!q) return { hits: [], sources: [], capped: false, tooBig: false };
   const [ts, lsp] = await Promise.all([fromTypescript(q, max), fromLsp(q)]);
   const sources: ("ts" | "lsp")[] = [];
   if (ts.available) sources.push("ts");
@@ -133,7 +139,7 @@ export async function findSymbols(query: string, max = 100): Promise<SymbolAnswe
   }
   // 테스트 파일은 뒤로. describe("이름", …) 이 심볼로 잡혀 첫 답이 테스트가 되곤 했다.
   const ordered = [...hits.filter(h => !isTestPath(h.rel)), ...hits.filter(h => isTestPath(h.rel))];
-  return { hits: ordered.slice(0, max), sources, capped: ts.capped };
+  return { hits: ordered.slice(0, max), sources, capped: ts.capped, tooBig: projectModels.isPreloadSkipped() };
 }
 
 // ── 참조 찾기 ───────────────────────────────────────────────────────────────
