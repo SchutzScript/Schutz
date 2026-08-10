@@ -209,6 +209,7 @@ contextBridge.exposeInMainWorld("schutz", {
 
   /** LSP 브리지 */
   lspLanguages: () => ipcRenderer.invoke("schutz:lspLanguages"),
+  lspCatalog: () => ipcRenderer.invoke("schutz:lspCatalog"),
   lspStart: (languageId, root) => ipcRenderer.invoke("schutz:lspStart", { languageId, root }),
   lspSend: (serverId, message) => ipcRenderer.send("schutz:lspSend", serverId, message),
   lspStop: (serverId) => ipcRenderer.send("schutz:lspStop", serverId),
