@@ -14,6 +14,7 @@ import { parseViews, containerTitle, normalizeTreeItem, type ViewDecl, type Tree
 import { collectEdits, groupByFile, sortForApply, hasOverlap, normalizeAction } from "./workspaceEdit";
 import { createDecoType, applyDecos, disposeAllDecos, type DecoTypeHandle } from "./decoStore";
 import { planFileOps, deletedBy, badPath, type FileOp } from "./fileOps";
+import { bpKey } from "../engine/bpKey";
 import { setShimDocSource } from "./extHost";
 
 /** 지금 살아 있는 파일 감시자들. 확장을 다시 읽으면 disposeShimRegistrations 가 비운다. */
@@ -248,7 +249,9 @@ export function setDebugState(next: { active: any | null; breakpoints: any[] }):
   debugState = next;
   if (!wasActive && next.active) { debugEvents.sessionStarted.fire(next.active); debugEvents.activeChanged.fire(next.active); }
   else if (wasActive && !next.active) { debugEvents.sessionEnded.fire(wasActive); debugEvents.activeChanged.fire(undefined); }
-  if (prevBps.length !== next.breakpoints.length) {
+  // 개수로 견주면 하나 끄고 하나 켠 판을 놓친다 — 확장은 옛 목록을 그대로 믿는다.
+  // 자리로 만든 키를 견준다.
+  if (bpKey(prevBps) !== bpKey(next.breakpoints)) {
     debugEvents.breakpointsChanged.fire({ added: next.breakpoints, removed: [], changed: [] });
   }
 }

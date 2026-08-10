@@ -152,37 +152,42 @@ export interface RefAnswer {
   ambiguous: { rel: string; line: number }[];
   /** 심볼 색인 자체가 없다. */
   noIndex: boolean;
+  /** 참조를 실제로 물어봤는가. false 면 "참조 없음" 이라고 말하면 안 된다 —
+   *  안 물어본 것과 물어봤는데 없는 것은 다르다. */
+  asked: boolean;
 }
 
 /** 이름으로 정의를 찾고, 그 자리에서 참조를 묻는다. */
 export async function findReferences(name: string, inFile?: string): Promise<RefAnswer> {
   const q = String(name ?? "").trim();
-  if (!q) return { at: null, hits: [], ambiguous: [], noIndex: false };
+  if (!q) return { at: null, hits: [], ambiguous: [], noIndex: false, asked: false };
 
   const found = await findSymbols(q, 50);
-  if (!found.sources.length) return { at: null, hits: [], ambiguous: [], noIndex: true };
+  if (!found.sources.length) return { at: null, hits: [], ambiguous: [], noIndex: true, asked: false };
 
   // 이름이 정확히 같은 것만 남긴다. 부분 일치까지 세면 엉뚱한 것을 기준으로 잡는다.
   let exact = found.hits.filter(h => h.name === q);
   if (inFile) exact = exact.filter(h => h.rel === inFile || h.rel.endsWith("/" + inFile));
-  if (!exact.length) return { at: null, hits: [], ambiguous: [], noIndex: false };
+  if (!exact.length) return { at: null, hits: [], ambiguous: [], noIndex: false, asked: false };
   if (exact.length > 1) {
-    return { at: null, hits: [], ambiguous: exact.map(h => ({ rel: h.rel, line: h.line })), noIndex: false };
+    return { at: null, hits: [], ambiguous: exact.map(h => ({ rel: h.rel, line: h.line })), noIndex: false, asked: false };
   }
 
   const def = exact[0]!;
   const model = projectModels.getByRel(def.rel);
-  if (!model || model.isDisposed()) return { at: null, hits: [], ambiguous: [], noIndex: false };
+  if (!model || model.isDisposed()) return { at: null, hits: [], ambiguous: [], noIndex: false, asked: false };
 
   const ts: any = (monaco.languages as any).typescript;
-  if (!ts?.getTypeScriptWorker) return { at: { rel: def.rel, line: def.line, name: def.name }, hits: [], ambiguous: [], noIndex: false };
+  if (!ts?.getTypeScriptWorker) return { at: { rel: def.rel, line: def.line, name: def.name }, hits: [], ambiguous: [], noIndex: false, asked: false };
 
   const offset = model.getOffsetAt({ lineNumber: def.line, column: def.column });
   const hits: RefHit[] = [];
+  let asked = false;
   try {
     const getWorker = await ts.getTypeScriptWorker();
     const client = await getWorker(model.uri);
     const refs: any[] = await client.getReferencesAtPosition(model.uri.toString(), offset);
+    asked = true;   // 물어보는 데 성공했다 — 이제 "없다" 고 말해도 된다
     for (const r of refs ?? []) {
       const rel = projectModels.relFor(String(r?.fileName ?? ""));
       if (!rel) continue;
@@ -193,5 +198,5 @@ export async function findReferences(name: string, inFile?: string): Promise<Ref
     }
   } catch { /* 워커가 아직 모르는 파일 */ }
 
-  return { at: { rel: def.rel, line: def.line, name: def.name }, hits, ambiguous: [], noIndex: false };
+  return { at: { rel: def.rel, line: def.line, name: def.name }, hits, ambiguous: [], noIndex: false, asked };
 }

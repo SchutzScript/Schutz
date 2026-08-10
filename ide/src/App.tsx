@@ -3504,7 +3504,12 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
             + r.ambiguous.map(a2 => `  ${a2.rel}:${a2.line}`).join(NL);
         }
         if (!r.at) return `"${name}" 의 정의를 못 찾았습니다. 이름이 정확한지 보고, 아니면 search_files 를 쓰세요.`;
-        if (!r.hits.length) return `${r.at.rel}:${r.at.line} 의 ${r.at.name} — 참조 없음(정의만 있음).`;
+        if (!r.hits.length) {
+          // 못 물어본 것을 "없다" 로 말하면 모델이 안 쓰는 코드로 단정하고 지운다.
+          return r.asked
+            ? `${r.at.rel}:${r.at.line} 의 ${r.at.name} — 참조 없음(정의만 있음).`
+            : `${r.at.rel}:${r.at.line} 의 ${r.at.name} — 참조를 조회하지 못했습니다(색인이 아직 준비되지 않음). 없다고 단정하지 말고 search_files 로 확인하세요.`;
+        }
         return `${r.at.rel}:${r.at.line} 의 ${r.at.name} 을(를) 쓰는 곳 ${r.hits.length}개:` + NL
           + r.hits.map(h => `  ${h.rel}:${h.line}:${h.column}`).join(NL);
       }
