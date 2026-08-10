@@ -71,6 +71,7 @@ import monaco, { languageOf, applyTsPaths, revalidateTs } from "./editor/monacoS
 import * as projectModels from "./editor/projectModels";
 import * as proposalDeco from "./editor/proposalDeco";
 import * as symbolIndex from "./editor/symbolIndex";
+import * as vscodeShim from "./ext/vscodeShim";
 import { missingFor as missingLspFor, shouldTell as shouldTellLsp, type ServerRow } from "./engine/lspHint";
 import { typeEdit, reducedMotion } from "./editor/editAnimator";
 import * as lspClient from "./editor/lspClient";
@@ -3489,6 +3490,24 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         }
         return r.hits.map(h => `${h.rel}:${h.line}:${h.column}  ${h.container ? h.container + "." : ""}${h.name}`).join(String.fromCharCode(10));
       }
+      if (call.name === "find_references") {
+        const name = String(call.input?.name ?? "").trim();
+        const inFile = String(call.input?.path ?? "").trim() || undefined;
+        this.addTool(toolId, agentId, t("sc2.verbRefs"), name);
+        if (!name) { this.setTool(toolId, { st: "done", note: t("sc2.noteError") }); return "오류: name 이 비었습니다."; }
+        const r = await symbolIndex.findReferences(name, inFile);
+        this.setTool(toolId, { st: "done", note: t("sc2.noteHits", { n: r.hits.length }) });
+        const NL = String.fromCharCode(10);
+        if (r.noIndex) return "이 워크스페이스에는 심볼 색인이 없어 참조를 찾을 수 없습니다. search_files 로 찾으세요.";
+        if (r.ambiguous.length) {
+          return `"${name}" 이(가) 여러 곳에 정의돼 있습니다. path 로 좁혀서 다시 부르세요:` + NL
+            + r.ambiguous.map(a2 => `  ${a2.rel}:${a2.line}`).join(NL);
+        }
+        if (!r.at) return `"${name}" 의 정의를 못 찾았습니다. 이름이 정확한지 보고, 아니면 search_files 를 쓰세요.`;
+        if (!r.hits.length) return `${r.at.rel}:${r.at.line} 의 ${r.at.name} — 참조 없음(정의만 있음).`;
+        return `${r.at.rel}:${r.at.line} 의 ${r.at.name} 을(를) 쓰는 곳 ${r.hits.length}개:` + NL
+          + r.hits.map(h => `  ${h.rel}:${h.line}:${h.column}`).join(NL);
+      }
       if (call.name === "search_files") {
         const query = String(call.input?.query ?? "");
         this.addTool(toolId, agentId, t("sc2.verbSearch"), query);
@@ -5004,6 +5023,19 @@ ${(r.output || "").slice(0, 2000)}`;
     );
   }
 
+  /** 확장이 볼 디버그 상태. vscode 는 session 객체와 SourceBreakpoint 목록을 준다. */
+  private syncDebugToExtensions() {
+    const d = this.state.debug;
+    const bps: any[] = [];
+    for (const [rel, lines] of Object.entries(this.state.breakpoints)) {
+      for (const line of lines) bps.push({ enabled: true, location: { uri: rel, range: { start: { line: line - 1, character: 0 }, end: { line: line - 1, character: 0 } } } });
+    }
+    vscodeShim.setDebugState({
+      active: d ? { id: "schutz-debug", type: "python", name: "Schutz", workspaceFolder: this.state.workspace?.root ?? null } : null,
+      breakpoints: bps,
+    });
+  }
+
   /** 아는 언어 서버 목록(없는 것 포함). 처음 필요할 때 한 번 읽는다. */
   private _lspCatalog: ServerRow[] | null = null;
   private _lspTold = new Set<string>();
@@ -5784,6 +5816,19 @@ ${(r.output || "").slice(0, 2000)}`;
         try { return await window.schutz.readFile(ws.root, rel); } catch { return null; }
       },
       revealInView: (viewId, element, expand) => this.revealExtViewRow(viewId, element, expand),
+      // 확장이 중단점을 더하거나 뺀다. 실제 목록은 앱이 들고 있으므로 여기서 옮긴다.
+      debugBreakpoints: (op, bps) => {
+        for (const b of bps ?? []) {
+          // uri.path 를 그대로 쓰면 절대 경로가 키가 된다 — 개수만 늘고 거터에는
+          // 아무것도 안 그려진다(실측). 워크스페이스 상대 경로로 바꿔서 넣는다.
+          const raw = b?.location?.uri;
+          const rel = this.uriToRel(String(raw?.toString?.() ?? raw ?? ""));
+          const line = Number(b?.location?.range?.start?.line ?? 0) + 1;
+          if (!rel || line < 1) continue;
+          const has = (this.state.breakpoints[rel] ?? []).includes(line);
+          if ((op === "add") !== has) this.toggleBreakpoint(rel, line);
+        }
+      },
       // 확장의 WorkspaceEdit 파일 조작. 디스크만 건드리면 열린 버퍼가 실제 파일과
       // 어긋나므로 모델 정리·트리 갱신까지 여기서 함께 한다.
       fileOps: {
@@ -5983,6 +6028,8 @@ ${(r.output || "").slice(0, 2000)}`;
     // 대기 중인 제안을 코드 옆에 그린다(사유 툴팁 + 수락/거절 CodeLens).
     // 목록이 실제로 바뀐 판에만 — 매 렌더마다 CodeLens 를 다시 요청하면 깜빡인다.
     if (_ps && _ps.proposals !== this.state.proposals) this.syncProposalMarks();
+    // 확장에게 디버그 상태를 알린다 — 세션이 뜨고 지는 것, 중단점이 움직이는 것.
+    if (_ps && (_ps.debug !== this.state.debug || _ps.breakpoints !== this.state.breakpoints)) this.syncDebugToExtensions();
     // 저장 안 한 파일 목록을 메인에 맞춰 둔다 — 종료를 붙잡을지 여기서 정해진다.
     this.reportDirty();
     // 모드가 바뀌면 Monaco 를 다시 재어준다. automaticLayout 은 display:none 안에서

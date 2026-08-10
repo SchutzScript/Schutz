@@ -29,6 +29,8 @@ export interface HostDeps {
   saveFile: (rel: string) => Promise<boolean>;
   readFile: (rel: string) => Promise<string | null>;
   revealInView: (viewId: string, element: any, expand: boolean) => Promise<void>;
+  /** 확장이 중단점을 더하거나 뺀다. */
+  debugBreakpoints?: (op: "add" | "remove", bps: any[]) => void;
   /** WorkspaceEdit 의 파일 만들기·지우기·이름 바꾸기 — 셰임이 그대로 받아 쓴다. */
   fileOps?: {
     exists: (rel: string) => boolean;
@@ -254,7 +256,7 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
           else errors.push(ext.name + ": " + reason);
           continue;
         }
-        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, saveFile: d.saveFile, readFile: d.readFile, revealInView: d.revealInView, fileOps: d.fileOps, registerCommand: addCommand }, ext);
+        const vscode = makeVscodeApi({ toast: d.toast, showPanel: d.showPanel, getActiveFile: d.getActiveFile, workspaceRoot: d.workspaceRoot, openFiles: d.openFiles, prompt: d.prompt, statusSet: d.statusSet, statusRemove: d.statusRemove, postToView: d.postToView, saveFile: d.saveFile, readFile: d.readFile, revealInView: d.revealInView, fileOps: d.fileOps, debugBreakpoints: d.debugBreakpoints, registerCommand: addCommand }, ext);
         const moduleObj = { exports: {} as any };
         const require = makeHostRequire(vscode);
         const ctx = {
