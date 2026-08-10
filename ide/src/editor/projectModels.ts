@@ -26,6 +26,14 @@ function uriFor(root: string, rel: string): monaco.Uri {
 /** 지금 열린 워크스페이스 루트. 모델이 없는 uri 를 상대 경로로 뗄 때 필요하다. */
 export function currentRootPath(): string | null { return currentRoot; }
 
+/** 파일이 너무 많아 모델을 **하나도** 안 세운 경우.
+ *
+ *  이걸 알아야 "TypeScript 프로젝트가 아니다" 와 "너무 커서 색인을 포기했다" 를
+ *  가를 수 있다. 안 가르면 큰 TS 저장소에서 심볼 찾기가 "이 언어는 지원 안 함"
+ *  이라고 답한다 — 거짓말이고, 모델은 그 말을 믿고 grep 도 안 해 본다. */
+let preloadSkipped = false;
+export function isPreloadSkipped(): boolean { return preloadSkipped; }
+
 export function relFor(uriString: string): string | null {
   if (!currentRoot) return null;
   for (const [rel, u] of relIndex) if (u === uriString) return rel;
@@ -154,7 +162,8 @@ export async function preload(
   const targets = entries.filter(e =>
     !e.dir && isTsLike(e.rel) && !e.rel.split("/").some(seg => EXCLUDE.has(seg)),
   );
-  if (targets.length > MAX_FILES) return { loaded: 0, skipped: true };
+  if (targets.length > MAX_FILES) { preloadSkipped = true; return { loaded: 0, skipped: true }; }
+  preloadSkipped = false;
 
   let loaded = 0;
   const conc = 8;

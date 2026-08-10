@@ -3483,10 +3483,16 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         // 색인이 아예 없는 것과 찾아봤는데 없는 것은 다르다. 섞으면 모델이 "그런 심볼은
         // 없다" 고 단정하고 넘어간다.
         if (!r.sources.length) {
-          return "이 워크스페이스에는 심볼 색인이 없습니다(TypeScript 프로젝트가 아니거나 해당 언어 서버가 없음). search_files 로 찾으세요.";
+          // "너무 커서 색인을 포기했다" 를 "이 언어는 지원 안 함" 으로 말하면 거짓말이다.
+          return r.tooBig
+            ? "파일이 너무 많아 이 프로젝트의 심볼 색인을 만들지 않았습니다(TS/JS 500개 상한). 지원하지 않는 것이 아니라 안 만든 것입니다 — search_files 로 찾으세요."
+            : "이 워크스페이스에는 심볼 색인이 없습니다(TypeScript 프로젝트가 아니거나 해당 언어 서버가 없음). search_files 로 찾으세요.";
         }
         if (!r.hits.length) {
-          return `"${query}" 로 찾은 심볼 없음. 색인은 있습니다(${r.sources.join(", ")}) — 이름이 다르거나 색인이 없는 언어의 파일일 수 있으니 search_files 도 해 보세요.`;
+          // 훑다 만 것(capped)을 "없다" 로 말하면 안 된다 — 그건 안 찾아본 것이다.
+          return r.capped
+            ? `"${query}" 는 훑은 범위 안에 없었습니다. 파일이 많아 색인을 다 훑지 못했으니(${symbolIndex.TS_MODEL_CAP}개까지) 없다고 단정하지 말고 search_files 로 확인하세요.`
+            : `"${query}" 로 찾은 심볼 없음. 색인은 있습니다(${r.sources.join(", ")}) — 이름이 다르거나 색인이 없는 언어의 파일일 수 있으니 search_files 도 해 보세요.`;
         }
         return r.hits.map(h => `${h.rel}:${h.line}:${h.column}  ${h.container ? h.container + "." : ""}${h.name}`).join(String.fromCharCode(10));
       }
@@ -3498,7 +3504,11 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
         const r = await symbolIndex.findReferences(name, inFile);
         this.setTool(toolId, { st: "done", note: t("sc2.noteHits", { n: r.hits.length }) });
         const NL = String.fromCharCode(10);
-        if (r.noIndex) return "이 워크스페이스에는 심볼 색인이 없어 참조를 찾을 수 없습니다. search_files 로 찾으세요.";
+        if (r.noIndex) {
+          return symbolIndex.isTooBig()
+            ? "파일이 너무 많아 심볼 색인을 만들지 않아 참조를 찾을 수 없습니다(TS/JS 500개 상한). search_files 로 찾으세요."
+            : "이 워크스페이스에는 심볼 색인이 없어 참조를 찾을 수 없습니다. search_files 로 찾으세요.";
+        }
         if (r.ambiguous.length) {
           return `"${name}" 이(가) 여러 곳에 정의돼 있습니다. path 로 좁혀서 다시 부르세요:` + NL
             + r.ambiguous.map(a2 => `  ${a2.rel}:${a2.line}`).join(NL);
