@@ -144,10 +144,18 @@ webview to the sidebar. MCP speaks all three of its pillars rather than tools al
 
 MCP resources and prompts are offered to the agent, not just listed in a panel.
 
-Where it is still thin, specifically: a `WorkspaceEdit` cannot create, delete or rename
-files, and the shim has no custom editors and no debug adapter API. Those three fail loudly —
-`WorkspaceEdit` throws, and the other two are absent from the API object, so calling one is a
-`TypeError` rather than a quiet nothing.
+`WorkspaceEdit` creates, deletes and renames files, all-or-nothing: if one operation cannot be
+done, none are, and a file with unsaved edits is never deleted or overwritten. An extension can
+own a file type through `registerCustomEditorProvider` — the document stays a normal
+`TextDocument`, so edits go through the model and `Ctrl+Z` still works. Extensions can observe
+debugging: the active session, its start and end, the breakpoint list, and adding or removing
+breakpoints.
+
+Where it is still thin, specifically: a custom editor that owns the bytes itself
+(`CustomEditorProvider`, with its own save and backup) rather than a text document, and an
+extension supplying its own debugger (`registerDebugAdapterDescriptorFactory`). Both fail
+loudly — the first throws with a message naming what is missing, the second is absent from the
+API object, so calling it is a `TypeError` rather than a quiet nothing.
 
 Decorations used to sit in that list as the one gap that answered successfully and drew
 nothing. They now draw: `createTextEditorDecorationType` compiles the requested styling into
