@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { flattenNavTree, isTestPath, TS_KIND } from "./navTree";
+import { flattenNavTree, isTestPath, orderSymbols, TS_KIND } from "./navTree";
 
 /** 실제 워커가 주는 모양 그대로 — 맨 위는 파일 자신이고 이름에 따옴표가 붙는다. */
 const TREE = {
@@ -130,5 +130,49 @@ describe("isTestPath", () => {
     for (const p of ["src/a.ts", "src/latest.ts", "src/contest.ts", "src/protest/a.ts", "src/testing.ts"]) {
       expect(isTestPath(p)).toBe(false);
     }
+  });
+});
+
+describe("orderSymbols", () => {
+  const s = (name: string, rel: string) => ({ name, rel });
+
+  // 이 케이스 때문에 있다. 앞쪽 파일이 부분 일치를 잔뜩 내면 정확 일치가 잘려
+  // 나가고, 참조 찾기가 "정의를 못 찾았습니다" 라고 답한다 — 있는데도.
+  it("정확히 같은 이름을 파일을 가로질러 맨 앞으로", () => {
+    const hits = [
+      s("fooBarBaz", "a.ts"), s("fooBarQux", "b.ts"), s("foo", "z.ts"),
+    ];
+    expect(orderSymbols(hits, "foo").map(h => h.rel)).toEqual(["z.ts", "a.ts", "b.ts"]);
+  });
+
+  it("앞에서 시작하는 것이 그다음", () => {
+    const hits = [s("xxfoo", "a.ts"), s("foobar", "b.ts")];
+    expect(orderSymbols(hits, "foo").map(h => h.rel)).toEqual(["b.ts", "a.ts"]);
+  });
+
+  it("같은 등급이면 테스트 파일이 뒤", () => {
+    const hits = [s("foo", "a.test.ts"), s("foo", "a.ts")];
+    expect(orderSymbols(hits, "foo").map(h => h.rel)).toEqual(["a.ts", "a.test.ts"]);
+  });
+
+  it("정확 일치는 테스트 파일이어도 부분 일치보다 앞", () => {
+    const hits = [s("fooBar", "a.ts"), s("foo", "a.test.ts")];
+    expect(orderSymbols(hits, "foo").map(h => h.rel)).toEqual(["a.test.ts", "a.ts"]);
+  });
+
+  it("등급이 같으면 들어온 순서를 지킨다", () => {
+    const hits = [s("foo", "b.ts"), s("foo", "a.ts")];
+    expect(orderSymbols(hits, "foo").map(h => h.rel)).toEqual(["b.ts", "a.ts"]);
+  });
+
+  it("원본을 건드리지 않는다", () => {
+    const hits = [s("zz", "a.ts"), s("foo", "b.ts")];
+    const before = hits.map(h => h.rel);
+    orderSymbols(hits, "foo");
+    expect(hits.map(h => h.rel)).toEqual(before);
+  });
+
+  it("빈 목록", () => {
+    expect(orderSymbols([], "foo")).toEqual([]);
   });
 });

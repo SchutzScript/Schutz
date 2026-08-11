@@ -83,3 +83,21 @@ function firstOffset(node: any): number {
   const n = Number(node?.spans?.[0]?.start);
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
+
+/** 여러 파일에서 모은 심볼을 한 줄로 세운다.
+ *
+ *  flattenNavTree 의 정렬은 **한 파일 안에서만** 돈다. 파일을 가로질러 모은 뒤
+ *  자르면, 앞쪽 파일이 부분 일치를 잔뜩 내는 바람에 **정확히 그 이름인 정의가
+ *  잘려 나간다.** 그러면 참조 찾기가 "정의를 못 찾았습니다" 라고 답한다 —
+ *  있는데도. 그래서 자르기 전에 전체를 다시 세운다.
+ *
+ *  순서: 정확히 같은 이름 → 앞에서 시작 → 나머지. 테스트 파일은 각 묶음 안에서 뒤로. */
+export function orderSymbols<T extends { name: string; rel: string }>(hits: readonly T[], query: string): T[] {
+  const q = String(query ?? "").toLowerCase();
+  const rank = (h: T): number => {
+    const n = h.name.toLowerCase();
+    const base = n === q ? 0 : n.startsWith(q) ? 2 : 4;
+    return base + (isTestPath(h.rel) ? 1 : 0);
+  };
+  return hits.map((h, i) => ({ h, i })).sort((a, b) => rank(a.h) - rank(b.h) || a.i - b.i).map(x => x.h);
+}

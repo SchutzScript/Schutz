@@ -14,7 +14,7 @@
 import monaco from "./monacoSetup";
 import * as lspClient from "./lspClient";
 import * as projectModels from "./projectModels";
-import { flattenNavTree, isTestPath } from "../engine/navTree";
+import { flattenNavTree, orderSymbols } from "../engine/navTree";
 
 export interface SymbolHit {
   name: string;
@@ -37,6 +37,8 @@ export interface SymbolAnswer {
   capped: boolean;
   /** 파일이 너무 많아 색인을 아예 만들지 않았다. "이 언어는 지원 안 함" 과 다르다. */
   tooBig: boolean;
+  /** 상한에서 잘랐다 — 보여준 것이 전부가 아니다. */
+  sliced: boolean;
 }
 
 /** 워커가 주는 파일 이름(모델 uri) → 워크스페이스 상대 경로 */
@@ -122,7 +124,7 @@ export function isTooBig(): boolean { return projectModels.isPreloadSkipped(); }
 /** 이름으로 심볼을 찾는다. 두 통로에 모두 물어보고 합친다. */
 export async function findSymbols(query: string, max = 100): Promise<SymbolAnswer> {
   const q = String(query ?? "").trim();
-  if (!q) return { hits: [], sources: [], capped: false, tooBig: false };
+  if (!q) return { hits: [], sources: [], capped: false, tooBig: false, sliced: false };
   const [ts, lsp] = await Promise.all([fromTypescript(q, max), fromLsp(q)]);
   const sources: ("ts" | "lsp")[] = [];
   if (ts.available) sources.push("ts");
@@ -137,9 +139,15 @@ export async function findSymbols(query: string, max = 100): Promise<SymbolAnswe
     seen.add(key);
     hits.push(h);
   }
-  // 테스트 파일은 뒤로. describe("이름", …) 이 심볼로 잡혀 첫 답이 테스트가 되곤 했다.
-  const ordered = [...hits.filter(h => !isTestPath(h.rel)), ...hits.filter(h => isTestPath(h.rel))];
-  return { hits: ordered.slice(0, max), sources, capped: ts.capped, tooBig: projectModels.isPreloadSkipped() };
+  // 자르기 전에 전체를 다시 세운다 — 정확 일치가 뒤쪽 파일에 있어도 살아남게.
+  const ordered = orderSymbols(hits, q);
+  return {
+    hits: ordered.slice(0, max),
+    sources,
+    capped: ts.capped,
+    tooBig: projectModels.isPreloadSkipped(),
+    sliced: ordered.length > max,
+  };
 }
 
 // ── 참조 찾기 ───────────────────────────────────────────────────────────────

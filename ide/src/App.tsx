@@ -3494,7 +3494,9 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
             ? `"${query}" 는 훑은 범위 안에 없었습니다. 파일이 많아 색인을 다 훑지 못했으니(${symbolIndex.TS_MODEL_CAP}개까지) 없다고 단정하지 말고 search_files 로 확인하세요.`
             : `"${query}" 로 찾은 심볼 없음. 색인은 있습니다(${r.sources.join(", ")}) — 이름이 다르거나 색인이 없는 언어의 파일일 수 있으니 search_files 도 해 보세요.`;
         }
-        return r.hits.map(h => `${h.rel}:${h.line}:${h.column}  ${h.container ? h.container + "." : ""}${h.name}`).join(String.fromCharCode(10));
+        // 잘랐으면 잘랐다고 말한다 — 안 그러면 이 목록이 전부인 줄 안다.
+        return r.hits.map(h => `${h.rel}:${h.line}:${h.column}  ${h.container ? h.container + "." : ""}${h.name}`).join(String.fromCharCode(10))
+          + (r.sliced ? String.fromCharCode(10) + String.fromCharCode(10) + "… 상한에서 잘렸습니다. 이름을 더 정확히 주면 좁혀집니다." : "");
       }
       if (call.name === "find_references") {
         const name = String(call.input?.name ?? "").trim();
