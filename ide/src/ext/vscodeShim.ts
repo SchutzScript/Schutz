@@ -50,6 +50,19 @@ export interface RegisteredView {
   /** 확장에게 메시지를 보낸다(앱 → 웹뷰는 App 이 iframe 에 직접 쏜다). */
 }
 
+/** 확장이 만든 편집기. viewType → 그 파일을 여는 방법.
+ *  선언(contributes.customEditors)은 앱이 읽고, 구현은 여기 등록된다. */
+export interface RegisteredEditor {
+  viewType: string;
+  extId: string;
+  /** 파일 하나를 열어 HTML 을 돌려준다. 웹뷰가 보낸 말은 post 로 확장에 간다. */
+  resolve: (rel: string, doc: any) => Promise<string>;
+  post: (msg: any) => void;
+}
+const extEditors = new Map<string, RegisteredEditor>();
+export function listExtEditors(): RegisteredEditor[] { return [...extEditors.values()]; }
+export function extEditorFor(viewType: string): RegisteredEditor | null { return extEditors.get(viewType) ?? null; }
+
 const extViews = new Map<string, RegisteredView>();
 const viewListeners = new Set<() => void>();
 function viewsChanged() { for (const f of viewListeners) { try { f(); } catch { /* */ } } }
@@ -104,6 +117,7 @@ const decoTypesByExt = new Map<string, DecoTypeHandle[]>();
 
 export function disposeShimRegistrations() {
   for (const d of disposables.splice(0)) { try { d.dispose(); } catch { /* */ } }
+  extEditors.clear();
   for (const list of decoTypesByExt.values()) disposeAllDecos(list);
   decoTypesByExt.clear();
 }
@@ -752,6 +766,45 @@ export function makeVscodeApi(deps: ShimDeps, ext: { id: string; name: string; c
         set title(_v: string) { /* 제목은 매니페스트가 정한다 */ },
         dispose: d.dispose,
       };
+    },
+    // 확장이 만든 편집기. 지금은 CustomTextEditorProvider 만 — 문서가 평범한
+    // TextDocument 라 이미 있는 것들(모델·WorkspaceEdit) 위에 그대로 얹힌다.
+    // 바이너리를 직접 들고 저장·백업까지 하는 CustomEditorProvider 는 아직 없다.
+    registerCustomEditorProvider: (viewType: string, provider: any, _options?: any) => {
+      const vt = String(viewType);
+      if (typeof provider?.resolveCustomTextEditor !== "function") {
+        // 조용히 등록해 두면 그 파일이 빈 화면으로 열린다. 지금 말해 주는 편이 낫다.
+        throw new Error("registerCustomEditorProvider: resolveCustomTextEditor 가 필요합니다(바이너리 커스텀 에디터는 아직 지원하지 않습니다)");
+      }
+      let onMsg: ((m: any) => void) | null = null;
+      extEditors.set(vt, {
+        viewType: vt, extId: ext.id,
+        resolve: async (rel: string, doc: any) => {
+          let html = "";
+          const webview: any = {
+            options: {}, cspSource: "schutz:",
+            get html() { return html; },
+            set html(v: string) { html = String(v ?? ""); },
+            onDidReceiveMessage: (fn: (m: any) => void) => { onMsg = fn; return { dispose() { onMsg = null; } }; },
+            postMessage: (m: any) => { deps.postToView("editor:" + rel, m); return Promise.resolve(true); },
+            asWebviewUri: (u: any) => u,
+          };
+          const panel: any = {
+            webview, viewType: vt, title: rel.split("/").pop() ?? rel,
+            visible: true, active: true,
+            onDidDispose: new EventEmitter().event,
+            onDidChangeViewState: new EventEmitter().event,
+            reveal: () => { /* 앱이 이미 보여 주고 있다 */ },
+            dispose: () => { /* 탭을 닫는 것은 앱이 한다 */ },
+          };
+          await provider.resolveCustomTextEditor(doc, panel, { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event });
+          return html;
+        },
+        post: (msg: any) => { try { onMsg?.(msg); } catch { /* 확장이 던진 것 */ } },
+      });
+      const d = { dispose() { extEditors.delete(vt); } };
+      disposables.push(d);
+      return d;
     },
     registerWebviewViewProvider: (viewId: string, provider: any) => {
       const id = String(viewId);

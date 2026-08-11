@@ -70,6 +70,8 @@ import { ImagePane, MarkdownPane, isImage, mdToHtml } from "./editor/MediaPane";
 import monaco, { languageOf, applyTsPaths, revalidateTs } from "./editor/monacoSetup";
 import * as projectModels from "./editor/projectModels";
 import * as proposalDeco from "./editor/proposalDeco";
+import { CustomEditorPane } from "./editor/CustomEditorPane";
+import { editorFor as customEditorFor } from "./ext/customEditors";
 import * as symbolIndex from "./editor/symbolIndex";
 import * as vscodeShim from "./ext/vscodeShim";
 import { missingFor as missingLspFor, shouldTell as shouldTellLsp, type ServerRow } from "./engine/lspHint";
@@ -8218,7 +8220,12 @@ ${(r.output || "").slice(0, 2000)}`;
       const realFile = !!(s.workspace && !diffMeta);
       const isImg = realFile && isImage(activeRel);
       const isMdPrev = realFile && activeRel.endsWith(".md") && !!s.mdPreview[activeRel];
-      const isReal = realFile && !isImg && !isMdPrev;
+      // 확장이 만든 편집기가 이 파일을 맡는가. 선언과 구현이 둘 다 있어야 한다 —
+      // 선언만 있으면 텍스트로 연다(빈 화면보다 낫다).
+      const custom = realFile
+        ? customEditorFor(activeRel, extHost.getCustomEditorDecls(), new Set(extHost.listExtEditors().map(e => e.viewType)))
+        : null;
+      const isReal = realFile && !isImg && !isMdPrev && !custom;
       return (
         <div key={"slot" + si} style={{ display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: "var(--bg-editor)" }}
           onMouseDown={() => { this._focusSlot = si; }}
@@ -8240,6 +8247,12 @@ ${(r.output || "").slice(0, 2000)}`;
             <ImagePane key={activeRel + ":" + (s.paneVer[activeRel] ?? 0)} root={s.workspace!.root} rel={activeRel} />
           ) : isMdPrev ? (
             <MarkdownPane key={activeRel + ":md:" + (s.paneVer[activeRel] ?? 0)} root={s.workspace!.root} rel={activeRel} />
+          ) : custom ? (
+            <CustomEditorPane
+              key={activeRel + ":ce:" + (s.paneVer[activeRel] ?? 0)}
+              viewType={custom.viewType}
+              rel={activeRel}
+            />
           ) : isReal ? (
             <MonacoPane
               key={activeRel + ":" + (s.paneVer[activeRel] ?? 0)}

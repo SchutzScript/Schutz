@@ -1,10 +1,12 @@
 // 확장 호스트 (렌더러) — 활성 확장의 엔트리를 큐레이트 API로 로드.
 // 확장은 신뢰 코드로 간주(VS Code와 동일 모델)하되, 편의 API는 이 표면으로 한정한다.
 // Schutz 네이티브(schutz API) + VS Code 프로그램형(vscode 셰임으로 activate 실행) 둘 다 지원.
-import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta, listExtViews, onExtViewsChanged } from "./vscodeShim";
+import { makeVscodeApi, disposeShimRegistrations, deliverFsDelta, listExtViews, onExtViewsChanged, listExtEditors, extEditorFor } from "./vscodeShim";
 import { onHook, clearHooks, emitHook, HOOK_EVENTS, type HookEvent } from "./hooks";
 import { editorEvents } from "./vscodeShim";
 import { paneRegistry } from "../editor/MonacoPane";
+import * as projectModels from "../editor/projectModels";
+import { parseCustomEditors, type CustomEditorDecl } from "./customEditors";
 import { t } from "../i18n";
 
 export interface ExtCommand { id: string; title: string; run: (...args: any[]) => any; source: string; }
@@ -57,6 +59,27 @@ function teardownExtensions() {
 }
 
 export function getExtCommands(): ExtCommand[] { return commands; }
+
+/** 매니페스트가 선언한 커스텀 편집기들. 구현 등록 여부는 셰임이 따로 안다. */
+let customEditorDecls: CustomEditorDecl[] = [];
+export function getCustomEditorDecls(): CustomEditorDecl[] { return customEditorDecls; }
+export { listExtEditors, extEditorFor };
+/** 커스텀 편집기에 넘길 TextDocument.
+ *
+ *  이 파일에는 모델이 없을 수 있다 — preload 는 TS 계열만 세우고, 커스텀 편집기가
+ *  맡은 파일은 Monaco 페인이 안 뜨므로 아무도 안 만든다. 그러면 확장에게 null 이
+ *  가고 `document.getText()` 가 첫 줄에서 던진다(실측: 빈 화면만 떴다).
+ *  그래서 없으면 여기서 읽어 세운다. */
+export async function openDocFor(rel: string): Promise<any> {
+  const have = shimDocFor(rel);
+  if (have) return have;
+  const root = deps?.workspaceRoot();
+  if (!root || !deps) return null;
+  const text = await deps.readFile(rel);
+  if (text == null) return null;
+  try { projectModels.ensure(root, rel, text); } catch { return null; }
+  return shimDocFor(rel);
+}
 
 /** IDE 쪽에서 사건을 알린다. 확장 핸들러가 터지면 토스트로 보고하되 흐름은 막지 않는다. */
 export function notifyExtensions(ev: HookEvent, payload: Record<string, unknown>): void {
@@ -241,6 +264,13 @@ export async function loadExtensions(d: HostDeps): Promise<{ loaded: number; err
   if (!window.schutz) return { loaded: 0, errors, limited };
   let list: any[] = [];
   try { list = await window.schutz.extList(); } catch { return { loaded: 0, errors: [t("exth.extListLoadFailed")], limited }; }
+  // 커스텀 편집기 선언은 활성화와 무관하게 먼저 모은다 — 어떤 파일이 어느
+  // viewType 으로 열릴 수 있는지는 매니페스트만 봐도 알 수 있고, 실제로 열지는
+  // 구현이 등록된 뒤에 정해진다(customEditors.editorFor 가 그 둘을 짝짓는다).
+  customEditorDecls = list
+    .filter(e => e.enabled)
+    .flatMap(e => parseCustomEditors(e.contributes, e.id));
+
   let loaded = 0;
   const activations: Promise<void>[] = []; // activate 를 병렬 수집 — 한 확장의 느린/멈춘 activate 가 나머지를 막지 않게
   for (const ext of list) {

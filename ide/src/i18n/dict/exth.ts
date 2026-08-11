@@ -20,6 +20,19 @@ export const dict: Record<string, { ko: string; en: string; de: string; ja: stri
     de: "Die Dateioperation der Erweiterung schlug unterwegs fehl: {rel}",
     ja: "拡張機能のファイル操作が途中で失敗しました: {rel}",
   },
+  "exth.customEditorLoading": { ko: "확장 편집기를 준비하는 중…", en: "Preparing the extension's editor…", de: "Editor der Erweiterung wird vorbereitet…", ja: "拡張機能のエディターを準備中…" },
+  "exth.customEditorGone": {
+    ko: "이 파일을 여는 확장 편집기({viewType})가 더는 등록돼 있지 않습니다. 확장을 켜거나 다시 읽어 주세요.",
+    en: "The extension editor for this file ({viewType}) is no longer registered. Enable or reload the extension.",
+    de: "Der Erweiterungs-Editor für diese Datei ({viewType}) ist nicht mehr registriert. Erweiterung aktivieren oder neu laden.",
+    ja: "このファイルを開く拡張エディター({viewType})が登録されていません。拡張機能を有効化するか再読み込みしてください。",
+  },
+  "exth.customEditorNoDoc": {
+    ko: "{rel} 을(를) 읽지 못해 확장 편집기를 열 수 없습니다.",
+    en: "Could not read {rel}, so the extension editor cannot open.",
+    de: "{rel} konnte nicht gelesen werden — der Erweiterungs-Editor öffnet nicht.",
+    ja: "{rel} を読めなかったため拡張エディターを開けません。",
+  },
   "exth.moduleNotSupported": {
     ko: "'{m}' 모듈은 Schutz 경량 확장 호스트에서 지원되지 않습니다",
     en: "The '{m}' module is not supported by the Schutz lightweight extension host",
