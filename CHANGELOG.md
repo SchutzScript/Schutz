@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.4.0] — Finding things, and admitting when it cannot
+
+This release was planned as a codebase index. It did not become one, and the reason is the most useful thing in it.
+
+The plan was to build a symbol index so the agent could find a definition without grepping. Step one — ask the language tooling that is already running — turned out to be enough. Symbol lookup answers in 150–280 ms, returned the true definition first in every query measured, and produced 19 results where grep produced 105 for the same name. An index of our own would have had to beat that while staying correct as files change on disk, and nothing in the measurements suggested it would. So it was not built. [docs/PLAN-0.4.md](docs/PLAN-0.4.md) records the numbers and the decision.
+
+What shipped instead is the other half of the same problem: knowing where something is, and being honest when you do not.
+
+### Finding a definition
+
+- **Symbol search works in TypeScript projects.** `Ctrl+T` asked only the language server, and TypeScript is served by Monaco's own worker rather than an LSP session — so in a TypeScript project the list was always empty. Both sources are queried now and merged.
+- **The agent can ask too**, through `find_symbol` and `find_references`. Unlike a text search these skip comments, call sites and unrelated names that merely contain the word.
+- **Import lines are not definitions.** TypeScript reports a name pulled in by `import` as a symbol of its own, and those were being offered as the answer to "where is this defined".
+- **Tests are ranked below source.** `describe("applyProposal", …)` is a symbol as far as the parser is concerned, and it was outranking the function it names.
+- **An exact name is never truncated away.** Results were ordered within each file and cut afterwards, so a file full of partial matches could push the exact definition off the end — and then reference lookup answered that the definition could not be found.
+
+### Saying "I don't know"
+
+Five separate places reported an unknown as an absence. That is the failure this project keeps returning to, because a confident empty answer is indistinguishable from a correct one.
+
+- **A large TypeScript project was reported as not being TypeScript.** Model preloading is all-or-nothing past its file cap, so beyond that point zero files were parsed and the answer was "no symbols here".
+- **No language server for this file type** now says so, and how to install one, instead of returning an empty list.
+- **A model that cannot make tool calls** is named as such after it ignores the tools three times running, rather than appearing to work and quietly doing nothing.
+- **Reference lookup that fails** says it failed.
+- **The file watcher's overflow** is counted and reported instead of being lost. Creating 2500 files at once produced 180 notifications on Windows; the kernel buffer overflows and the rest are simply gone.
+
+### Extensions
+
+- **An extension can own a file type.** `registerCustomEditorProvider` renders the extension's own editor in the tab, with the document delivered to it and edits going through the model — so undo works and the save baseline stays correct.
+- **The debug namespace exists**: sessions, breakpoints and their changes are visible to extensions.
+- Two gaps remain and now fail loudly rather than silently: binary custom editors, and `registerDebugAdapterDescriptorFactory`. Both are documented in the README.
+
 ## [0.3.0] — What it could not see, and what it could lose
 
 Two things ran through this release. The app was losing work it had promised to keep, and it was answering questions about files it had never actually looked at. Both failed the same way: quietly, with a successful-looking answer.
