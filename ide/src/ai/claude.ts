@@ -415,6 +415,44 @@ export const DELEGATE_TOOL: ToolDef = {
   },
 };
 
+/** 그래프 한 판에 담을 수 있는 작업 수. per-turn 상한 대신 그래프를 묶는 값이다. */
+export const GRAPH_MAX_TASKS = 12;
+
+/** 관리자 전용: 여러 위임을 의존 관계까지 얹어 한 번에 올린다 */
+export const GRAPH_TOOL: ToolDef = {
+  name: "delegate_graph",
+  description:
+    "여러 작업을 의존 관계와 함께 한 번에 맡긴다. 의존이 없는 것끼리는 동시에 돌고, " +
+    "앞선 작업이 끝나야 하는 것은 그 결과를 받아서 시작한다. " +
+    "작업을 서로 이어 붙여야 할 때(먼저 조사하고 그 결과로 고치기, 여러 갈래로 훑고 하나로 합치기) 쓴다. " +
+    "작업이 서로 무관하고 순서도 없으면 delegate_task 를 그냥 여러 번 부르는 편이 낫다. " +
+    "앞선 작업의 답은 뒤 작업에게 자동으로 전달되므로 그 내용을 task 에 옮겨 적지 않아도 된다.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        description: `작업 목록 (최대 ${GRAPH_MAX_TASKS}개)`,
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "이 작업을 가리키는 짧은 이름. needs 에서 이 이름으로 참조한다" },
+            agent: { type: "string", description: "맡길 대상: gpt | grok | glm, 또는 @서브에이전트이름" },
+            task: { type: "string", description: "맡길 작업 설명 (대상 파일과 목표를 구체적으로)" },
+            needs: {
+              type: "array",
+              items: { type: "string" },
+              description: "먼저 끝나야 하는 작업 id 들. 없으면 빈 배열 — 그러면 바로 시작한다",
+            },
+          },
+          required: ["id", "agent", "task"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+};
+
 /** 응답 언어 이름 — UI 언어(getLang)에 맞춰 에이전트가 그 언어로 답하도록 지시 */
 const RESP_LANG: Record<string, string> = { ko: "한국어", en: "English", de: "Deutsch (German)", ja: "日本語 (Japanese)" };
 /** 언어 인식 시스템 프롬프트 — 호출 시점의 UI 언어로 응답하도록 동적 생성 */
@@ -440,4 +478,9 @@ export const MANAGER_SYSTEM_EXTRA = `
 - **위임은 반드시 delegate_task 도구를 호출해야 실제로 일어납니다.** 도구를 부르지 않고
   "위임했습니다"라고 말만 하면 아무 일도 일어나지 않고 사용자는 오지 않을 결과를 기다립니다.
   계획만 세우고 끝내지 마세요 — 이번 턴에 도구를 부르세요.
-- 도구를 부른 뒤에야 무엇을 누구에게 맡겼는지 요약하세요.`;
+- 도구를 부른 뒤에야 무엇을 누구에게 맡겼는지 요약하세요.
+- 작업들이 서로 이어질 때(먼저 조사하고 그 결과로 고치기, 여러 갈래로 훑고 하나로 합치기)는
+  delegate_graph로 의존 관계까지 한 번에 올리세요. 앞선 작업의 답은 뒤 작업에게 자동으로
+  전달되므로 결과를 기다렸다 다시 위임할 필요가 없습니다.
+- 결과에는 못 돈 작업과 그 이유가 함께 옵니다. 그 부분을 빼고 요약하지 마세요 —
+  사용자는 무엇이 안 됐는지를 알아야 합니다.`;

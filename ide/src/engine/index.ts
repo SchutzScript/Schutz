@@ -51,7 +51,20 @@ export class Engine {
    * 거절이어도 **원장에 남긴다** — attemptedDelegate 가 그걸 세고, 거절 사유는
    * App.tsx 가 i18n 으로 바꿔 모델에게 돌려준다. 조용히 실패하지 않는 게 요점.
    */
-  requestDelegation(req: DelegationRequest, env: DelegationEnv, cancel: () => void): RequestDelegationResult {
+  requestDelegation(
+    req: DelegationRequest,
+    env: DelegationEnv,
+    cancel: () => void,
+    /**
+     * 이 한 건에만 적용할 정책. 작업 그래프가 쓴다.
+     *
+     * per-turn 상한과 중복 대상 금지는 **계획 없이** 위임하는 모델을 묶으려고 둔 것이다.
+     * 그래프는 돌리기 전에 검사받고 화면에 다 보이는 계획이라, 그 두 개를 그래프 자신의
+     * 크기 제한으로 대신한다. 동시 실행 상한은 **안 푼다** — 그건 취향이 아니라
+     * 파일 락과 요금이 걸린 진짜 자원 한계다.
+     */
+    override?: Partial<PolicyConfig>,
+  ): RequestDelegationResult {
     const parent = this.runs.get(req.parentRunId);
     const snap: PolicySnapshot = {
       ...env,
@@ -62,7 +75,7 @@ export class Engine {
     };
 
     const delegationId = this.ledger.request(req, snap.parentDepth + 1);
-    const decision = evaluateDelegation(this.policy, snap, req);
+    const decision = evaluateDelegation(override ? { ...this.policy, ...override } : this.policy, snap, req);
     if (decision.kind === "reject") {
       this.ledger.reject(delegationId, decision.reason);
       return { kind: "rejected", delegationId, reason: decision.reason };
