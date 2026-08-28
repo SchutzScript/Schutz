@@ -14,7 +14,7 @@ const timeout: DelegationOutcome = { status: "timeout", afterMs: 1000 };
 describe("planTasks", () => {
   it("의존 없는 것들은 적은 순서 그대로", () => {
     const r = planTasks([T("a"), T("b"), T("c")]);
-    expect(r).toEqual({ kind: "ok", order: ["a", "b", "c"] });
+    expect(r).toEqual({ kind: "ok", order: ["a", "b", "c"], waves: [["a", "b", "c"]] });
   });
 
   it("의존이 앞에 온다", () => {
@@ -59,8 +59,14 @@ describe("planTasks", () => {
     expect(r.kind === "bad" && r.error).toEqual({ kind: "empty-id", at: 1 });
   });
 
+  // 화면이 이 묶음으로 그려진다 — 뭐랑 뭐가 같이 도는지가 순서만으로는 안 보인다.
+  it("동시에 돌 수 있는 것끼리 묶어 낸다", () => {
+    const r = planTasks([T("s1"), T("s2"), T("merge", ["s1", "s2"]), T("post", ["merge"])]);
+    expect(r.kind === "ok" && r.waves).toEqual([["s1", "s2"], ["merge"], ["post"]]);
+  });
+
   it("빈 그래프", () => {
-    expect(planTasks([])).toEqual({ kind: "ok", order: [] });
+    expect(planTasks([])).toEqual({ kind: "ok", order: [], waves: [] });
   });
 });
 

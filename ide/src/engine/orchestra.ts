@@ -67,7 +67,18 @@ export type PlanError =
  * policy.ts 의 PolicyDecision 이 같은 이유로 같은 모양을 쓴다.
  */
 export type PlanResult =
-  | { kind: "ok"; order: readonly TaskId[] }
+  | {
+      kind: "ok";
+      order: readonly TaskId[];
+      /**
+       * 동시에 돌 수 있는 것끼리 묶은 단. Kahn 이 어차피 만드는 것을 버리지 않고 낸다 —
+       * 화면이 "이 셋을 같이 돌리고, 끝나면 이것" 을 그리려면 순서만으로는 모자란다.
+       *
+       * 실행 순서가 아니라 **구조**다. 실제로는 앞 단이 다 끝나기 전에도 의존만 맞으면
+       * 다음 것이 뜨고(ready 가 그렇게 동다), 동시 상한 때문에 한 단이 나눠 돌기도 한다.
+       */
+      waves: readonly (readonly TaskId[])[];
+    }
   | { kind: "bad"; error: PlanError };
 
 /**
@@ -97,6 +108,7 @@ export function planTasks(defs: readonly TaskDef[]): PlanResult {
   // Kahn. 매 바퀴 **정의 순서로** 훑어 준비된 것을 담으므로 결과가 결정론적이다.
   const remaining = new Set(byId.keys());
   const order: TaskId[] = [];
+  const waves: TaskId[][] = [];
   while (remaining.size > 0) {
     const wave: TaskId[] = [];
     for (const d of defs) {
@@ -108,8 +120,9 @@ export function planTasks(defs: readonly TaskDef[]): PlanResult {
     }
     for (const id of wave) remaining.delete(id);
     order.push(...wave);
+    waves.push(wave);
   }
-  return { kind: "ok", order };
+  return { kind: "ok", order, waves };
 }
 
 /** 끝난 작업들을 훑어 만든 보고. 부르는 쪽이 t() 로 렌더한다 — 여기서 산문을 만들지 않는다. */

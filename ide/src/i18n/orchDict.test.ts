@@ -8,6 +8,7 @@ import { dict } from "./dict/orch";
 
 /** App.tsx 의 graphReport/planErrorText/씨앗이 실제로 부르는 키 전부. */
 const USED = [
+  "orch.panelLabel", "orch.panelCount", "orch.panelThen", "orch.panelBlocked", "orch.panelNoResult",
   "orch.noTasks", "orch.tooMany", "orch.badGraph",
   "orch.errCycle", "orch.errUnknownDep", "orch.errSelfDep", "orch.errDupId", "orch.errEmptyId",
   "orch.priorBlock", "orch.priorOne", "orch.priorEmpty",

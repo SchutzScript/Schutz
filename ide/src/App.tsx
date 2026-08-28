@@ -23,7 +23,7 @@ import { PreviewPane } from "./editor/PreviewPane";
 import { createEngine, DEFAULT_POLICY } from "./engine";
 import type { DelegationOutcome, PolicyConfig, RejectReason, RunRecord, StopCause } from "./engine";
 import { Orchestra, planTasks } from "./engine/orchestra";
-import type { PlanError, TaskDef } from "./engine/orchestra";
+import type { PlanError, TaskDef, TaskState } from "./engine/orchestra";
 import { normalizeSteps, mergePlan, stopPlan } from "./engine/plan";
 import { summarizeChanges, totalOf } from "./engine/changeset";
 import { buildHunks, composeFromHunks, allSelected, changeCount, hunkStats, type ChangeHunk } from "./review/hunks";
@@ -279,6 +279,14 @@ interface S {
   messages: ChatMsg[];
   input: string;
   plan: PlanItem[];
+  /**
+   * 도는 중인 작업 그래프. 없으면 null.
+   *
+   * 도구 카드만으로는 **뭐가 뭐를 기다리는지**가 안 보인다 — 카드 다섯 장이
+   * 따로 떠 있을 뿐이라, 하나가 죽어서 나머지가 안 돈 것인지 원래 순서가 그런 것인지
+   * 구분이 안 된다. 그 구조를 그리려고 따로 둔다.
+   */
+  graph: { waves: readonly (readonly string[])[]; tasks: TaskState[] } | null;
   tools: ToolItem[];
   files: ReviewFile[];
   chips: Record<string, { text: string; op: number }>;
@@ -708,7 +716,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
 
   state: S = {
     statusKey: "idle", running: false, runProgress: 0, messages: [], input: "",
-    plan: [], tools: [], files: [], chips: {},
+    plan: [], graph: null, tools: [], files: [], chips: {},
     tabs: [[]], active: [""], leftTab: "flow", expanded: null,
     breakpoints: {}, debug: null, debugConsole: [], watches: [], watchInput: "",
     extCommands: [], extList: [], extErrors: [], extLimited: [], extPanel: null, extThemes: [], extIconThemes: [], iconVer: 0, extSearch: "", extResults: [], extBusy: false, extInstalling: [], extDetail: null, extDetailBusy: false,
@@ -1272,7 +1280,7 @@ export class App extends React.Component<{ playOpening?: boolean }, S> {
       this._lastTabsRef = restored.tabs; this._lastActiveRef = restored.active; this._lastCollapsedRef = restored.collapsed;
       this.setState(s => ({
         workspace: tree, leftTab: "tree", tabs: restored.tabs, active: restored.active, layout: restored.layout, messages: [],
-        files: [], plan: [], tools: [], chips: {},
+        files: [], plan: [], graph: null, tools: [], chips: {},
         expanded: null, paneDirty: {}, statusKey: "idle", running: false,
         // 프로젝트마다 모드를 따로 기억한다 — 설정이 없으면 전역 기본값으로 떨어진다
         uiMode: getUiMode(tree.root),
@@ -3994,6 +4002,15 @@ ${(r.output || "").slice(0, 2000)}`;
     if (plan.kind === "bad") return t("orch.badGraph", { why: this.planErrorText(plan.error) });
 
     const g = new Orchestra(defs);
+    // 화면은 매번 다시 그려야 한다 — Orchestra 는 자기 상태를 제자리에서 고치므로
+    // 같은 배열을 다시 넘기면 React 가 바뀐 줄을 모른다. states_() 가 새 배열을 낸다.
+    const draw = () => this.setState({ graph: { waves: plan.waves, tasks: g.states_() } });
+    draw();
+    // 그래프는 왼쪽 패널의 **흐름 탭**에만 그려진다. 프로젝트를 열면 트리 탭으로 가 있어서,
+    // 그대로 두면 여러 에이전트가 도는 내내 화면이 아무 말도 안 한다. 위임 한 건은
+    // 도구 카드로라도 보이지만 그래프는 구조가 전부라 더 심하다. (아래 데모 경로가
+    // 같은 이유로 같은 일을 한다.)
+    if (this.state.uiMode === "editor") this.setState({ leftTab: "flow" });
     const limit = Math.max(1, DEFAULT_POLICY.maxConcurrentDelegations);
     const override = { maxDelegationsPerTurn: GRAPH_MAX_TASKS, allowDuplicateTargetPerTurn: true };
     const inflight = new Map<string, Promise<{ id: string; outcome: DelegationOutcome }>>();
@@ -4013,6 +4030,7 @@ ${(r.output || "").slice(0, 2000)}`;
       }
       for (const d of batch) {
         g.start(d.id);
+        draw();
         inflight.set(
           d.id,
           this.startDelegation(parentRunId, fromAgent, d.agent, d.task, { policyOverride: override, inputs: g.inputsFor(d.id) })
@@ -4028,6 +4046,7 @@ ${(r.output || "").slice(0, 2000)}`;
       inflight.delete(done.id);
       busy.delete(defs.find(d => d.id === done.id)!.agent);
       g.settle(done.id, done.outcome);
+      draw();
     }
 
     return this.graphReport(g);
@@ -7107,6 +7126,13 @@ ${(r.output || "").slice(0, 2000)}`;
   renderFlow() {
     const s = this.state;
     const planIcon: Record<string, [string, string]> = { pending: ["○", "var(--fg-dim2)"], done: ["✓", "var(--ok)"], stopped: ["–", "var(--err)"] };
+    // 그래프 쪽은 상태가 더 잘게 갈린다. 특히 **못 돈 것**(skipped)과 **아직 안 돈 것**(pending)을
+    // 같은 모양으로 두면 안 된다 — 그 둘이 같아 보이는 게 이 패널이 막으려는 실패다.
+    // empty 도 done 과 다른 표시를 준다: 돌긴 돌았지만 결과가 없다.
+    const graphIcon: Record<string, [string, string]> = {
+      pending: ["○", "var(--fg-dim2)"], done: ["✓", "var(--ok)"], empty: ["◌", "var(--fg-dim)"],
+      failed: ["×", "var(--err)"], skipped: ["⊘", "var(--err)"], aborted: ["–", "var(--err)"],
+    };
     const doneLabel = t("flowtree.done"); // 아래 s.tools.map(t => …) 에서 t 가 섀도잉되므로 미리 계산
     const editVerb = t("sc3.verbEdit"); // verb 는 번역값(1973) → 편집 하이라이트 비교를 리터럴 대신 번역값으로
     return (
@@ -7140,6 +7166,59 @@ ${(r.output || "").slice(0, 2000)}`;
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+        {s.graph && (
+          <div style={{ position: "relative", marginTop: 10 }}>
+            <span style={{ position: "absolute", left: 4, top: 8, width: 8, height: 8, borderRadius: "50%", background: "var(--accent)" }} />
+            <div style={{ marginLeft: 22, background: "var(--bg-card)", border: "1px solid var(--w06)", borderRadius: 10, padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--fg-dim)" }}>{t("orch.panelLabel")}</span>
+                <span style={{ fontSize: 10, color: "var(--accent)", background: "rgba(143,168,147,.1)", borderRadius: 3, padding: "0 6px", lineHeight: "15px" }}>
+                  {t("orch.panelCount", { done: s.graph.tasks.filter(x => x.status === "done").length, total: s.graph.tasks.length })}
+                </span>
+              </div>
+              {s.graph.waves.map((wave, wi) => (
+                <div key={wi}>
+                  {/* 단과 단 사이의 화살표. 이게 없으면 다섯 줄이 그냥 목록으로 읽히고,
+                      무엇이 무엇을 기다리는지가 사라진다 — 이 패널이 있는 이유가 그거다. */}
+                  {wi > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 0 3px 2px" }}>
+                      <span style={{ fontSize: 9, color: "var(--fg-dim2)" }}>↓</span>
+                      <span style={{ fontSize: 9.5, color: "var(--fg-dim2)" }}>{t("orch.panelThen")}</span>
+                    </div>
+                  )}
+                  {wave.map(id => {
+                    const st = s.graph!.tasks.find(x => x.id === id);
+                    if (!st) return null;
+                    const d = this.agDef(st.agent);
+                    const [icon, color] = graphIcon[st.status] || ["○", "var(--fg-dim2)"];
+                    // 못 돈 것은 왜 못 돌았는지가 줄에 같이 있어야 한다. 회색으로만 두면
+                    // "아직 안 돈 것" 과 "영영 안 돌 것" 이 같아 보인다.
+                    const why = st.status === "skipped" && st.skipped
+                      ? t("orch.panelBlocked", { dep: st.skipped.dep })
+                      : st.status === "failed" && st.outcome?.status === "failed"
+                        ? st.outcome.message
+                        : st.status === "empty" ? t("orch.panelNoResult") : "";
+                    return (
+                      <div key={id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2.5px 0" }}>
+                        <span style={{ flex: "none", width: 13, height: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {st.status === "running"
+                            ? <span style={spinner("var(--accent)", "rgba(143,168,147,.25)")} />
+                            : <span style={{ fontSize: 10.5, color }}>{icon}</span>}
+                        </span>
+                        <span style={{ flex: "none", fontFamily: MONO, fontSize: 10.5, color: st.status === "pending" ? "var(--fg-dim2)" : "var(--fg-sub)" }}>{id}</span>
+                        {why && (
+                          <span style={{ fontSize: 10.5, color: "var(--fg-dim2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{why}</span>
+                        )}
+                        <div style={{ flex: 1 }} />
+                        <span style={{ flex: "none", fontSize: 9.5, color: d.color, border: `1px solid ${d.color}50`, borderRadius: 3, padding: "0 5px", lineHeight: "14px" }}>{d.name}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </div>
         )}

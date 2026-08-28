@@ -4,6 +4,13 @@
 // 무엇이 안 됐고 왜 안 됐는지가 빠지면 모델이 성공한 것만 요약하고, 사용자는
 // 나머지가 됐는지 안 됐는지 모른 채로 남는다.
 export const dict: Record<string, { ko: string; en: string; de: string; ja: string }> = {
+  // 패널 — 이쪽은 사람이 읽는다.
+  "orch.panelLabel": { ko: "작업 그래프", en: "TASK GRAPH", de: "AUFGABENGRAPH", ja: "タスクグラフ" },
+  "orch.panelCount": { ko: "{done}/{total}", en: "{done}/{total}", de: "{done}/{total}", ja: "{done}/{total}" },
+  "orch.panelThen": { ko: "앞이 끝나면", en: "then", de: "danach", ja: "その後" },
+  "orch.panelBlocked": { ko: "'{dep}' 에 막힘", en: "blocked by '{dep}'", de: "durch '{dep}' blockiert", ja: "'{dep}' で止まった" },
+  "orch.panelNoResult": { ko: "결과 없음", en: "no result", de: "kein Ergebnis", ja: "結果なし" },
+
   "orch.noTasks": {
     ko: "작업 목록이 비어 있어 아무것도 맡기지 않았습니다. tasks 에 최소 한 개를 넣으세요.",
     en: "The task list was empty, so nothing was delegated. Put at least one entry in tasks.",
