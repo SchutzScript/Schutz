@@ -4,6 +4,7 @@
 import { dict as d_dap } from "./dict/dap";
 import { dict as d_data } from "./dict/data";
 import { dict as d_exth } from "./dict/exth";
+import { dict as d_orch } from "./dict/orch";
 import { dict as d_mcpc } from "./dict/mcpc";
 import { dict as d_media } from "./dict/media";
 import { dict as d_model } from "./dict/model";
@@ -44,7 +45,7 @@ import { dict as d_cloud } from "./dict/cloud";
 export type Msg = { ko: string; en: string; de: string; ja: string };
 
 export const MESSAGES: Record<string, Msg> = {
-  ...d_dap, ...d_data, ...d_exth, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_reg, ...d_key,
+  ...d_dap, ...d_data, ...d_exth, ...d_orch, ...d_mcpc, ...d_media, ...d_model, ...d_mono, ...d_oai, ...d_reg, ...d_key,
   ...d_confirm, ...d_extask, ...d_extview, ...d_enc, ...d_runfile, ...d_gitp, ...d_flowtree, ...d_dbg, ...d_mcpui, ...d_modal, ...d_cmds, ...d_palette, ...d_extd, ...d_misc, ...d_chat2, ...d_engine, ...d_tour, ...d_open, ...d_mode, ...d_cliimp,
   ...d_sc1, ...d_sc2, ...d_sc3, ...d_sc4, ...d_sc5, ...d_eng, ...d_plug, ...d_review, ...d_cloud,
   // ── 공통 ────────────────────────────────────────────────

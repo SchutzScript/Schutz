@@ -10,7 +10,7 @@ import {
 import { FileIcon } from "./fileIcons";
 import {
   schutzSystemPrompt, MANAGER_SYSTEM_EXTRA,
-  WORKSPACE_TOOLS, DELEGATE_TOOL,
+  WORKSPACE_TOOLS, DELEGATE_TOOL, GRAPH_TOOL, GRAPH_MAX_TASKS,
 } from "./ai/claude";
 import { PROVIDERS_MAP, testProvider, getManagerId, setManagerId } from "./ai/registry";
 import { LOCAL_PROVIDER } from "./ai/openaiCompat";
@@ -21,7 +21,9 @@ import { MonacoPane, paneRegistry } from "./editor/MonacoPane";
 import { DiffPane } from "./editor/DiffPane";
 import { PreviewPane } from "./editor/PreviewPane";
 import { createEngine, DEFAULT_POLICY } from "./engine";
-import type { DelegationOutcome, RejectReason, RunRecord, StopCause } from "./engine";
+import type { DelegationOutcome, PolicyConfig, RejectReason, RunRecord, StopCause } from "./engine";
+import { Orchestra, planTasks } from "./engine/orchestra";
+import type { PlanError, TaskDef } from "./engine/orchestra";
 import { normalizeSteps, mergePlan, stopPlan } from "./engine/plan";
 import { summarizeChanges, totalOf } from "./engine/changeset";
 import { buildHunks, composeFromHunks, allSelected, changeCount, hunkStats, type ChangeHunk } from "./review/hunks";
@@ -3742,7 +3744,7 @@ ${(r.output || "").slice(0, 2000)}`;
     // 위임은 성립한다 — 자기 자신 위에서 다른 인격으로 돌면 된다.
     const roster = this.delegateRoster(agentId);
     const wsTools = useWs
-      ? [...(opts.isManager && roster.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL] : WORKSPACE_TOOLS)]
+      ? [...(opts.isManager && roster.length ? [...WORKSPACE_TOOLS, DELEGATE_TOOL, GRAPH_TOOL] : WORKSPACE_TOOLS)]
       : [];
     const skillDefs = this.skillToolDefs();
     const allTools = (useWs || hasMcp || skillDefs.length) ? [...wsTools, ...this.mcpToolDefs(), ...skillDefs] : undefined;
@@ -3838,11 +3840,18 @@ ${(r.output || "").slice(0, 2000)}`;
         const slots: (string | undefined)[] = new Array(calls.length);
         const flying: Promise<unknown>[] = [];
         calls.forEach((c, i) => {
+          if (c.name === "delegate_graph") {
+            flying.push(this.runGraph(run.runId, agentId, c).then(text => { slots[i] = text; }));
+            return;
+          }
           if (c.name !== "delegate_task") return;
-          flying.push(this.startDelegation(run.runId, agentId, c).then(out => { slots[i] = out; }));
+          flying.push(
+            this.startDelegation(run.runId, agentId, String(c.input?.agent ?? ""), String(c.input?.task ?? ""))
+              .then(r => { slots[i] = r.text; }),
+          );
         });
         for (let i = 0; i < calls.length; i++) {
-          if (calls[i].name === "delegate_task") continue;
+          if (calls[i].name === "delegate_task" || calls[i].name === "delegate_graph") continue;
           if (abort.signal.aborted) break; // 중지 시 남은 도구 실행/파일쓰기 중단
           slots[i] = await this.execTool(agentId, calls[i], run.runId);
         }
@@ -3951,6 +3960,118 @@ ${(r.output || "").slice(0, 2000)}`;
     });
   }
 
+
+  /**
+   * 작업 그래프 한 판. delegate_graph 가 여기로 온다.
+   *
+   * 그래프는 **돌리기 전에** 검사한다 — 사이클이나 없는 의존은 반쯤 돌려 놓고 발견하면
+   * 되돌릴 수가 없다. 검사에 걸리면 무엇이 잘못됐는지 그대로 돌려준다. "그래프가
+   * 잘못됐습니다" 만 주면 모델은 같은 것을 그대로 다시 올린다.
+   *
+   * 동시 실행 상한은 policy 그대로 지킨다. per-turn 상한과 중복 대상 금지만 푸는데,
+   * 그 둘은 **계획 없이** 위임하는 모델을 묶으려던 것이고 그래프는 그 계획 자체다.
+   * 대신 그래프 크기로 묶는다(GRAPH_MAX_TASKS).
+   *
+   * 같은 에이전트에게 두 작업을 동시에 태우지 않는다. 태우면 아래층이 agent-busy 로
+   * 거절하고, 그 거절이 실패로 번져 **순서만 안 맞았을 뿐인 작업들이 통째로 죽는다.**
+   * 그래서 지금 뜬 대상을 빼고 고른다 — Orchestra 가 동시성을 부르는 쪽에 맡긴 이유다.
+   */
+  private async runGraph(parentRunId: string, fromAgent: string, call: ToolCall): Promise<string> {
+    const raw = Array.isArray(call.input?.tasks) ? call.input.tasks : [];
+    const defs: TaskDef[] = raw.map((x: any, i: number) => ({
+      id: String(x?.id ?? "").trim() || "t" + (i + 1),
+      agent: String(x?.agent ?? ""),
+      task: String(x?.task ?? ""),
+      needs: Array.isArray(x?.needs) ? x.needs.map((n: any) => String(n)) : [],
+    }));
+
+    if (defs.length === 0) return t("orch.noTasks");
+    if (defs.length > GRAPH_MAX_TASKS) {
+      return t("orch.tooMany", { n: defs.length, max: GRAPH_MAX_TASKS });
+    }
+
+    const plan = planTasks(defs);
+    if (plan.kind === "bad") return t("orch.badGraph", { why: this.planErrorText(plan.error) });
+
+    const g = new Orchestra(defs);
+    const limit = Math.max(1, DEFAULT_POLICY.maxConcurrentDelegations);
+    const override = { maxDelegationsPerTurn: GRAPH_MAX_TASKS, allowDuplicateTargetPerTurn: true };
+    const inflight = new Map<string, Promise<{ id: string; outcome: DelegationOutcome }>>();
+    const busy = new Set<string>();
+
+    while (!g.finished()) {
+      // 지금 뜬 대상과 겹치지 않는 것만 고른다. ready 는 상한을 모르므로 넉넉히 받아
+      // 여기서 거른다 — 겹치는 것을 세어 상한을 깎으면 태울 수 있는 것을 못 태운다.
+      const batch: TaskDef[] = [];
+      for (const d of g.ready(defs.length)) {
+        if (inflight.size + batch.length >= limit) break;
+        // busy 에 **지금 고르는 중인 것도** 넣어 가며 센다. 고르기와 태우기를 나눠 놓고
+        // 태울 때 넣으면, 한 배치 안의 같은 대상 둘이 나란히 통과한다(실측으로 잡혔다).
+        if (busy.has(d.agent)) continue;
+        busy.add(d.agent);
+        batch.push(d);
+      }
+      for (const d of batch) {
+        g.start(d.id);
+        inflight.set(
+          d.id,
+          this.startDelegation(parentRunId, fromAgent, d.agent, d.task, { policyOverride: override, inputs: g.inputsFor(d.id) })
+            .then(r => ({ id: d.id, outcome: r.outcome })),
+        );
+      }
+      if (inflight.size === 0) {
+        // 태울 것도 없고 도는 것도 없다. 그래프가 성립하는데도 여기 오는 경우는
+        // **바깥에서** 그 에이전트를 이미 쓰고 있을 때뿐이다. 남은 것은 open 으로 보고된다.
+        break;
+      }
+      const done = await Promise.race(inflight.values());
+      inflight.delete(done.id);
+      busy.delete(defs.find(d => d.id === done.id)!.agent);
+      g.settle(done.id, done.outcome);
+    }
+
+    return this.graphReport(g);
+  }
+
+  /** 그래프 검사 실패를 사람 말로. 무엇이 걸렸는지까지 말해야 모델이 고쳐 온다. */
+  private planErrorText(e: PlanError): string {
+    switch (e.kind) {
+      case "cycle": return t("orch.errCycle", { ids: e.ids.join(" → ") });
+      case "unknown-dep": return t("orch.errUnknownDep", { id: e.id, dep: e.dep });
+      case "self-dep": return t("orch.errSelfDep", { id: e.id });
+      case "duplicate-id": return t("orch.errDupId", { id: e.id });
+      default: return t("orch.errEmptyId", { at: e.at + 1 });
+    }
+  }
+
+  /**
+   * 한 판의 결과. **못 돈 것을 반드시 적는다** — 그게 이 층이 있는 이유다.
+   * 성공한 것만 돌려주면 모델이 그것만 요약하고, 사용자는 나머지가 됐는지 안 됐는지 모른다.
+   */
+  private graphReport(g: Orchestra): string {
+    const r = g.report();
+    const line = (id: string) => {
+      const st = g.state(id)!;
+      const text = st.outcome?.status === "completed" ? st.outcome.text : "";
+      return t("orch.lineDone", { id, agent: st.agent, text });
+    };
+    const parts: string[] = [t("orch.head", { total: r.total, done: r.done.length })];
+    for (const id of r.done) parts.push(line(id));
+    for (const id of r.empty) parts.push(t("orch.lineEmpty", { id, agent: g.state(id)!.agent }));
+    for (const id of r.failed) {
+      const o = g.state(id)!.outcome;
+      parts.push(t("orch.lineFailed", { id, agent: g.state(id)!.agent, why: o?.status === "failed" ? o.message : "" }));
+    }
+    for (const id of r.aborted) parts.push(t("orch.lineAborted", { id, agent: g.state(id)!.agent }));
+    for (const s of r.skipped) {
+      const key = s.cause.kind === "dep-failed" ? "orch.lineSkipFailed"
+        : s.cause.kind === "dep-aborted" ? "orch.lineSkipAborted" : "orch.lineSkipBlocked";
+      parts.push(t(key, { id: s.id, agent: g.state(s.id)!.agent, dep: s.cause.dep }));
+    }
+    for (const id of r.open) parts.push(t("orch.lineOpen", { id, agent: g.state(id)!.agent }));
+    return parts.join("\n");
+  }
+
   /**
    * 위임 하나를 시작하고 **실제 결과**를 기다린다.
    *
@@ -3961,11 +4082,25 @@ ${(r.output || "").slice(0, 2000)}`;
    * 그걸 성공으로 읽고 사실대로 요약했고, 그 요약이 거짓말 취급을 받았다. 채널이
    * 정직하지 않았던 것이지 모델이 거짓말한 게 아니다.
    */
-  private startDelegation(parentRunId: string, fromAgent: string, call: ToolCall): Promise<string> {
+  private startDelegation(
+    parentRunId: string,
+    fromAgent: string,
+    target: string,
+    task: string,
+    /** 그래프가 쓰는 것들. 한 건짜리 위임은 아무것도 안 넘긴다. */
+    opts: {
+      /** 이 한 건에만 적용할 정책 완화. engine.requestDelegation 이 받는 그대로. */
+      policyOverride?: Partial<PolicyConfig>;
+      /** 먼저 끝난 작업들의 답. 씨앗 프롬프트 뒤에 붙는다. */
+      inputs?: readonly { id: string; text: string }[];
+    } = {},
+  ): Promise<{ text: string; outcome: DelegationOutcome }> {
     const toolId = "t" + (this._uid++);
-    const target = String(call.input?.agent ?? "");
-    const task = String(call.input?.task ?? "");
     this.addTool(toolId, fromAgent, t("sc2.verbDelegate"), target);
+    // 거절도 결과다. 그래프가 이걸 실패로 읽어 뒤엣것들을 이유와 함께 닫는다 —
+    // 문자열만 돌려주던 시절에는 그래프 쪽에서 성공과 구분할 방법이 없었다.
+    const rejected = (text: string) =>
+      Promise.resolve({ text, outcome: { status: "failed", message: text } as DelegationOutcome });
 
     // 서브에이전트(@이름)는 **인격**이지 모델이 아니다. 어떤 프로바이더 위에서 돌지 여기서
     // 정하고, 그 아래 정책 판정(깊이·사이클·바쁨)은 프로바이더 기준으로 그대로 태운다
@@ -3976,12 +4111,12 @@ ${(r.output || "").slice(0, 2000)}`;
       persona = findSubagent(this.state.subagents, target);
       if (!persona) {
         this.setTool(toolId, { st: "done", note: t("engine.noteRejected") });
-        return Promise.resolve(t("sub.unknown", { target, known: this.delegateRoster().join(", ") || "—" }));
+        return rejected(t("sub.unknown", { target, known: this.delegateRoster().join(", ") || "—" }));
       }
       const p = providerFor(persona, this.configuredAgents(), fromAgent);
       if (!p) {
         this.setTool(toolId, { st: "done", note: t("engine.noteRejected") });
-        return Promise.resolve(t("sub.noProvider", { name: persona.name }));
+        return rejected(t("sub.noProvider", { name: persona.name }));
       }
       runOn = p;
     }
@@ -3996,6 +4131,7 @@ ${(r.output || "").slice(0, 2000)}`;
         busyAgents: this.engine.runs.activeRuns(["manager", "sub"]).map(r => r.agentId),
       },
       () => box.cancel(),
+      opts.policyOverride,
     );
 
     // 거절도 원장에 남는다. 모델에는 이유와 "그래서 뭘 하라"를 돌려준다 —
@@ -4003,7 +4139,7 @@ ${(r.output || "").slice(0, 2000)}`;
     if (res.kind === "rejected") {
       this.setTool(toolId, { st: "done", note: t("engine.noteRejected") });
       // 인격으로 불렀는데 그 모델이 바쁜 경우가 있다 — 무엇이 막았는지 그대로 말한다.
-      return Promise.resolve(this.rejectText(res.reason, persona ? `${target} (${runOn})` : target));
+      return rejected(this.rejectText(res.reason, persona ? `${target} (${runOn})` : target));
     }
 
     // 보고할 때 쓰는 이름은 **인격** 이름이다 — 모델 이름을 돌려주면 매니저가
@@ -4012,8 +4148,14 @@ ${(r.output || "").slice(0, 2000)}`;
     this.setTool(toolId, { st: "done", note: t("sc2.noteDelegated") });
 
     const ctx = this.delegationContext(fromAgent);
+    // 앞선 작업의 답. 아무 말도 안 한 것도 **자리를 남긴다** — 빼 버리면 하위가
+    // "그런 작업은 없었다" 로 읽고, 있지도 않은 전제를 스스로 지어낸다.
+    const prior = (opts.inputs ?? [])
+      .map(i => t("orch.priorOne", { id: i.id, text: i.text || t("orch.priorEmpty") }))
+      .join("\n\n");
     const seedText =
       t("engine.seed", { manager: this.agDef(fromAgent).name, task }) +
+      (prior ? t("orch.priorBlock", { prior }) : "") +
       (ctx ? t("engine.seedContext", { context: ctx }) : "");
 
     const child = this.runAgentLoop(runOn, [{ role: "user", text: seedText }], {
@@ -4034,6 +4176,13 @@ ${(r.output || "").slice(0, 2000)}`;
     return Promise.race([child, timeout]).then(outcome => {
       window.clearTimeout(timer);
       this.engine.ledger.settle(res.delegationId, outcome);
+      return { text: this.renderDelegationResult(outcome, name, toolId, ms), outcome };
+    });
+  }
+
+  /** 위임 결과를 모델에게 돌려줄 말로. 한 건짜리와 그래프가 같은 문구를 쓴다. */
+  private renderDelegationResult(outcome: DelegationOutcome, name: string, toolId: string, ms: number): string {
+    {
       switch (outcome.status) {
         case "timeout":
           // 만료돼도 자식은 계속 둔다 — 제안은 여전히 검토 패널에 도착한다.
@@ -4049,7 +4198,7 @@ ${(r.output || "").slice(0, 2000)}`;
         default:
           return t("engine.result", { name, text: outcome.text });
       }
-    });
+    }
   }
 
   /** Claude Code CLI(구독 인증) 턴 — 편집은 CLI가 직접 수행(acceptEdits), 종료 후 트리·페인 갱신 */

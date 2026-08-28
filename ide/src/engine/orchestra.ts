@@ -61,9 +61,14 @@ export type PlanError =
   | { kind: "cycle"; ids: readonly TaskId[] }
   | { kind: "empty-id"; at: number };
 
+/**
+ * 판별자를 문자열로 둔다. `{ok:true}|{ok:false}` 형태는 루트 tsconfig(strict:false)에서
+ * 좀혀지지 않아 `r.error` 가 컴파일 오류가 된다 — App.tsx 가 그 설정으로 검사된다.
+ * policy.ts 의 PolicyDecision 이 같은 이유로 같은 모양을 쓴다.
+ */
 export type PlanResult =
-  | { ok: true; order: readonly TaskId[] }
-  | { ok: false; error: PlanError };
+  | { kind: "ok"; order: readonly TaskId[] }
+  | { kind: "bad"; error: PlanError };
 
 /**
  * 그래프를 검사하고 위상 순서를 낸다.
@@ -78,14 +83,14 @@ export function planTasks(defs: readonly TaskDef[]): PlanResult {
   for (let i = 0; i < defs.length; i++) {
     const d = defs[i]!;
     const id = String(d.id ?? "");
-    if (!id) return { ok: false, error: { kind: "empty-id", at: i } };
-    if (byId.has(id)) return { ok: false, error: { kind: "duplicate-id", id } };
+    if (!id) return { kind: "bad", error: { kind: "empty-id", at: i } };
+    if (byId.has(id)) return { kind: "bad", error: { kind: "duplicate-id", id } };
     byId.set(id, d);
   }
   for (const d of defs) {
     for (const dep of d.needs) {
-      if (dep === d.id) return { ok: false, error: { kind: "self-dep", id: d.id } };
-      if (!byId.has(dep)) return { ok: false, error: { kind: "unknown-dep", id: d.id, dep } };
+      if (dep === d.id) return { kind: "bad", error: { kind: "self-dep", id: d.id } };
+      if (!byId.has(dep)) return { kind: "bad", error: { kind: "unknown-dep", id: d.id, dep } };
     }
   }
 
@@ -99,12 +104,12 @@ export function planTasks(defs: readonly TaskDef[]): PlanResult {
       if (d.needs.every(dep => !remaining.has(dep))) wave.push(d.id);
     }
     if (wave.length === 0) {
-      return { ok: false, error: { kind: "cycle", ids: [...remaining] } };
+      return { kind: "bad", error: { kind: "cycle", ids: [...remaining] } };
     }
     for (const id of wave) remaining.delete(id);
     order.push(...wave);
   }
-  return { ok: true, order };
+  return { kind: "ok", order };
 }
 
 /** 끝난 작업들을 훑어 만든 보고. 부르는 쪽이 t() 로 렌더한다 — 여기서 산문을 만들지 않는다. */

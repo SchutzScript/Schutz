@@ -14,53 +14,53 @@ const timeout: DelegationOutcome = { status: "timeout", afterMs: 1000 };
 describe("planTasks", () => {
   it("의존 없는 것들은 적은 순서 그대로", () => {
     const r = planTasks([T("a"), T("b"), T("c")]);
-    expect(r).toEqual({ ok: true, order: ["a", "b", "c"] });
+    expect(r).toEqual({ kind: "ok", order: ["a", "b", "c"] });
   });
 
   it("의존이 앞에 온다", () => {
     const r = planTasks([T("c", ["a", "b"]), T("a"), T("b", ["a"])]);
-    expect(r.ok && r.order).toEqual(["a", "b", "c"]);
+    expect(r.kind === "ok" && r.order).toEqual(["a", "b", "c"]);
   });
 
   // 같은 그래프를 두 번 짜면 두 번 같은 그림이어야 한다 — 화면이 이 순서로 그려진다.
   it("의존만 맞으면 정의 순서를 지킨다", () => {
     const r = planTasks([T("z"), T("y"), T("x")]);
-    expect(r.ok && r.order).toEqual(["z", "y", "x"]);
+    expect(r.kind === "ok" && r.order).toEqual(["z", "y", "x"]);
   });
 
   it("사이클이면 남은 것들을 그대로 실어 보낸다", () => {
     const r = planTasks([T("a", ["b"]), T("b", ["a"]), T("c")]);
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.error).toEqual({ kind: "cycle", ids: ["a", "b"] });
+    expect(r.kind).toBe("bad");
+    expect(r.kind === "bad" && r.error).toEqual({ kind: "cycle", ids: ["a", "b"] });
   });
 
   it("긴 사이클도 잡는다", () => {
     const r = planTasks([T("a", ["c"]), T("b", ["a"]), T("c", ["b"])]);
-    expect(!r.ok && r.error.kind).toBe("cycle");
+    expect(r.kind === "bad" && r.error.kind).toBe("cycle");
   });
 
   it("없는 의존", () => {
     const r = planTasks([T("a", ["nope"])]);
-    expect(!r.ok && r.error).toEqual({ kind: "unknown-dep", id: "a", dep: "nope" });
+    expect(r.kind === "bad" && r.error).toEqual({ kind: "unknown-dep", id: "a", dep: "nope" });
   });
 
   it("자기 자신에 의존", () => {
     const r = planTasks([T("a", ["a"])]);
-    expect(!r.ok && r.error).toEqual({ kind: "self-dep", id: "a" });
+    expect(r.kind === "bad" && r.error).toEqual({ kind: "self-dep", id: "a" });
   });
 
   it("id 가 겹침", () => {
     const r = planTasks([T("a"), T("a")]);
-    expect(!r.ok && r.error).toEqual({ kind: "duplicate-id", id: "a" });
+    expect(r.kind === "bad" && r.error).toEqual({ kind: "duplicate-id", id: "a" });
   });
 
   it("빈 id 는 자리까지 알려준다", () => {
     const r = planTasks([T("a"), T("")]);
-    expect(!r.ok && r.error).toEqual({ kind: "empty-id", at: 1 });
+    expect(r.kind === "bad" && r.error).toEqual({ kind: "empty-id", at: 1 });
   });
 
   it("빈 그래프", () => {
-    expect(planTasks([])).toEqual({ ok: true, order: [] });
+    expect(planTasks([])).toEqual({ kind: "ok", order: [] });
   });
 });
 
@@ -258,7 +258,7 @@ describe("한 판 끝까지", () => {
   // 부르는 쪽의 순환을 그대로 흉내낸다. 동시 상한 2 에서 다섯 개짜리 그래프.
   it("팬아웃 후 합치기", () => {
     const defs = [T("s1"), T("s2"), T("s3"), T("merge", ["s1", "s2", "s3"]), T("post", ["merge"])];
-    expect(planTasks(defs).ok).toBe(true);
+    expect(planTasks(defs).kind).toBe("ok");
     const g = new Orchestra(defs);
     const LIMIT = 2;
     const inflight: string[] = [];
