@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [0.5.0] — Several agents, one shape
+
+Delegation ran one task at a time. A manager could hand work to another agent, but to build on the answer it had to wait for the round to come back, read the result, and delegate again. There was no way to say "run A and B together, and when both finish give their results to C".
+
+This release adds that layer, and stops there. Development is paused after it.
+
+### The task graph
+
+`delegate_graph` takes tasks with dependencies. Independent ones run together; a task that waits on others receives their answers in its own prompt automatically.
+
+The layer's real job is refusing to lose work. Eight tasks going out and three answers coming back, with the rest silent, is the failure this project keeps returning to — a confident partial result is indistinguishable from a complete one.
+
+- **When a dependency breaks, everything waiting on it closes with a reason**, immediately. The direct cause and the ones knocked over behind it are recorded differently, so one failure blocking twenty tasks still reports one cause instead of twenty.
+- **A task that ran but returned nothing is not counted as done.** Dependents still proceed, but they receive an explicit blank rather than a missing entry — dropping it reads to the next agent as "that task never existed".
+- **A delegation that timed out counts as failed.** Letting dependents build on an answer that never arrived is worse than blocking them.
+- **A graph that does not hold together starts nothing at all.** Half-running it and finding the cycle afterwards cannot be undone. The error names the ids caught in the loop, or the dependency that does not exist.
+
+Two limits are relaxed inside a graph and one is not. The per-turn count and the ban on reusing an agent existed to bound a model delegating without a plan; a graph is that plan, checked before it runs and visible on screen, so its own size limit replaces them. Concurrency stays capped — that one is file locks and billing.
+
+### Seeing it
+
+The workflow panel draws the graph as it runs: which tasks go together, what waits on what, and what never ran.
+
+Not-yet-run and never-will-run do not share an icon, and neither does ran-but-returned-nothing. A blocked row says what blocked it, on the row. Starting a graph switches the left panel to the workflow tab — opening a project leaves it on the file tree, and without the switch the screen says nothing while several agents work.
+
+### Status
+
+Development is paused here for an indefinite period, and the repository is archived. The installers below are the last build. `docs/PLAN-0.4.md` records the measurements behind the decision not to build a codebase index, which is the most reusable thing to pick up from if work resumes.
+
 ## [0.4.0] — Finding things, and admitting when it cannot
 
 This release was planned as a codebase index. It did not become one, and the reason is the most useful thing in it.
