@@ -14,6 +14,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-8FA893" alt="License"></a>
 </p>
 
+<p align="center">
+  <sub><strong>Updates have ended.</strong> 0.5.0 is the final release and the installers below are the last build.<br>
+  The repository stays open to read, clone and fork — see the <a href="CHANGELOG.md">changelog</a> for where it left off.</sub>
+</p>
+
 ---
 
 Most AI coding tools hand you a finished diff and ask you to trust it. Schutz shows you the **process** instead. Tool calls, the agent's plan, and its progress stream into the UI live; the edit itself is then replayed into the editor line by line, so you see exactly what changed and where. The goal is to make an AI's edits **observable, beautiful, and controllable**.
