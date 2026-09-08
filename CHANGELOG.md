@@ -6,7 +6,7 @@
 
 Delegation ran one task at a time. A manager could hand work to another agent, but to build on the answer it had to wait for the round to come back, read the result, and delegate again. There was no way to say "run A and B together, and when both finish give their results to C".
 
-This release adds that layer, and stops there. Development is paused after it.
+This release adds that layer, and is the last one. Updates end here.
 
 ### The task graph
 
@@ -27,9 +27,11 @@ The workflow panel draws the graph as it runs: which tasks go together, what wai
 
 Not-yet-run and never-will-run do not share an icon, and neither does ran-but-returned-nothing. A blocked row says what blocked it, on the row. Starting a graph switches the left panel to the workflow tab — opening a project leaves it on the file tree, and without the switch the screen says nothing while several agents work.
 
-### Status
+### End of updates
 
-Development is paused here for an indefinite period, and the repository is archived. The installers below are the last build. `docs/PLAN-0.4.md` records the measurements behind the decision not to build a codebase index, which is the most reusable thing to pick up from if work resumes.
+0.5.0 is the final release. No further versions are planned, and the installers below are the last build.
+
+The repository stays open — readable, cloneable, forkable — rather than archived. Nothing here is deprecated or withdrawn; it simply stops moving. `docs/PLAN-0.4.md` is the most useful thing to read before building on it: it records measurements, and the decision *not* to build a codebase index that those measurements led to.
 
 ## [0.4.0] — Finding things, and admitting when it cannot
 
